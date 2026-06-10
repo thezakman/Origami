@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 from origami import banner
@@ -48,74 +50,110 @@ def _normalize_url(raw: str) -> str:
     return base + (p.path if p.path and p.path != "/" else "/")
 
 
+def _collect_targets(args) -> list[str]:
+    raw = list(args.url or [])
+    if args.list:
+        raw += [ln.strip() for ln in Path(args.list).read_text().splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+    seen, out = set(), []
+    for r in raw:
+        u = _normalize_url(r)
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _slug(url: str) -> str:
+    p = urlparse(url)
+    return re.sub(r"[^\w.-]", "_", (p.netloc + p.path).strip("/")) or "root"
+
+
+def _suffix(path: str, slug: str) -> str:
+    p = Path(path)
+    return str(p.with_name(f"{p.stem}.{slug}{p.suffix}"))
+
+
+def _write_outputs(args, result, target, multi: bool) -> None:
+    if args.json:
+        path = _suffix(args.json, _slug(target)) if multi else args.json
+        Path(path).write_text(json_report.dumps(result))
+        print(f"[+] JSON written to {path}")
+    if args.html:
+        path = _suffix(args.html, _slug(target)) if multi else args.html
+        html_report.write(result, path)
+        print(f"[+] HTML report written to {path}")
+    if args.out:
+        d = str(Path(args.out) / _slug(target)) if multi else args.out
+        info = artifacts.write_artifacts(result, d)
+        print(f"[+] artifacts written to {info['dir']}/ "
+              f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
+
+
 async def run(args: argparse.Namespace) -> int:
-    base_url = _normalize_url(args.url)
-    cfg = EngineConfig(
-        concurrency=args.concurrency,
-        timeout=args.timeout,
-        verify_tls=not args.insecure,
-    )
+    targets = _collect_targets(args)
+    if not targets:
+        print("[!] no targets (give a URL or --list FILE)")
+        return 2
+
     shortscan = "on" if args.shortscan else "off" if args.no_shortscan else "auto"
     opts = ScanOptions(
-        max_depth=args.depth,
-        max_requests=args.max_requests,
-        wordlist_path=args.wordlist,
-        shortscan=shortscan,
-        js=not args.no_js,
-        backups=not args.no_backups,
-        max_folds=args.max_folds,
-        scope=args.scope,
-        filters=_build_filters(args),
+        max_depth=args.depth, max_requests=args.max_requests,
+        wordlist_path=args.wordlist, shortscan=shortscan,
+        js=not args.no_js, backups=not args.no_backups,
+        max_folds=args.max_folds, scope=args.scope, filters=_build_filters(args),
     )
-    observer = ui.make_observer(base_url, enabled=not args.no_ui,
-                                verbosity=args.verbose, full_url=args.full_url)
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
 
     filt = opts.filters
     fdesc = (f"match {sorted(filt.match_codes)}" if filt.match_codes
              else f"drop {sorted(filt.filter_codes)}" if filt.filter_codes else "none")
-    print(f"  target   : {base_url}")
+    print(f"  targets  : {len(targets)}" + (f"  (list: {args.list})" if args.list else ""))
     print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
-    print(f"  filters  : codes {fdesc}"
-          + (f" · sizes match {sorted(filt.match_sizes)}" if filt.match_sizes else "")
-          + (f" · sizes drop {sorted(filt.filter_sizes)}" if filt.filter_sizes else ""))
+    print(f"  filters  : codes {fdesc}")
     if sys.stdin.isatty() and not args.no_ui:
         print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
+    rc = 0
     try:
-        async with Engine(cfg) as engine:
-            async with keyboard_control(control):
-                with observer:
-                    result = await scan(engine, base_url, opts, observer, memory, control)
+        async with keyboard_control(control):
+            for i, target in enumerate(targets, 1):
+                if control.quit:
+                    print("[!] quit — skipping remaining targets")
+                    break
+                if len(targets) > 1:
+                    print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━")
+                # Fresh Engine + Observer + TargetProfile per URL → each target
+                # is scanned clean (no learned vocab/extensions/baseline bleed
+                # from the previous one). Cross-target SQLite memory is shared by
+                # design (use --no-learn to isolate fully).
+                observer = ui.make_observer(target, enabled=not args.no_ui,
+                                            verbosity=args.verbose, full_url=args.full_url)
+                cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
+                                   verify_tls=not args.insecure)
+                async with Engine(cfg) as engine:
+                    with observer:
+                        result = await scan(engine, target, opts, observer, memory, control)
+
+                if (result.requests_made <= 1 and not result.profile.tech_scores
+                        and not result.findings):
+                    print(f"[!] {target} unreachable")
+                    rc = 2
+                    continue
+                ui.print_report(result, full_url=args.full_url,
+                                show_findings=not getattr(observer, "streamed", False))
+                _write_outputs(args, result, target, multi=len(targets) > 1)
     finally:
         if memory is not None:
             memory.close()
-
-    if result.requests_made <= 1 and not result.profile.tech_scores and not result.findings:
-        print("[!] target unreachable")
-        return 2
-
-    ui.print_report(result, full_url=args.full_url,
-                    show_findings=not getattr(observer, "streamed", False))
-
-    if args.json:
-        with open(args.json, "w") as f:
-            f.write(json_report.dumps(result))
-        print(f"[+] JSON written to {args.json}")
-    if args.html:
-        html_report.write(result, args.html)
-        print(f"[+] HTML report written to {args.html}")
-    if args.out:
-        info = artifacts.write_artifacts(result, args.out)
-        print(f"[+] artifacts written to {info['dir']}/ "
-              f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
-    return 0
+    return rc
 
 
 def _show_history(args) -> int:
-    host = urlparse(args.url).netloc or args.url if args.url else None
+    first = args.url[0] if args.url else None
+    host = (urlparse(first).netloc or first) if first else None
     mem = Memory(args.db)
     rows = mem.history(host=host)
     if not rows:
@@ -131,7 +169,9 @@ def _show_history(args) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="origami", description="Adaptive content discovery engine.")
-    ap.add_argument("url", nargs="?", help="target base URL, e.g. http://example.com")
+    ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
+    ap.add_argument("-l", "--list", metavar="FILE",
+                    help="file with target URLs, one per line (# comments allowed)")
     ap.add_argument("-c", "--concurrency", type=int, default=20)
     ap.add_argument("-t", "--timeout", type=float, default=10.0)
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
@@ -180,8 +220,8 @@ def main() -> None:
 
     if args.history:
         sys.exit(_show_history(args))
-    if not args.url:
-        ap.error("the following argument is required: url")
+    if not args.url and not args.list:
+        ap.error("give at least one target URL or --list FILE")
 
     if not args.no_ui:
         banner.show()
