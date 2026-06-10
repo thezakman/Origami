@@ -46,6 +46,12 @@ class NullObserver:
         self.verbosity = verbosity
         self.full_url = full_url
         self.skippable = False     # [n] skip only meaningful once a dir exists
+        self.engine = None         # set via attach_engine for live throttle readout
+
+    def attach_engine(self, engine) -> None:
+        """Give the observer the engine so the status bar can read its adaptive
+        concurrency (drops under WAF/rate-limit backoff)."""
+        self.engine = engine
 
     def disp(self, url: str) -> str:
         return display_url(url, self.full_url)
@@ -118,6 +124,7 @@ class RichUI(NullObserver):
     def __init__(self, target: str, verbosity: int = 0, full_url: bool = False) -> None:
         self.verbosity = verbosity
         self.full_url = full_url
+        self.engine = None
         self.target = target
         self.phase_name = "starting"
         self.prefix = "/"
@@ -265,6 +272,14 @@ class RichUI(NullObserver):
         s = int(time.perf_counter() - self.start)
         return f"{s // 60:d}:{s % 60:02d}"
 
+    def _throttle(self) -> int | None:
+        """Adaptive concurrency ceiling, shown only while throttled below max."""
+        e = self.engine
+        if e is None:
+            return None
+        lim = e.concurrency_limit
+        return lim if lim < e.cfg.concurrency else None
+
     def _statusbar(self) -> Text:
         t = Text()
         t.append(f" {self.phase_name} ", style="bold white on blue")
@@ -274,6 +289,9 @@ class RichUI(NullObserver):
         t.append(" · ", style="dim"); t.append(self._elapsed(), style="bold")
         if self.pushbacks:
             t.append(" · backoff ", style="dim"); t.append(f"{self.pushbacks}", style="bold red")
+        lim = self._throttle()
+        if lim is not None:
+            t.append(" · ⤓conc ", style="dim"); t.append(f"{lim}", style="bold red")
         t.append("    [n] skip dir  " if self.skippable else "    ", style="dim italic")
         t.append("[q] quit", style="dim italic")
         return t

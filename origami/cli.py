@@ -141,6 +141,7 @@ async def run(args: argparse.Namespace) -> int:
                     print(f"[!] no checkpoint for {target} — scanning fresh")
                 async with Engine(cfg) as engine:
                     engine.on_request = observer.on_request   # live heartbeat, every phase
+                    observer.attach_engine(engine)            # live adaptive-throttle readout
                     with observer:
                         if saved is not None:
                             result = await resume_scan(engine, saved, opts, observer,
