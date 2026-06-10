@@ -19,7 +19,7 @@ from origami.control import keyboard_control
 from origami.core.httpclient import Engine, EngineConfig
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, scan
-from origami.output import artifacts, json_report, ui
+from origami.output import artifacts, html_report, json_report, ui
 
 
 def _int_set(s: str | None) -> set[int] | None:
@@ -104,10 +104,13 @@ async def run(args: argparse.Namespace) -> int:
         with open(args.json, "w") as f:
             f.write(json_report.dumps(result))
         print(f"[+] JSON written to {args.json}")
+    if args.html:
+        html_report.write(result, args.html)
+        print(f"[+] HTML report written to {args.html}")
     if args.out:
         info = artifacts.write_artifacts(result, args.out)
         print(f"[+] artifacts written to {info['dir']}/ "
-              f"(findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
+              f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
     return 0
 
 
@@ -136,6 +139,7 @@ def main() -> None:
     ap.add_argument("--max-requests", type=int, default=5000)
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
     ap.add_argument("--json", help="write JSON report to this path")
+    ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
                     help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt)")
     ap.add_argument("--db", default=str(DEFAULT_DB),
