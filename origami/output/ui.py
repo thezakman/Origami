@@ -228,12 +228,11 @@ class RichUI(NullObserver):
                "backups", "associations"]
 
     def _phase_text(self) -> "Text":
-        t = Text()
+        # header shows only the position (the name lives in the status-bar chip)
         if self.phase_name in self._PHASES:
-            t.append(f"phase {self._PHASES.index(self.phase_name) + 1}/{len(self._PHASES)} · ",
-                     style="dim")
-        t.append(self.phase_name, style="bold cyan")
-        return t
+            return Text(f"phase {self._PHASES.index(self.phase_name) + 1}/{len(self._PHASES)}",
+                        style="bold cyan")
+        return Text(self.phase_name, style="bold cyan")
 
     def _header(self) -> Panel:
         badges = Text()
@@ -260,7 +259,8 @@ class RichUI(NullObserver):
 
     def _statusbar(self) -> Text:
         t = Text()
-        t.append(" reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
+        t.append(f" {self.phase_name} ", style="bold white on blue")
+        t.append("  reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
         t.append(" · ", style="dim"); t.append(f"{self._rate():.0f}/s", style="bold")
         t.append(" · hits ", style="dim"); t.append(f"{self.hits}", style="bold green")
         t.append(" · ", style="dim"); t.append(self._elapsed(), style="bold")
@@ -401,43 +401,47 @@ def make_observer(target: str, enabled: bool, verbosity: int = 0, full_url: bool
     return NullObserver(verbosity, full_url)
 
 
-def print_report(result, full_url: bool = False, show_findings: bool = True) -> None:
+def print_report(result, full_url: bool = False, show_findings: bool = True,
+                 show_fingerprint: bool = True) -> None:
     """Persistent post-scan report (printed after the Live view closes).
 
-    When findings already streamed live (rich/plain UI), `show_findings=False`
-    skips re-printing the whole table — only the fingerprint panel + a one-line
-    summary, so the console isn't polluted with a duplicate dump.
+    After a live stream, both default to off — the dashboard already showed
+    everything and the ✓ line has the count. `--fp` re-enables the fingerprint
+    panel (tech / WAF / folds / parameters).
     """
     if not (HAS_RICH and console):
-        _plain_report(result, full_url, show_findings)
+        _plain_report(result, full_url, show_findings, show_fingerprint)
+        return
+    if not show_fingerprint and not show_findings:
         return
     p = result.profile
 
-    fp = Table.grid(padding=(0, 1))
-    fp.add_column(justify="right", style="dim")
-    fp.add_column()
-    techs = " ".join(
-        f"[bold white on dark_green] {t} [/]" if s >= 50 else f"[dim]{t}:{s:.0f}[/]"
-        for t, s in p.tech_scores.items()
-    ) or "[dim]none[/]"
-    fp.add_row("tech", techs)
-    if p.waf:
-        fp.add_row("WAF", f"[bold white on red] {p.waf} [/]")
-    fp.add_row("soft-404/wildcard", "[yellow]YES[/]" if p.wildcard else "no")
-    if p.case_sensitive is not None:
-        fp.add_row("case-sensitive", "yes" if p.case_sensitive else "[yellow]NO (Windows/IIS)[/]")
-    if p.enabled_extensions:
-        fp.add_row("extensions", " ".join(sorted(p.enabled_extensions)))
-    if result.folds:
-        fp.add_row("folds", " ".join(f"[bold black on cyan] ⌘ {f} [/]" for f in sorted(result.folds)))
-    if p.parameters:
-        shown = sorted(p.parameters)
-        preview = ", ".join(shown[:18]) + (f"  (+{len(shown) - 18} more)" if len(shown) > 18 else "")
-        fp.add_row("parameters", f"[cyan]{len(shown)}[/] [dim]{preview}[/]")
-    if result.pushbacks:
-        fp.add_row("throttling", f"[bold red]{result.pushbacks} backoff events[/] "
-                                 f"[dim](target rate-limited / pushed back)[/]")
-    console.print(Panel(fp, title="[bold]Fingerprint[/]", border_style="green", expand=False))
+    if show_fingerprint:
+        fp = Table.grid(padding=(0, 1))
+        fp.add_column(justify="right", style="dim")
+        fp.add_column()
+        techs = " ".join(
+            f"[bold white on dark_green] {t} [/]" if s >= 50 else f"[dim]{t}:{s:.0f}[/]"
+            for t, s in p.tech_scores.items()
+        ) or "[dim]none[/]"
+        fp.add_row("tech", techs)
+        if p.waf:
+            fp.add_row("WAF", f"[bold white on red] {p.waf} [/]")
+        fp.add_row("soft-404/wildcard", "[yellow]YES[/]" if p.wildcard else "no")
+        if p.case_sensitive is not None:
+            fp.add_row("case-sensitive", "yes" if p.case_sensitive else "[yellow]NO (Windows/IIS)[/]")
+        if p.enabled_extensions:
+            fp.add_row("extensions", " ".join(sorted(p.enabled_extensions)))
+        if result.folds:
+            fp.add_row("folds", " ".join(f"[bold black on cyan] ⌘ {f} [/]" for f in sorted(result.folds)))
+        if p.parameters:
+            shown = sorted(p.parameters)
+            preview = ", ".join(shown[:18]) + (f"  (+{len(shown) - 18} more)" if len(shown) > 18 else "")
+            fp.add_row("parameters", f"[cyan]{len(shown)}[/] [dim]{preview}[/]")
+        if result.pushbacks:
+            fp.add_row("throttling", f"[bold red]{result.pushbacks} backoff events[/] "
+                                     f"[dim](target rate-limited / pushed back)[/]")
+        console.print(Panel(fp, title="[bold]Fingerprint[/]", border_style="green", expand=False))
 
     if not show_findings:
         return    # findings already streamed live; the ✓ summary line has the count
@@ -463,22 +467,24 @@ def print_report(result, full_url: bool = False, show_findings: bool = True) -> 
     console.print(tbl)
 
 
-def _plain_report(result, full_url: bool = False, show_findings: bool = True) -> None:
+def _plain_report(result, full_url: bool = False, show_findings: bool = True,
+                  show_fingerprint: bool = True) -> None:
     p = result.profile
-    print("\n=== Fingerprint ===")
-    for t, s in p.tech_scores.items():
-        print(f"  [{'✓' if s >= 50 else ' '}] {t:<12} {s:.0f}")
-    if p.waf:
-        print(f"  WAF: {p.waf}")
-    print(f"  wildcard/soft-404: {'YES' if p.wildcard else 'no'}")
-    if p.enabled_extensions:
-        print(f"  extensions: {' '.join(sorted(p.enabled_extensions))}")
-    if result.folds:
-        print(f"  folds: {', '.join(sorted(result.folds))}")
-    if p.parameters:
-        print(f"  parameters ({len(p.parameters)}): {', '.join(sorted(p.parameters))}")
-    if result.pushbacks:
-        print(f"  throttling: {result.pushbacks} backoff events (target rate-limited)")
+    if show_fingerprint:
+        print("\n=== Fingerprint ===")
+        for t, s in p.tech_scores.items():
+            print(f"  [{'✓' if s >= 50 else ' '}] {t:<12} {s:.0f}")
+        if p.waf:
+            print(f"  WAF: {p.waf}")
+        print(f"  wildcard/soft-404: {'YES' if p.wildcard else 'no'}")
+        if p.enabled_extensions:
+            print(f"  extensions: {' '.join(sorted(p.enabled_extensions))}")
+        if result.folds:
+            print(f"  folds: {', '.join(sorted(result.folds))}")
+        if p.parameters:
+            print(f"  parameters ({len(p.parameters)}): {', '.join(sorted(p.parameters))}")
+        if result.pushbacks:
+            print(f"  throttling: {result.pushbacks} backoff events (target rate-limited)")
     if not show_findings:
         return    # findings already streamed live; the ✓ summary line has the count
     print(f"\n=== Findings ({len(result.findings)}) — {result.requests_made} requests ===")

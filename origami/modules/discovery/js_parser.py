@@ -48,8 +48,10 @@ def _is_vendor(url: str) -> bool:
 # source maps + webpack/module chunk references (reveal more source files)
 _SOURCEMAP = re.compile(rb"""sourceMappingURL=([^\s"'*]+)""", re.I)
 _JS_REF = re.compile(rb"""["'`]([\w./-]+\.(?:js|mjs|json|map))["'`]""", re.I)
-# query/template parameter names — intel for the pentester, NOT paths to fetch
-_PARAM = re.compile(rb"""[?&]([A-Za-z_][\w-]{1,39})""")
+# query parameter names — ONLY from a quoted URL-query string ("…?a=1&b=2"),
+# not from minified `a?b:c` ternaries, so the intel is real, not JS-token noise.
+_QUERY = re.compile(rb"""["'`][^"'`\s]{0,200}\?([A-Za-z0-9_=&.%\[\]\-]+)["'`]""")
+_PARAM_NAME = re.compile(r"^[a-z_][\w.\-]{0,39}$")
 
 # Endings/segments that are just static assets — not interesting as routes.
 # Note: .map (source maps) is deliberately NOT here — it's high-value recon.
@@ -101,9 +103,15 @@ def extract_paths(body: bytes, base_url: str) -> set[str]:
 
 
 def extract_params(body: bytes) -> set[str]:
-    """Harvest query/template parameter names — input surface for the pentester
-    (fuzzing targets), not paths to brute-force."""
-    return {m.decode("latin-1").lower() for m in _PARAM.findall(body)}
+    """Harvest query parameter names from quoted URL-query strings — input
+    surface for the pentester, not JS-token noise."""
+    out: set[str] = set()
+    for q in _QUERY.findall(body):
+        for pair in q.split(b"&"):
+            name = pair.split(b"=")[0].decode("latin-1").strip().lower()
+            if _PARAM_NAME.match(name):
+                out.add(name)
+    return out
 
 
 def script_urls(body: bytes, base_url: str, limit: int = 40) -> list[str]:

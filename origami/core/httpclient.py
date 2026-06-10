@@ -84,6 +84,7 @@ class Engine:
         self._delay_floor = 0.0
         self.pushback_events = 0
         self.total_requests = 0      # every logical fetch (calibration, harvests, scan)
+        self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
 
     async def __aenter__(self) -> "Engine":
         self._client = httpx.AsyncClient(
@@ -118,6 +119,8 @@ class Engine:
         assert self._client is not None, "use `async with Engine() as engine`"
         last_err = ""
         self.total_requests += 1
+        if self.on_request is not None:
+            self.on_request()
         async with self._sem:
             for attempt in range(self.cfg.max_retries + 1):
                 await self._sleep_before()

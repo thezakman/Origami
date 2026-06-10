@@ -142,8 +142,9 @@ async def run(args: argparse.Namespace) -> int:
                     print(f"[!] {target} unreachable")
                     rc = 2
                     continue
-                ui.print_report(result, full_url=args.full_url,
-                                show_findings=not getattr(observer, "streamed", False))
+                streamed = getattr(observer, "streamed", False)
+                ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
+                                show_fingerprint=(not streamed) or args.fp)
                 _write_outputs(args, result, target, multi=len(targets) > 1)
     finally:
         if memory is not None:
@@ -191,6 +192,8 @@ def main() -> None:
     ap.add_argument("--no-ui", action="store_true", help="disable the live rich UI")
     ap.add_argument("-F", "--full-url", action="store_true",
                     help="show full URLs instead of just paths")
+    ap.add_argument("--fp", "--fingerprint", action="store_true", dest="fp",
+                    help="print the fingerprint panel (tech/WAF/folds/params) at the end")
     ap.add_argument("--shortscan", action="store_true",
                     help="force the IIS 8.3 shortscan fold (default: auto when IIS detected)")
     ap.add_argument("--no-shortscan", action="store_true",
