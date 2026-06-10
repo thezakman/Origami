@@ -245,6 +245,31 @@ class TestAssociation(unittest.TestCase):
             os.unlink(db)
 
 
+class TestWappalyzerIngest(unittest.TestCase):
+    def test_literalize(self):
+        from origami.brain.ingest import wappalyzer as w
+        self.assertEqual(w.literalize(r"Microsoft-IIS\;confidence:100"), "Microsoft-IIS")
+        self.assertEqual(w.literalize(r"jquery[.-]?([\d.]+)?\.js\;version:\1"), "jquery")
+        self.assertEqual(w.literalize(r"^\d+$"), "")          # no usable literal
+
+    def test_db_to_rules(self):
+        from origami.brain.ingest import wappalyzer as w
+        db = {
+            "Microsoft IIS": {"headers": {"Server": r"Microsoft-IIS(?:/([\d.]+))?\;version:\1"}},
+            "PHP": {"headers": {"X-Powered-By": r"PHP(?:/([\d.]+))?\;version:\1"},
+                    "cookies": {"PHPSESSID": ""}},
+            "WordPress": {"html": [r"<link[^>]+/wp-content/"]},
+            "Empty": {"cats": [1]},
+        }
+        rules = {r["tech"]: r for r in w.db_to_rules(db)}
+        self.assertIn("microsoft iis", rules)
+        self.assertEqual(rules["microsoft iis"]["signals"][0]["match"], "Microsoft-IIS")
+        self.assertTrue(any(s["type"] == "cookie" and s["match"] == "PHPSESSID"
+                            for s in rules["php"]["signals"]))
+        self.assertIn("wordpress", rules)
+        self.assertNotIn("empty", rules)                       # no usable signals
+
+
 class TestNGram(unittest.TestCase):
     def test_completes_from_prefix(self):
         from origami.brain.ngram import NGram
