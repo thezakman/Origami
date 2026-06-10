@@ -384,11 +384,14 @@ async def _confirm(engine, profile, prefix, probe, origin):
 
 
 def _dedupe_and_collapse(findings, observer):
-    """URL-dedup (keep best confidence) + collapse same-content collisions.
+    """URL-dedup (keep best confidence) + collapse same-template collisions.
 
-    Collapsing byte-identical results (same status+simhash) into one + a count
-    is what stops a catch-all page (or one file reachable via many query
-    strings/paths) from drowning the report in hundreds of dupes.
+    Groups by (status, body length): a generic page reflected for many paths —
+    a server's blanket "403 Forbidden" served for .env/.git/.htaccess/css/build,
+    or a catch-all 200 — keeps the SAME length even when the body echoes the
+    path (so simhash differs). More than COLLISION_MAX in a group collapse to one
+    representative + a count. The real content found by recursion (distinct
+    lengths) is untouched.
     """
     best: dict[str, Finding] = {}
     for f in findings:
@@ -398,20 +401,20 @@ def _dedupe_and_collapse(findings, observer):
 
     clusters: dict[tuple, list] = defaultdict(list)
     for f in best.values():
-        clusters[(f.status, f.simhash)].append(f)
+        clusters[(f.status, f.length)].append(f)
 
     out, collapsed = [], 0
-    for (status, sh), group in clusters.items():
-        if sh and len(group) > COLLISION_MAX:
+    for (status, length), group in clusters.items():
+        if len(group) > COLLISION_MAX:
             rep = min(group, key=lambda f: len(f.url))
-            rep.note = (rep.note + " " if rep.note else "") + f"+{len(group) - 1} paths, same content"
+            rep.note = (rep.note + " " if rep.note else "") + f"+{len(group) - 1} paths, same {length}B response"
             out.append(rep)
             collapsed += len(group) - 1
         else:
             out.extend(group)
     if collapsed:
-        observer.log(f"collapsed {collapsed} same-content results "
-                     f"(catch-all / one file via many paths)", 0, style="yellow")
+        observer.log(f"collapsed {collapsed} same-template results "
+                     f"(generic 403/catch-all served for many paths)", 0, style="yellow")
     return out
 
 
