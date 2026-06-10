@@ -66,8 +66,21 @@ Common flags:
 | `--json FILE` / `--html FILE` / `--out DIR` | reports & artifacts |
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |
+| `--resume` | continue an interrupted scan from its checkpoint |
 
 Live controls: **`n`** skip the current directory (once one is discovered), **`q`** quit.
+
+Every scan checkpoints its state (fingerprint, findings, pending directory queue)
+after each directory, so an interrupted run — `q`, Ctrl-C, or the `--max-requests`
+cap — can be picked up where it left off:
+
+```bash
+origami https://example.com --max-requests 2000   # hits the cap, saves a checkpoint
+origami https://example.com --resume               # continues; no re-fingerprinting
+```
+
+A clean finish removes the checkpoint. Resume granularity is per-directory: the
+directory in progress when you stopped is re-run from the start.
 
 ## Output
 
@@ -93,7 +106,7 @@ python tests/benchmark/bench_folds.py                           # fold-budget be
 
 ## Status & roadmap
 
-Core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS), vocabulary folding, WAF detection, SQLite memory and the n-gram completer are implemented and tested. Planned: k-NN over fingerprint vectors, association mining, multi-source KB ingestion (Wappalyzer/nuclei), mid-scan resume, and a contextual bandit for request economy under WAFs.
+Core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog) and mid-scan resume (`--resume`) are implemented and tested. Planned: a contextual bandit for request economy under WAFs.
 
 ## Authorization
 

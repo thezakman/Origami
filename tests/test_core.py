@@ -380,5 +380,57 @@ class TestJsParser(unittest.TestCase):
         self.assertIn("/js/app.js.map", paths)
 
 
+class TestResume(unittest.TestCase):
+    def _state(self, path):
+        from origami.core import resume as R
+        from origami.core.evidence import Evidence
+        from origami.core.response_classifier import Finding
+        p = TargetProfile(host="h.example", base_url="https://h.example/app/")
+        p.tech_scores = {"iis": 70.0}
+        p.enabled_extensions = {".aspx", ".asmx"}
+        p.parameters = {"id", "q"}
+        p.wildcard = True
+        p.add_evidence(Evidence(source="header", tech="iis", detail="Server: IIS", weight=70))
+        cb = ContextBaseline(prefix="/app/", ext_class=".aspx", status=404)
+        cb.simhashes = [123, 456]
+        cb.soft_signatures = [(200, 999)]
+        p.baseline["/app/|.aspx"] = cb
+        findings = [Finding("https://h.example/app/login.aspx", 200, 10, "text/html",
+                            0.9, "wordlist", note="x", tags=["auth"], simhash=42)]
+        R.save(path, profile=p, findings=findings, requests_made=17, folds={"shortscan"},
+               words=["a", "b"], exts={".aspx"}, priority_paths=["/p"],
+               root_seeds=[("/x", "js")], base_prefix="/app/",
+               queue=[("/app/sub/", 1)], scanned={"/app/"})
+
+    def test_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        from origami.core import resume as R
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "s.json"
+            self._state(path)
+            st = R.load(path)
+            self.assertEqual(st["profile"].host, "h.example")
+            self.assertEqual(st["profile"].tech_scores["iis"], 70.0)
+            self.assertEqual(st["profile"].enabled_extensions, {".aspx", ".asmx"})
+            self.assertTrue(st["profile"].wildcard)
+            cb = st["profile"].baseline["/app/|.aspx"]
+            self.assertEqual(cb.simhashes, [123, 456])
+            self.assertEqual(cb.soft_signatures, [(200, 999)])
+            self.assertEqual(len(st["findings"]), 1)
+            self.assertEqual(st["findings"][0].url, "https://h.example/app/login.aspx")
+            self.assertEqual(st["findings"][0].tags, ["auth"])
+            self.assertEqual(st["requests_made"], 17)
+            self.assertEqual(st["queue"], [("/app/sub/", 1)])
+            self.assertEqual(st["scanned"], ["/app/"])
+            self.assertEqual(st["exts"], {".aspx"})
+            self.assertEqual(st["root_seeds"], [("/x", "js")])
+
+    def test_missing_returns_none(self):
+        from pathlib import Path
+        from origami.core import resume as R
+        self.assertIsNone(R.load(Path("/nonexistent/nope.json")))
+
+
 if __name__ == "__main__":
     unittest.main()

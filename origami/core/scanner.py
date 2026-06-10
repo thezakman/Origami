@@ -22,6 +22,7 @@ MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 from origami.brain.kb import TechRule, load_kb
 from origami.brain.ngram import NGram
 from origami.core import baseline as bl
+from origami.core import resume as resume_mod
 from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
 from origami.core.httpclient import Engine
@@ -115,10 +116,11 @@ class ScanResult:
     requests_made: int = 0
     folds: set[str] = field(default_factory=set)
     pushbacks: int = 0            # 429/reset events — target throttled us
+    completed: bool = False       # False if interrupted (quit/cap) → resumable
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
-               observer=None, memory=None, control=None) -> ScanResult:
+               observer=None, memory=None, control=None, resume_path=None) -> ScanResult:
     opts = opts or ScanOptions()
     observer = observer or NullObserver()
     control = control or ScanControl()
@@ -275,19 +277,70 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if _should_shortscan(opts, folds):
         await _shortscan_pass(engine, profile, base_url, words, result, opts, observer)
 
-    # 4. recursive scan ----------------------------------------------------
-    observer.phase("scan")
+    # 4. recursive scan + folds (checkpointed) -----------------------------
     queue: list[tuple[str, int]] = [(base_prefix, 0)]   # (prefix, depth)
-    scanned_prefixes: set[str] = set()
-    queued: set[str] = {base_prefix}
+    return await _scan_loop(engine, profile, opts, observer, memory, control, result,
+                            base_prefix=base_prefix, words=words, exts=exts,
+                            priority_paths=priority_paths, root_seeds=root_seeds,
+                            queue=queue, scanned=set(), resume_path=resume_path)
+
+
+async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=None,
+                      memory=None, control=None, resume_path=None) -> ScanResult:
+    """Continue an interrupted scan from a loaded checkpoint (`resume.load`).
+
+    The expensive setup (calibrate/fingerprint/harvest/vocabulary) is restored
+    from the checkpoint, so we drop straight back into the directory loop with
+    the same profile, findings, and pending queue.
+    """
+    observer = observer or NullObserver()
+    control = control or ScanControl()
+    profile = state["profile"]
+    result = ScanResult(profile=profile, findings=list(state["findings"]),
+                        folds=set(state.get("folds", [])))
+    observer.log(f"resume: restored {len(result.findings)} findings · "
+                 f"{len(state['queue'])} dirs queued · {len(state['scanned'])} done "
+                 f"· {state.get('requests_made', 0)} prior requests",
+                 0, style="cyan")
+    observer.fingerprint(profile, profile.enabled_extensions, result.folds)
+    return await _scan_loop(engine, profile, opts, observer, memory, control, result,
+                            base_prefix=state["base_prefix"], words=state["words"],
+                            exts=state["exts"], priority_paths=state["priority_paths"],
+                            root_seeds=state["root_seeds"], queue=list(state["queue"]),
+                            scanned=set(state["scanned"]), resume_path=resume_path)
+
+
+async def _scan_loop(engine, profile, opts, observer, memory, control, result, *,
+                     base_prefix, words, exts, priority_paths, root_seeds,
+                     queue, scanned, resume_path):
+    """The recursive directory walk + post-scan folds, checkpointed per prefix.
+
+    A prefix is added to `scanned` only after it's fully fired — if the scan is
+    interrupted (quit / request cap) mid-prefix, that prefix stays at the front
+    of the queue so a resume re-runs it from the start. State is flushed to
+    `resume_path` after every prefix so a hard kill loses at most one prefix.
+    """
+    recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
+    queued: set[str] = {p for p, _ in queue} | scanned
+
+    def _checkpoint():
+        if resume_path is not None:
+            resume_mod.save(resume_path, profile=profile, findings=result.findings,
+                            requests_made=engine.total_requests, folds=result.folds,
+                            words=words, exts=exts, priority_paths=priority_paths,
+                            root_seeds=root_seeds, base_prefix=base_prefix,
+                            queue=queue, scanned=scanned)
+
+    observer.phase("scan")
+    interrupted = False
     while queue:
         if control.quit:
             observer.log("scan: quit requested — stopping", 0, style="yellow")
+            interrupted = True
             break
         prefix, depth = queue.pop(0)
-        if prefix in scanned_prefixes:
+        if prefix in scanned:
             continue
-        scanned_prefixes.add(prefix)
 
         if prefix != base_prefix:
             observer.directory(prefix, depth)
@@ -302,13 +355,21 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         confirmed, ancestors = await _scan_prefix(
             engine, profile, prefix, cands, result, opts, observer, control)
 
+        # Interrupted mid-prefix → leave it at the front for a clean resume.
+        if control.quit or engine.total_requests >= opts.max_requests:
+            queue.insert(0, (prefix, depth))
+            interrupted = True
+            _checkpoint()
+            break
+        scanned.add(prefix)
+
         # Confirmed directories (real 403/301 dirs) are recursed before the
         # speculative ancestor dirs — high-value first, so a deep tree can't
         # starve the budget before the obvious directories are explored. Depth
         # is relative to the base, so a deep file recurses each of its parents.
         def _enqueue(dirs, front):
             for d in dirs:
-                if d in scanned_prefixes or d in queued:
+                if d in scanned or d in queued:
                     continue
                 if _rel_depth(d, base_prefix) <= opts.max_depth:
                     queued.add(d)
@@ -317,6 +378,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
         _enqueue(ancestors, front=False)
         _enqueue(confirmed, front=True)
+        _checkpoint()
+
+    result.requests_made = engine.total_requests
+    result.pushbacks = engine.pushback_events
+    if interrupted:
+        # Leave the checkpoint on disk for `--resume`; skip folds + memory
+        # (those run once, on the clean finish).
+        observer.pushback(engine.pushback_events)
+        observer.log("scan: interrupted — checkpoint saved (resume with --resume)",
+                     0, style="yellow")
+        return result
 
     # 5. dedupe + collapse same-content collisions BEFORE expanding ---------
     # (do this first so the backup fold doesn't explode over hundreds of
@@ -336,6 +408,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     observer.pushback(engine.pushback_events)
     result.requests_made = engine.total_requests
     result.pushbacks = engine.pushback_events
+    result.completed = True
     result.findings.sort(key=lambda f: (-f.confidence, f.url))
 
     if memory is not None:

@@ -18,9 +18,10 @@ from urllib.parse import urlparse
 from origami import banner
 from origami.brain.memory import DEFAULT_DB, Memory
 from origami.control import keyboard_control
+from origami.core import resume as resume_mod
 from origami.core.httpclient import Engine, EngineConfig
 from origami.core.response_classifier import Filters
-from origami.core.scanner import ScanControl, ScanOptions, scan
+from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
 from origami.output import artifacts, html_report, json_report, ui
 
 
@@ -133,10 +134,21 @@ async def run(args: argparse.Namespace) -> int:
                                             verbosity=args.verbose, full_url=args.full_url)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                    verify_tls=not args.insecure)
+                rpath = resume_mod.path_for(target)
+                saved = resume_mod.load(rpath) if args.resume else None
+                if args.resume and saved is None:
+                    print(f"[!] no checkpoint for {target} — scanning fresh")
                 async with Engine(cfg) as engine:
                     engine.on_request = observer.on_request   # live heartbeat, every phase
                     with observer:
-                        result = await scan(engine, target, opts, observer, memory, control)
+                        if saved is not None:
+                            result = await resume_scan(engine, saved, opts, observer,
+                                                       memory, control, rpath)
+                        else:
+                            result = await scan(engine, target, opts, observer, memory,
+                                                control, rpath)
+                if result.completed:
+                    resume_mod.clear(rpath)   # finished cleanly → drop the checkpoint
 
                 if (result.requests_made <= 1 and not result.profile.tech_scores
                         and not result.findings):
@@ -188,6 +200,9 @@ def main() -> None:
                     help=f"memory DB path (default: {DEFAULT_DB})")
     ap.add_argument("--no-learn", action="store_true",
                     help="don't read/write the memory DB this run")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue an interrupted scan from its saved checkpoint "
+                         "(scans always checkpoint; an interrupted run leaves one behind)")
     ap.add_argument("--update", action="store_true",
                     help="fetch the Wappalyzer fingerprint catalog into the KB and exit")
     ap.add_argument("--history", action="store_true",
