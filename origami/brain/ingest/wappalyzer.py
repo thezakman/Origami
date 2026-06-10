@@ -13,9 +13,16 @@ substring matcher (skipping signals with no usable literal).
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+import string
 
 _WORD = re.compile(r"[A-Za-z0-9_.\-/]{4,}")
+
+# Actively-maintained Wappalyzer fingerprint fork (split a-z + _).
+SOURCE_BASE = "https://raw.githubusercontent.com/enthec/webappanalyzer/main/src/technologies"
+_SHARDS = ["_"] + list(string.ascii_lowercase)
 
 
 def literalize(pattern: str) -> str:
@@ -40,10 +47,12 @@ def tech_to_rule(name: str, spec: dict) -> dict | None:
     for cname in (spec.get("cookies") or {}):
         signals.append({"type": "cookie", "match": cname, "weight": 50})
 
-    body = spec.get("html") or []
-    if isinstance(body, str):
-        body = [body]
-    for pat in body + (spec.get("scriptSrc") if isinstance(spec.get("scriptSrc"), list) else []):
+    def _aslist(v):
+        return [v] if isinstance(v, str) else (v if isinstance(v, list) else [])
+
+    body_pats = _aslist(spec.get("html")) + _aslist(spec.get("scriptSrc"))
+    body_pats += list((spec.get("meta") or {}).values())     # <meta> content
+    for pat in body_pats:
         lit = literalize(pat)
         if len(lit) >= 5:
             signals.append({"type": "body", "match": lit, "weight": 30})
@@ -64,3 +73,34 @@ def db_to_rules(db: dict) -> list[dict]:
         if rule:
             out.append(rule)
     return out
+
+
+async def fetch_db(base: str = SOURCE_BASE, timeout: float = 20.0) -> dict:
+    """Download and merge all technology shards into one DB."""
+    import httpx
+    db: dict = {}
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async def one(shard):
+            try:
+                r = await client.get(f"{base}/{shard}.json")
+                if r.status_code == 200:
+                    return json.loads(r.text)
+            except (httpx.HTTPError, json.JSONDecodeError):
+                pass
+            return {}
+        for part in await asyncio.gather(*(one(s) for s in _SHARDS)):
+            db.update(part)
+    return db
+
+
+async def update_kb(dest_path, base: str = SOURCE_BASE) -> int:
+    """Fetch the catalog, convert to KB rules, write YAML to dest_path. Returns
+    the number of rules written (0 if the fetch failed)."""
+    import yaml
+    db = await fetch_db(base)
+    rules = db_to_rules(db)
+    if not rules:
+        return 0
+    from pathlib import Path
+    Path(dest_path).write_text(yaml.safe_dump(rules, sort_keys=False, allow_unicode=True))
+    return len(rules)

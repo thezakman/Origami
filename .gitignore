@@ -26,3 +26,6 @@ work.md
 
 # old Feb-2024 prototype — kept local, not versioned
 legacy/
+
+# ingested KB (regenerate with: origami --update)
+origami/brain/rules.yaml

@@ -188,6 +188,8 @@ def main() -> None:
                     help=f"memory DB path (default: {DEFAULT_DB})")
     ap.add_argument("--no-learn", action="store_true",
                     help="don't read/write the memory DB this run")
+    ap.add_argument("--update", action="store_true",
+                    help="fetch the Wappalyzer fingerprint catalog into the KB and exit")
     ap.add_argument("--history", action="store_true",
                     help="show past scan history (optionally filtered by the given host) and exit")
     ap.add_argument("--no-ui", action="store_true", help="disable the live rich UI")
@@ -222,6 +224,14 @@ def main() -> None:
                     help="-v: phases, calibration, fingerprint, hits; -vv: every request")
     args = ap.parse_args()
 
+    if args.update:
+        from origami.brain.ingest import wappalyzer
+        from origami.brain.kb import RULES_PATH
+        print("[*] fetching Wappalyzer fingerprint catalog…")
+        n = asyncio.run(wappalyzer.update_kb(RULES_PATH))
+        print(f"[+] wrote {n} ingested detection rules to {RULES_PATH}" if n
+              else "[!] update failed (network?) — KB unchanged")
+        sys.exit(0 if n else 2)
     if args.history:
         sys.exit(_show_history(args))
     if not args.url and not args.list:
