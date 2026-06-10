@@ -171,6 +171,24 @@ class TestVocabulary(unittest.TestCase):
         self.assertTrue(names.most_common(1))
 
 
+class TestNGram(unittest.TestCase):
+    def test_completes_from_prefix(self):
+        from origami.brain.ngram import NGram
+        corpus = ["integration", "integrations", "integrationservice", "internal",
+                  "interface", "administration", "administrator"]
+        ng = NGram(order=3).train(corpus)
+        out = ng.complete("integ", n_results=5)
+        self.assertTrue(out)                              # generated something
+        self.assertTrue(all(c.startswith("integ") for c in out))
+        self.assertTrue(all(len(c) > len("integ") for c in out))
+
+    def test_empty_model_and_no_match(self):
+        from origami.brain.ngram import NGram
+        self.assertEqual(NGram().complete("anything"), [])      # untrained
+        ng = NGram(order=3).train(["foobar"])
+        self.assertEqual(ng.complete("zzzzz"), [])             # prefix unseen
+
+
 class TestWaf(unittest.TestCase):
     def test_f5_block_body(self):
         body = (b"<html><head><title>Request Rejected</title></head><body>"

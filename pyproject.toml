@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "origami-scanner"
-version = "0.2.0"
+version = "0.3.0"
 description = "Adaptive content discovery engine that folds its strategy around the target's behavior, technology and response patterns."
 readme = "origami.md"
 requires-python = ">=3.11"

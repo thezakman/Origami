@@ -20,6 +20,7 @@ COLLISION_MAX = 4
 MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 
 from origami.brain.kb import TechRule, load_kb
+from origami.brain.ngram import NGram
 from origami.core import baseline as bl
 from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
@@ -534,11 +535,27 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
         observer.log(f"  8.3: {e.tilde}.{e.ext}"
                      + (f" → {e.fullname}" if e.fullname else ""), 2)
 
-    cands = shortname.expand(res.entries, words, tuple(sorted(profile.enabled_extensions)))
+    tech_exts = tuple(sorted(profile.enabled_extensions))
+    cands = shortname.expand(res.entries, words, tech_exts)
+
+    # Regime 2: n-gram completion of truncated prefixes the wordlist can't cover.
+    ng = NGram(order=3).train(words)
+    gen_exts = tech_exts or (".aspx", ".asmx", ".ashx", "")
+    n_gen = 0
+    for e in res.entries:
+        if e.fullname or len(e.prefix) < 6:     # only fully-truncated, no autocomplete
+            continue
+        fams = shortname.ext_family(e.ext) if e.ext else gen_exts
+        for name in ng.complete(e.prefix.lower(), n_results=5):
+            for ext in fams:
+                cands.append((e.baseurl, name + ext))
+                n_gen += 1
+    cands = list(dict.fromkeys(cands))          # de-dupe, preserve order
     if not cands:
         observer.log("shortscan: no candidates after expansion", 1)
         return
-    observer.log(f"shortscan: {len(cands)} constrained candidates", 1, style="cyan")
+    observer.log(f"shortscan: {len(cands)} candidates "
+                 f"({n_gen} from n-gram completion)", 1, style="cyan")
 
     # calibrate every (prefix, ext class) the seeds touch, then fire them.
     by_prefix: dict[str, set[str]] = {}
