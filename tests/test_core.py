@@ -380,6 +380,41 @@ class TestJsParser(unittest.TestCase):
         self.assertIn("/js/app.js.map", paths)
 
 
+class TestEngineBackoff(unittest.TestCase):
+    def _engine(self, c=20):
+        from origami.core.httpclient import Engine, EngineConfig
+        return Engine(EngineConfig(concurrency=c))
+
+    def test_pushback_halves_limit(self):
+        e = self._engine(20)
+        self.assertEqual(e.concurrency_limit, 20)
+        e._note_pushback()
+        self.assertEqual(e._limit, 10.0)
+        e._note_pushback()
+        self.assertEqual(e._limit, 5.0)
+
+    def test_limit_floor_is_one(self):
+        e = self._engine(20)
+        for _ in range(50):
+            e._note_pushback()
+        self.assertEqual(e._limit, 1.0)
+
+    def test_relax_ramps_back_to_ceiling(self):
+        e = self._engine(8)
+        e._note_pushback()           # 8 -> 4
+        self.assertEqual(e._limit, 4.0)
+        for _ in range(100):
+            e._relax()
+        self.assertEqual(e.concurrency_limit, 8)
+
+    def test_pushback_grows_delay_floor(self):
+        e = self._engine()
+        self.assertEqual(e._delay_floor, 0.0)
+        e._note_pushback()
+        self.assertGreater(e._delay_floor, 0.0)
+        self.assertLessEqual(e._delay_floor, 5.0)
+
+
 class TestBandit(unittest.TestCase):
     def test_word_of(self):
         from origami.brain.bandit import word_of

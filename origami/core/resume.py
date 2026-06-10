@@ -112,6 +112,8 @@ def load(path: Path) -> dict | None:
         d = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+    if d.get("version") != 1:        # forward-compat: don't misread a newer format
+        return None
     d["profile"] = _profile_from_dict(d["profile"])
     d["findings"] = [_finding_from_dict(f) for f in d["findings"]]
     d["root_seeds"] = [tuple(s) for s in d["root_seeds"]]
