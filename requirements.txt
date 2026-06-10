@@ -1,0 +1,7 @@
+# Origami — runtime deps
+httpx>=0.27          # engine HTTP async
+PyYAML>=6            # knowledge base / overlay
+
+# usados a partir do fingerprint/saída (instalar quando chegar a hora)
+mmh3>=4              # favicon hash (fingerprint)
+rich>=13            # saída de CLI bonita (opcional; há fallback em texto puro)

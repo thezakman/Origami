@@ -1,0 +1,92 @@
+# Origami — curated knowledge base (overlay layer).
+#
+# MVP ships this hand-written set (~10 techs). The multi-source ingestion
+# layer (Wappalyzer fork / nuclei / 0xdf-404 / favicon DBs) lands in v2 and
+# feeds a separate rules.yaml; this overlay always wins on conflict and is
+# where cross-target learning writes back.
+#
+# Signal types:
+#   header  {name, match}  — substring match (case-insensitive) on a response header
+#   cookie  {match}        — substring match on any Set-Cookie value
+#   body    {match}        — substring match on a (forced-error) response body
+# All matches are case-insensitive. weight ~0..100; tech is "confirmed" >= 50.
+
+- tech: iis
+  signals:
+    - {type: header, name: server, match: "microsoft-iis", weight: 60}
+    - {type: cookie, match: "ASP.NET_SessionId", weight: 80}
+    - {type: header, name: x-powered-by, match: "asp.net", weight: 40}
+    - {type: header, name: x-aspnet-version, match: "", weight: 50}
+  on_confirm:
+    extensions: [".aspx", ".asmx", ".ashx", ".asp", ".asax", ".ascx", ".config"]
+    priority_paths: ["web.config", "trace.axd", "elmah.axd", "bin/", "App_Data/",
+                     "_vti_bin/", "default.aspx", "WebResource.axd"]
+    folds: ["shortscan"]
+
+- tech: aspnet
+  signals:
+    - {type: cookie, match: ".AspNetCore", weight: 80}
+    - {type: cookie, match: "ASP.NET_SessionId", weight: 70}
+    - {type: header, name: x-powered-by, match: "asp.net", weight: 60}
+  on_confirm:
+    extensions: [".aspx", ".asmx", ".ashx"]
+    priority_paths: ["web.config", "appsettings.json"]
+
+- tech: php
+  signals:
+    - {type: header, name: x-powered-by, match: "php", weight: 70}
+    - {type: cookie, match: "PHPSESSID", weight: 80}
+    - {type: header, name: set-cookie, match: "PHPSESSID", weight: 60}
+  on_confirm:
+    extensions: [".php", ".php3", ".php5", ".phtml", ".inc", ".bak", ".old"]
+    priority_paths: [".env", "composer.json", "vendor/", "info.php", "phpinfo.php"]
+
+- tech: apache
+  signals:
+    - {type: header, name: server, match: "apache", weight: 60}
+  on_confirm:
+    priority_paths: [".htaccess", ".htpasswd", "server-status", "server-info"]
+
+- tech: nginx
+  signals:
+    - {type: header, name: server, match: "nginx", weight: 60}
+  on_confirm:
+    priority_paths: ["nginx_status", ".well-known/"]
+
+- tech: tomcat
+  signals:
+    - {type: cookie, match: "JSESSIONID", weight: 60}
+    - {type: header, name: server, match: "coyote", weight: 60}
+    - {type: body, match: "apache tomcat", weight: 70}
+  on_confirm:
+    extensions: [".jsp", ".do", ".action"]
+    priority_paths: ["manager/html", "host-manager/", "WEB-INF/web.xml", "examples/"]
+
+- tech: express
+  signals:
+    - {type: header, name: x-powered-by, match: "express", weight: 80}
+    - {type: cookie, match: "connect.sid", weight: 70}
+  on_confirm:
+    priority_paths: ["package.json", "api/", "graphql"]
+
+- tech: laravel
+  signals:
+    - {type: cookie, match: "laravel_session", weight: 80}
+    - {type: header, name: set-cookie, match: "XSRF-TOKEN", weight: 40}
+  on_confirm:
+    extensions: [".php"]
+    priority_paths: [".env", "storage/", "telescope", "_debugbar/", "vendor/"]
+
+- tech: wordpress
+  signals:
+    - {type: body, match: "/wp-content/", weight: 70}
+    - {type: header, name: link, match: "wp-json", weight: 60}
+  on_confirm:
+    priority_paths: ["wp-login.php", "wp-admin/", "wp-content/", "wp-json/", "xmlrpc.php"]
+
+- tech: django
+  signals:
+    - {type: cookie, match: "csrftoken", weight: 50}
+    - {type: body, match: "csrfmiddlewaretoken", weight: 60}
+  on_confirm:
+    priority_paths: ["admin/", "static/", "__debug__/"]
