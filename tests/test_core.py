@@ -252,6 +252,27 @@ class TestWappalyzerIngest(unittest.TestCase):
         self.assertEqual(w.literalize(r"jquery[.-]?([\d.]+)?\.js\;version:\1"), "jquery")
         self.assertEqual(w.literalize(r"^\d+$"), "")          # no usable literal
 
+    def test_kb_merge_overlay_wins_folds(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from origami.brain.kb import load_kb
+        ing, ov = tempfile.mktemp(suffix=".yaml"), tempfile.mktemp(suffix=".yaml")
+        Path(ing).write_text(
+            "- {tech: IIS, signals: [{type: header, name: server, match: iis, weight: 40}]}\n")
+        Path(ov).write_text(
+            "- {tech: iis, signals: [{type: cookie, match: ASP.NET_SessionId, weight: 80}],"
+            " on_confirm: {extensions: ['.aspx'], folds: [shortscan]}}\n")
+        try:
+            rules = {r.tech: r for r in load_kb(Path(ing), Path(ov))}
+            iis = rules["iis"]                              # merged by lowercased name
+            self.assertEqual({s.type for s in iis.signals}, {"header", "cookie"})  # union
+            self.assertEqual(iis.folds, ["shortscan"])     # overlay folds win
+            self.assertIn(".aspx", iis.extensions)
+        finally:
+            os.unlink(ing)
+            os.unlink(ov)
+
     def test_db_to_rules(self):
         from origami.brain.ingest import wappalyzer as w
         db = {

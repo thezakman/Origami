@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 OVERLAY_PATH = Path(__file__).with_name("overlay.yaml")
+RULES_PATH = Path(__file__).with_name("rules.yaml")        # ingested layer (origami --update)
 
 
 @dataclass(slots=True)
@@ -33,21 +34,39 @@ class TechRule:
 
 
 def load_kb(*paths: Path) -> list[TechRule]:
-    """Load and merge KB files. Later files override earlier ones per tech."""
+    """Load and merge KB layers, keyed by lowercased tech name.
+
+    Default order: ingested `rules.yaml` (if present) first, then the curated
+    `overlay.yaml`. Signals from both are UNIONed; `on_confirm` (extensions /
+    priority-paths / folds) is taken from the overlay when it has the tech — so
+    ingestion broadens *detection* while the overlay keeps the *folds* and wins.
+    """
     if not paths:
-        paths = (OVERLAY_PATH,)
+        paths = tuple(p for p in (RULES_PATH, OVERLAY_PATH) if p.exists())
+
     by_tech: dict[str, TechRule] = {}
     for p in paths:
         for raw in yaml.safe_load(p.read_text()) or []:
             rule = _parse_rule(raw)
-            by_tech[rule.tech] = rule  # last wins
+            cur = by_tech.get(rule.tech)
+            if cur is None:
+                by_tech[rule.tech] = rule
+            else:
+                cur.signals.extend(rule.signals)          # union signals
+                # a later layer's folds/extensions win when it has them
+                if rule.extensions:
+                    cur.extensions = rule.extensions
+                if rule.priority_paths:
+                    cur.priority_paths = rule.priority_paths
+                if rule.folds:
+                    cur.folds = rule.folds
     return list(by_tech.values())
 
 
 def _parse_rule(raw: dict) -> TechRule:
     oc = raw.get("on_confirm", {}) or {}
     return TechRule(
-        tech=raw["tech"],
+        tech=str(raw["tech"]).lower().strip(),
         signals=[
             Signal(
                 type=s["type"],
