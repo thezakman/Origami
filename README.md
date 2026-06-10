@@ -61,6 +61,7 @@ Common flags:
 | `--shortscan` / `--no-shortscan` | force / disable the IIS 8.3 fold (auto when IIS detected) |
 | `--no-js` / `--no-backups` | disable those discovery folds |
 | `--max-folds N` | cap learned-vocabulary names folded in (default 40) |
+| `--economy auto\|on\|off` | rank candidates by learned hit-rate (auto: on under a WAF) |
 | `-v` / `-vv` | verbose: phases & hits / every request |
 | `-F` | show full URLs instead of paths |
 | `--json FILE` / `--html FILE` / `--out DIR` | reports & artifacts |
@@ -106,7 +107,11 @@ python tests/benchmark/bench_folds.py                           # fold-budget be
 
 ## Status & roadmap
 
-Core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog) and mid-scan resume (`--resume`) are implemented and tested. Planned: a contextual bandit for request economy under WAFs.
+The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
+
+### Request economy (contextual bandit)
+
+When a target throttles you — a WAF, a 429 wall, a tight `--max-requests` — the order candidates fire in decides what you actually get. With `--economy on` (automatic when a WAF is detected) Origami ranks each candidate by the probability it pays off, learned from past scans: every word is a Bernoulli arm with a Beta(hits, misses) reward posterior conditioned on the target's confirmed technologies, ordered by a Thompson sample. Proven names go first, the budget buys more hits. Learning is always on (every probe updates the store); ranking is the lever economy mode pulls.
 
 ## Authorization
 

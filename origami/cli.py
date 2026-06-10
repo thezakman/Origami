@@ -102,7 +102,8 @@ async def run(args: argparse.Namespace) -> int:
         max_depth=args.depth, max_requests=args.max_requests,
         wordlist_path=args.wordlist, shortscan=shortscan,
         js=not args.no_js, backups=not args.no_backups,
-        max_folds=args.max_folds, scope=args.scope, filters=_build_filters(args),
+        max_folds=args.max_folds, scope=args.scope, economy=args.economy,
+        filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
@@ -220,6 +221,10 @@ def main() -> None:
                     help="disable JS/HTML endpoint harvesting")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
+    ap.add_argument("--economy", choices=["auto", "on", "off"], default="auto",
+                    help="rank candidates by learned hit-rate so the request budget "
+                         "buys the most likely names first (auto: on when a WAF is "
+                         "detected; needs the memory DB to learn)")
     ap.add_argument("--scope", choices=["host", "site"], default="host",
                     help="host: scan only the target host (CDN JS is still read for intel); "
                          "site: also scan same-registrable-domain hosts (e.g. the CDN)")

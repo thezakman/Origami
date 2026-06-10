@@ -46,6 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_corpus_path ON corpus(path);
 CREATE TABLE IF NOT EXISTS host_fp (
     host TEXT PRIMARY KEY, vec TEXT          -- fingerprint vector (JSON) for k-NN
 );
+CREATE TABLE IF NOT EXISTS word_stats (
+    tech   TEXT,                             -- confirmed tech, or '*' = context-free
+    word   TEXT,                             -- candidate basename (no extension)
+    hits   INTEGER DEFAULT 0,
+    misses INTEGER DEFAULT 0,
+    PRIMARY KEY (tech, word)                 -- the contextual-bandit reward table
+);
 """
 
 
@@ -162,6 +169,33 @@ class Memory:
                 if conf >= min_conf and conf > best.get(b, 0):
                     best[b] = conf
         return sorted(best, key=lambda b: -best[b])[:limit]
+
+    # ---- contextual-bandit reward store ------------------------------------
+
+    def load_word_stats(self, techs: list[str]) -> dict[str, tuple[int, int]]:
+        """Pool (hits, misses) per candidate word across the host's confirmed
+        techs plus the context-free '*' row — the prior the ranker scores with."""
+        keys = list(dict.fromkeys(["*"] + [t for t in techs]))
+        qm = ",".join("?" * len(keys))
+        rows = self.db.execute(
+            f"SELECT word, SUM(hits), SUM(misses) FROM word_stats "
+            f"WHERE tech IN ({qm}) GROUP BY word", keys).fetchall()
+        return {w: (h or 0, m or 0) for w, h, m in rows}
+
+    def record_word_stats(self, deltas: dict[str, tuple[int, int]], techs: list[str]) -> None:
+        """Persist accumulated (hit, miss) deltas under each confirmed tech and
+        the global '*' row, so future scans of similar hosts rank smarter."""
+        if not deltas:
+            return
+        for tech in dict.fromkeys(["*"] + list(techs)):
+            for word, (h, m) in deltas.items():
+                if not h and not m:
+                    continue
+                self.db.execute(
+                    "INSERT INTO word_stats (tech, word, hits, misses) VALUES (?,?,?,?) "
+                    "ON CONFLICT(tech, word) DO UPDATE SET hits = hits + ?, misses = misses + ?",
+                    (tech, word, h, m, h, m))
+        self.db.commit()
 
     def prior_findings(self, host: str) -> list[tuple[str, int]]:
         rows = self.db.execute(

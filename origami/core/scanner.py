@@ -19,6 +19,8 @@ from urllib.parse import urljoin, urlparse
 COLLISION_MAX = 4
 MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 
+from origami.brain.bandit import Ranker as Bandit
+from origami.brain.bandit import word_of
 from origami.brain.kb import TechRule, load_kb
 from origami.brain.ngram import NGram
 from origami.core import baseline as bl
@@ -96,6 +98,7 @@ class ScanOptions:
     backups: bool = True          # VCS/dotfile probes + backup-name folding
     max_folds: int = 40           # cap on learned vocabulary names folded into the scan
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
+    economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
     filters: Filters = field(default_factory=Filters)
 
 
@@ -323,6 +326,18 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
     queued: set[str] = {p for p, _ in queue} | scanned
 
+    # Contextual bandit: learning is always on (every probe updates the ranker),
+    # but candidate *re-ordering* only kicks in under economy mode — when the
+    # request budget is tight enough that order decides what gets tested.
+    techs = profile.confirmed_techs()
+    ranker = None
+    if memory is not None:
+        ranker = Bandit(memory.load_word_stats(techs))
+    economy = opts.economy == "on" or (opts.economy == "auto" and bool(profile.waf))
+    if economy and ranker is not None:
+        observer.log("economy mode: ranking candidates by learned hit-rate "
+                     "(request budget is tight)", 0, style="cyan")
+
     def _checkpoint():
         if resume_path is not None:
             resume_mod.save(resume_path, profile=profile, findings=result.findings,
@@ -353,7 +368,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                      + (f" · depth {depth}" if depth else ""), 1)
         observer.start_prefix(prefix, len(cands))
         confirmed, ancestors = await _scan_prefix(
-            engine, profile, prefix, cands, result, opts, observer, control)
+            engine, profile, prefix, cands, result, opts, observer, control,
+            ranker=ranker, economy=economy)
 
         # Interrupted mid-prefix → leave it at the front for a clean resume.
         if control.quit or engine.total_requests >= opts.max_requests:
@@ -382,6 +398,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
 
     result.requests_made = engine.total_requests
     result.pushbacks = engine.pushback_events
+    if memory is not None and ranker is not None:
+        memory.record_word_stats(ranker.deltas(), techs)   # learn even if interrupted
     if interrupted:
         # Leave the checkpoint on disk for `--resume`; skip folds + memory
         # (those run once, on the clean finish).
@@ -504,7 +522,8 @@ def _report(observer, result, opts, finding, url) -> None:
                      f"conf {finding.confidence:.2f} · {finding.origin}", 1, style="green")
 
 
-async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control):
+async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control,
+                       ranker=None, economy=False):
     """Fire candidates under `prefix`. Returns (confirmed_dirs, ancestor_dirs):
     confirmed dirs (a 403/301/trailing-slash response) are recursed first;
     ancestor dirs (merely inferred from a deep file path) are speculative and
@@ -513,6 +532,15 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     confirmed_dirs: list[str] = []
     ancestor_dirs: list[str] = []
     first_hit_path: str | None = None
+
+    # Economy mode: keep anchored candidates (memory/js/priority seeds) up front,
+    # but reorder the generic wordlist tier by the bandit's learned hit-rate so
+    # the budget buys the most likely names first.
+    if economy and ranker is not None:
+        anchored = [c for c in cands if c.origin != "wordlist"]
+        wl = [c for c in cands if c.origin == "wordlist"]
+        wl.sort(key=lambda c: -ranker.sample(word_of(c.path)))
+        cands = anchored + wl
 
     for cand in cands:
         if engine.total_requests >= opts.max_requests or control.quit:
@@ -545,6 +573,8 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # here, so it never gets mistaken for a directory.
         finding = classify(profile, probe, cand.origin, prefix)
         if finding is None:
+            if ranker is not None:
+                ranker.observe(cand.path, hit=False)
             observer.tick(hit=False)
             observer.request(url, probe.status, False)
             continue
@@ -563,10 +593,14 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # soft-verify a surprising hit with a same-shape random sibling — a
         # blanket 403/200 wall is recursed (above) but NOT reported.
         if await _is_soft(engine, profile, prefix, probe):
+            if ranker is not None:
+                ranker.observe(cand.path, hit=False)
             observer.tick(hit=False)
             observer.request(url, probe.status, False)
             continue
 
+        if ranker is not None:
+            ranker.observe(cand.path, hit=True)     # real, non-soft → reward the word
         if first_hit_path is None and probe.status == 200:
             first_hit_path = path
         # A confirmed (real, non-soft) path implies its parent dirs exist —

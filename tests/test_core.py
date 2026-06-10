@@ -380,6 +380,51 @@ class TestJsParser(unittest.TestCase):
         self.assertIn("/js/app.js.map", paths)
 
 
+class TestBandit(unittest.TestCase):
+    def test_word_of(self):
+        from origami.brain.bandit import word_of
+        self.assertEqual(word_of("admin.aspx"), "admin")
+        self.assertEqual(word_of("/api/Login.PHP"), "login")
+        self.assertEqual(word_of("backup/"), "backup")
+        self.assertEqual(word_of("https://h/x/getOrders.ashx"), "getorders")
+
+    def test_expected_ordering(self):
+        from origami.brain.bandit import Ranker
+        r = Ranker({"good": (20, 1), "bad": (0, 40), "unseen": (0, 0)})
+        self.assertGreater(r.expected("good"), r.expected("unseen"))
+        self.assertGreater(r.expected("unseen"), r.expected("bad"))
+
+    def test_order_puts_proven_first(self):
+        import random
+        from origami.brain.bandit import Ranker
+        r = Ranker({"login": (30, 1), "zzqqx": (0, 60)}, rng=random.Random(1))
+        order = r.order(["zzqqx.aspx", "login.aspx"])
+        self.assertEqual(order[0], "login.aspx")
+
+    def test_update_and_deltas(self):
+        from origami.brain.bandit import Ranker
+        r = Ranker()
+        r.observe("admin.php", hit=True)
+        r.observe("admin.php", hit=False)
+        r.observe("nope", hit=False)
+        self.assertEqual(r.deltas(), {"admin": (1, 1), "nope": (0, 1)})
+
+    def test_memory_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        from origami.brain.memory import Memory
+        with tempfile.TemporaryDirectory() as d:
+            m = Memory(Path(d) / "m.sqlite")
+            m.record_word_stats({"login": (3, 2), "admin": (1, 0)}, ["php"])
+            m.record_word_stats({"login": (1, 1)}, ["php"])
+            stats = m.load_word_stats(["php"])
+            # each run writes both a '*' row and a 'php' row; load pools both.
+            # login: '*'=(4,3) + 'php'=(4,3) = (8,6)
+            self.assertEqual(stats["login"], (8, 6))
+            self.assertEqual(stats["admin"], (2, 0))
+            m.close()
+
+
 class TestResume(unittest.TestCase):
     def _state(self, path):
         from origami.core import resume as R
