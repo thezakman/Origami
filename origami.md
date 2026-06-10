@@ -208,7 +208,7 @@ tests/
 
 ## 7. Status & roadmap
 
-**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 32 unit tests):
+**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 42 unit tests):
 - per-context calibration (simhash soft-404, wildcard, case-sensitivity, redirect-kind);
 - additive fingerprint + folds (headers/cookies/error-page + **favicon mmh3**, **WAF detection**);
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
@@ -217,15 +217,16 @@ tests/
 - **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **parameter** intel; **backups/VCS**; **robots/sitemap**;
 - **vocabulary folding** (names+extensions from references + host/subdomain/path);
 - **SQLite memory**: **k-NN over fingerprint vectors** + **association mining** + cross-target priming + `--history`;
+- **multi-source KB ingestion** (`--update`: Wappalyzer catalog → KB rules, overlay wins on conflict);
+- **mid-scan resume** (`--resume`): checkpoint the loop state per directory, continue an interrupted run with no re-fingerprinting;
+- **contextual bandit** (`--economy`): Beta-Thompson candidate ranking by learned hit-rate, conditioned on confirmed techs, for request economy under WAFs;
 - scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins);
 - **multi-target** scanning (`-l/--list`, multiple URLs), each scanned clean;
 - output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).
 
 **Next:**
-- multi-source KB ingestion (Wappalyzer/nuclei/0xdf-404/favicon DBs → KB);
-- mid-scan resume;
-- contextual bandit for request economy under WAFs (hits/budget);
-- a deferred trained FP-classifier once the corpus is large enough.
+- favicon/tech DBs beyond Wappalyzer (nuclei tech-templates, 0xdf-404, FingerprintHub) into the ingestion layer;
+- a deferred trained FP-classifier once the corpus is large enough to label.
 
 ## 8. Testing & evaluation
 
