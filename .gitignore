@@ -20,3 +20,6 @@ wordlist_custom.txt
 *.swp
 .idea/
 .vscode/
+
+# private brainstorm — never commit
+work.md

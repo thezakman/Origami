@@ -81,7 +81,7 @@ calibration → TargetProfile → brain (KB + memory + vocab) → priority batch
    → engine (async httpx, backoff) → classify → fold → feedback → next runs
 ```
 
-See [`origami.md`](origami.md) for the full design, and [`work.md`](work.md) for the original brainstorm.
+See [`origami.md`](origami.md) for the full design.
 
 ## Development
 

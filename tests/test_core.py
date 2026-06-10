@@ -171,6 +171,48 @@ class TestVocabulary(unittest.TestCase):
         self.assertTrue(names.most_common(1))
 
 
+class TestMemoryKNN(unittest.TestCase):
+    def test_knn_primes_from_nearest_host(self):
+        import os
+        import tempfile
+        from origami.brain.memory import Memory
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+
+        class R:
+            def __init__(self, findings):
+                self.findings = findings
+                self.requests_made = 10
+
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            a = TargetProfile(host="a.com", base_url="http://a.com/")
+            a.tech_scores = {"iis": 90, "aspnet": 80}
+            a.enabled_extensions = {".aspx", ".asmx"}
+            m.record_run(a, R([make_finding("http://a.com/admin.aspx"),
+                               make_finding("http://a.com/api.asmx")]))
+            b = TargetProfile(host="b.com", base_url="http://b.com/")
+            b.tech_scores = {"php": 90}
+            b.enabled_extensions = {".php"}
+            m.record_run(b, R([make_finding("http://b.com/index.php")]))
+
+            probe = TargetProfile(host="c.com", base_url="http://c.com/")
+            probe.tech_scores = {"iis": 85, "aspnet": 75}
+            probe.enabled_extensions = {".aspx"}
+            primed = m.recall_knn(probe)
+            self.assertIn("/admin.aspx", primed)      # from the near IIS host
+            self.assertNotIn("/index.php", primed)    # PHP host is far → excluded
+        finally:
+            m.close()
+            os.unlink(db)
+
+
+def make_finding(url, status=200):
+    from origami.core.response_classifier import Finding
+    return Finding(url, status, 100, "text/html", 0.9, "wordlist")
+
+
 class TestNGram(unittest.TestCase):
     def test_completes_from_prefix(self):
         from origami.brain.ngram import NGram

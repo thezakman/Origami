@@ -197,7 +197,10 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     root_seeds: list[tuple[str, str]] = []
 
     if memory is not None:
-        primed = memory.recall(profile.confirmed_techs(), profile.host)
+        # k-NN over the fingerprint vector (nearest past hosts), falling back to
+        # shared-tech recall when there aren't enough fingerprinted hosts yet.
+        primed = memory.recall_knn(profile) or memory.recall(profile.confirmed_techs(),
+                                                             profile.host)
         root_seeds += [(p, "memory") for p in primed]
         if primed:
             observer.log(f"memory: {len(primed)} primed paths from past scans "

@@ -15,8 +15,11 @@ n-gram / association-mining phase will train on.
 
 from __future__ import annotations
 
+import json
+import math
 import sqlite3
 import time
+from collections import defaultdict
 from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".origami" / "memory.sqlite"
@@ -40,7 +43,34 @@ CREATE TABLE IF NOT EXISTS corpus (
     PRIMARY KEY (host, path)
 );
 CREATE INDEX IF NOT EXISTS idx_corpus_path ON corpus(path);
+CREATE TABLE IF NOT EXISTS host_fp (
+    host TEXT PRIMARY KEY, vec TEXT          -- fingerprint vector (JSON) for k-NN
+);
 """
+
+
+def fingerprint_vector(profile) -> dict:
+    """A sparse feature vector for k-NN: tech scores + structural flags + the
+    enabled extension set. Two hosts are 'near' when these line up."""
+    vec: dict[str, float] = {f"tech:{t}": s / 100.0 for t, s in profile.tech_scores.items()}
+    if profile.waf:
+        vec["waf"] = 1.0
+    if profile.wildcard:
+        vec["wildcard"] = 1.0
+    if profile.case_sensitive is False:
+        vec["case_insensitive"] = 1.0
+    for e in profile.enabled_extensions:
+        vec[f"ext:{e}"] = 1.0
+    return vec
+
+
+def _cosine(a: dict, b: dict) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(a[k] * b[k] for k in a.keys() & b.keys())
+    na = math.sqrt(sum(v * v for v in a.values()))
+    nb = math.sqrt(sum(v * v for v in b.values()))
+    return dot / (na * nb) if na and nb else 0.0
 
 
 class Memory:
@@ -78,6 +108,33 @@ class Memory:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def recall_knn(self, profile, k: int = 5, limit: int = 200) -> list[str]:
+        """Prime from the k most *similar* past hosts (cosine over fingerprint
+        vectors), pooling their corpus paths weighted by similarity. More
+        precise than shared-tech recall — a near host's exact paths matter more
+        than any host that merely shares one technology."""
+        vec = fingerprint_vector(profile)
+        if not vec:
+            return []
+        rows = self.db.execute("SELECT host, vec FROM host_fp WHERE host != ?",
+                               (profile.host,)).fetchall()
+        sims = []
+        for host, vjson in rows:
+            try:
+                s = _cosine(vec, json.loads(vjson))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if s > 0.1:
+                sims.append((s, host))
+        sims.sort(reverse=True)
+        if not sims:
+            return []
+        scores: dict[str, float] = defaultdict(float)
+        for s, host in sims[:k]:
+            for path, _ in self.prior_findings(host):
+                scores[path] += s
+        return sorted(scores, key=lambda p: -scores[p])[:limit]
+
     def prior_findings(self, host: str) -> list[tuple[str, int]]:
         rows = self.db.execute(
             "SELECT path, status FROM corpus WHERE host = ? ORDER BY path", (host,)
@@ -104,6 +161,9 @@ class Memory:
         for tech in confirmed:
             self.db.execute("INSERT OR IGNORE INTO host_techs VALUES (?,?)",
                             (profile.host, tech))
+        # store the fingerprint vector for k-NN priming of future scans
+        self.db.execute("INSERT OR REPLACE INTO host_fp VALUES (?,?)",
+                        (profile.host, json.dumps(fingerprint_vector(profile))))
         # corpus: only real, low-noise hits (200/3xx/401/403) become memory.
         for f in result.findings:
             if f.status in (200, 204, 301, 302, 401, 403):
