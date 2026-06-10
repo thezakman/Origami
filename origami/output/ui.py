@@ -85,7 +85,7 @@ def display_url(url: str, full: bool) -> str:
 ORIGIN_STYLE = {
     "memory": "magenta", "js": "blue", "shortscan": "bright_magenta",
     "backup": "red", "robots": "green", "priority": "cyan",
-    "wordlist": "white", "recursion": "yellow",
+    "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.

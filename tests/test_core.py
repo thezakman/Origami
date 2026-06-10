@@ -213,6 +213,38 @@ def make_finding(url, status=200):
     return Finding(url, status, 100, "text/html", 0.9, "wordlist")
 
 
+class TestAssociation(unittest.TestCase):
+    def test_corpus_rule(self):
+        import os
+        import tempfile
+        from origami.brain.memory import Memory
+        from origami.core.evidence import TargetProfile
+
+        class R:
+            def __init__(self, findings):
+                self.findings = findings
+                self.requests_made = 10
+
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            # 3 hosts that have BOTH /backup/ and /.git/HEAD
+            for h in ("h1", "h2", "h3"):
+                p = TargetProfile(host=h, base_url=f"http://{h}/")
+                m.record_run(p, R([make_finding(f"http://{h}/backup/", 403),
+                                   make_finding(f"http://{h}/.git/HEAD")]))
+            # 1 host with only /backup/
+            p = TargetProfile(host="h4", base_url="http://h4/")
+            m.record_run(p, R([make_finding("http://h4/backup/", 403)]))
+
+            assoc = m.associate(["/backup/"], min_support=2, min_conf=0.5)
+            self.assertIn("/.git/HEAD", assoc)        # 3/4 hosts → conf 0.75
+            self.assertNotIn("/backup/", assoc)       # antecedent excluded
+        finally:
+            m.close()
+            os.unlink(db)
+
+
 class TestNGram(unittest.TestCase):
     def test_completes_from_prefix(self):
         from origami.brain.ngram import NGram

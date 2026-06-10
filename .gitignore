@@ -23,3 +23,6 @@ wordlist_custom.txt
 
 # private brainstorm — never commit
 work.md
+
+# old Feb-2024 prototype — kept local, not versioned
+legacy/

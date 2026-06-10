@@ -317,6 +317,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         await _backup_fold(engine, profile, result, opts, observer)
         result.findings = _dedupe_and_collapse(result.findings, observer)
 
+    # 6.5 association fold — corpus rules ("found /backup/ → test /.git/")
+    if memory is not None:
+        await _association_fold(engine, profile, result, opts, observer, memory)
+        result.findings = _dedupe_and_collapse(result.findings, observer)
+
     observer.pushback(engine.pushback_events)
     result.requests_made = engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -502,6 +507,31 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
                 observer.request(url, probe.status, False)
                 continue
             _report(observer, result, opts, finding, url)
+
+
+async def _association_fold(engine, profile, result, opts, observer, memory) -> None:
+    """Test paths the corpus says co-occur with what we already found."""
+    found = [urlparse(f.url).path for f in result.findings]
+    assoc = memory.associate(found)
+    if not assoc:
+        return
+    observer.phase("associations")
+    observer.log(f"associations: {len(assoc)} paths from corpus rules", 0, style="cyan")
+    observer.start_prefix("associations", len(assoc))
+    root = _host_root(profile.base_url)
+    for path in assoc:
+        if engine.total_requests >= opts.max_requests:
+            break
+        p = "/" + path.lstrip("/")
+        prefix = p.rsplit("/", 1)[0] + "/"
+        await bl.calibrate(engine, profile, [(prefix, _ext_of(p))])
+        probe = await engine.fetch(urljoin(root, p.lstrip("/")))
+        finding = await _confirm(engine, profile, prefix, probe, "assoc")
+        if finding is None:
+            observer.tick(hit=False)
+            observer.request(probe.url, probe.status, False)
+            continue
+        _report(observer, result, opts, finding, probe.url)
 
 
 def _should_shortscan(opts: ScanOptions, folds: set[str]) -> bool:

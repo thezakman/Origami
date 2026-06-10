@@ -2,47 +2,47 @@
 
 > *Origami is an adaptive content discovery engine that folds its strategy around the target's behavior, technology and response patterns.*
 
-Evolução do ffuf/dirb: em vez de bruteforce cego, o Origami **calibra antes de atacar**, faz **fingerprint aditivo** (não segmenta o ataque, só dá insumo) e **dobra** a estratégia conforme padrões de tecnologia aparecem — por header, cookie, resposta, pasta ou arquivo. Cada achado vira evidência que repondera os módulos e expande a wordlist em tempo real. Com o tempo, aprende entre alvos.
+An evolution of ffuf/dirb: instead of blind brute-force, Origami **calibrates before attacking**, does **additive fingerprinting** (it enriches the attack, it doesn't segment it) and **folds** its strategy as technology patterns appear — by header, cookie, response, directory or file. Every finding becomes evidence that re-weights the modules and expands the wordlist in real time. Over time, it learns across targets.
 
-Uso pretendido:
+Intended use:
 
 ```bash
-origami http://www.exemplo.com.br
+origami http://www.example.com
 ```
 
 ---
 
-## Decisões travadas
+## Locked decisions
 
-| Decisão | Escolha |
+| Decision | Choice |
 |---|---|
-| Linguagem | **Python 3.11+** (`asyncio` + `httpx`), com fronteira limpa engine/cérebro pra reescrever só o engine depois se precisar |
-| Detecção | **Híbrida, em ordem:** MVP arranca com **overlay próprio curado** (~10-15 techs à mão) pra não atrasar o motor; **ingestão multi-fonte** (Wappalyzer fork `tunetheweb`, nuclei tech-templates, catálogo de 404-pages do 0xdf, favicon-hash DBs) entra no **v2**. Overlay sempre precede a camada ingerida e recebe o write-back do aprendizado |
-| Estratégia ML | **Faseada (algoritmo → memória → modelo treinado)** — v1 só algoritmos (simhash/regras, zero modelo treinado); v2 memória cross-target (k-NN + association mining); v3 modelo treinado **só quando houver dado** (FP-classifier, n-gram, bandit sob budget). Detalhe na §3.8 |
-| Shortscan | **Auto-disparo *gated*** (IIS confirmado **E** tilde vaza na calibração) + flags `--shortscan`/`--no-shortscan`; invoca o binário Go já instalado em `~/go/bin/shortscan` |
-| Teste/avaliação | **Harness local no MVP** (servidor fake: IIS soft-404, wildcard, 404 custom, rate-limit) + métrica norte **hits/request vs ffuf**. Servers de teste online do usuário pra validação/treino posterior |
-| Escopo do MVP | **Núcleo adaptativo enxuto** — calibração por contexto + fingerprint + evidence bus + scheduler com prioridade + classificador de FP + módulos IIS/PHP + ingestão de catálogo + SQLite + saída JSON |
+| Language | **Python 3.11+** (`asyncio` + `httpx`), with a clean engine/brain boundary so only the engine needs rewriting later if throughput demands it |
+| Detection | **Hybrid, in order:** start with a **curated overlay** (~10-15 hand-written techs) so the engine isn't blocked; **multi-source ingestion** (Wappalyzer fork `tunetheweb`, nuclei tech-templates, the 0xdf 404-pages catalog, favicon-hash DBs) lands later. The overlay always precedes the ingested layer and receives the learning write-back |
+| ML strategy | **Phased (algorithm → memory → trained model)** — first only algorithms (simhash/rules, no trained model); then cross-target memory (k-NN + association mining); a trained model **only when there's data** (FP-classifier, n-gram, bandit under budget). Detail in §3.8 |
+| Shortscan | **Gated auto-trigger** (IIS confirmed **and** the tilde leaks) + `--shortscan`/`--no-shortscan` flags; drives the Go binary at `~/go/bin/shortscan` |
+| Test/eval | **Local harness** (fake server: IIS soft-404, wildcard, custom 404, rate-limit) + a north-star **hits/request vs ffuf** metric |
+| MVP scope | **Lean adaptive core** — per-context calibration + fingerprint + evidence bus + priority scheduler + FP classifier + IIS/PHP modules + SQLite + JSON output |
 
 ---
 
-## 1. Princípios de design
+## 1. Design principles
 
-1. **Calibrar antes de atacar.** Nada de ataque sem confirmar o canal. Baseline mede o comportamento real de 404/403/401/500 e só então o scan começa.
-2. **Fingerprint aditivo e por prefixo de path.** A web real é legado + proxy + múltiplos apps no mesmo host. `/api/` pode ser Node e `/portal/` ASP clássico. Fingerprint enriquece, não segmenta, e é mantido **por prefixo**.
-3. **Barramento de evidências.** Header, cookie, shortscan, JS, robots, sitemap, favicon, git leak — tudo vira `Evidence{source, evidence, confidence}` e alimenta o motor de decisão.
-4. **Interpretabilidade > caixa-preta.** A maior parte da "adaptação" é regra determinística externalizada em YAML (estilo nuclei), não ML. ML entra só onde regra não resolve, e sempre justificável num relatório.
-5. **Fronteira limpa engine ↔ cérebro.** Engine = worker pool de request rápido. Cérebro = orquestração + decisão + aprendizado. Trocam mensagens. Se throughput virar gargalo, reescreve só o engine (Go/Rust) sem tocar no cérebro.
-6. **Não inventar assinatura — ingerir catálogo mantido.** Fingerprint de tech, páginas 404 e favicon hashes vêm de fontes comunitárias atualizáveis (Wappalyzer fork, nuclei, 0xdf-404, FingerprintHub). O KB do Origami = baseline ingerido **+** overlay próprio. Troca manutenção eterna por `git pull` no upstream, e o overlay é onde o conhecimento acumulado (inclusive cross-target) é escrito.
+1. **Calibrate before attacking.** No attack without confirming the channel. The baseline measures the real behavior of 404/403/401/500, and only then does the scan begin.
+2. **Additive, per-path-prefix fingerprint.** The real web is legacy + proxy + multiple apps on one host. `/api/` can be Node while `/portal/` is classic ASP. Fingerprint enriches, it doesn't segment, and it's kept **per prefix**.
+3. **Evidence bus.** Header, cookie, shortscan, JS, robots, sitemap, favicon, git leak — everything becomes `Evidence{source, evidence, confidence}` feeding the decision engine.
+4. **Interpretability > black box.** Most of the "adaptation" is deterministic rule, externalized in YAML (nuclei-style), not ML. ML only enters where rules can't, and always justifiable in a report.
+5. **Clean engine ↔ brain boundary.** Engine = fast request worker pool. Brain = orchestration + decision + learning. They exchange messages. If throughput becomes the bottleneck, rewrite only the engine (Go/Rust) without touching the brain.
+6. **Don't invent signatures — ingest a maintained catalog.** Tech fingerprints, 404 pages and favicon hashes come from updatable community sources (Wappalyzer fork, nuclei, 0xdf-404, FingerprintHub). Origami's KB = ingested baseline **+** own overlay. Trades eternal maintenance for `git pull` upstream, and the overlay is where accumulated (incl. cross-target) knowledge is written.
 
-## 2. Arquitetura
+## 2. Architecture
 
 ```
-                 ┌──────────────────────────── CÉREBRO (brain) ─────────────────────────┐
+                 ┌──────────────────────────── BRAIN ───────────────────────────────────┐
                  │                                                                       │
-  calibração ──▶ │  TargetProfile  ◀── EvidenceBus ◀── Fingerprint                       │
+  calibration ─▶ │  TargetProfile  ◀── EvidenceBus ◀── Fingerprint                       │
    (baseline)    │       │                  ▲                                            │
                  │       ▼                  │                                            │
-                 │  KnowledgeBase(YAML) ─▶ Scheduler(priority queue) ─▶ batch priorizado │
+                 │  KnowledgeBase(YAML) ─▶ Scheduler(priority queue) ─▶ prioritized batch│
                  │       ▲                                              │                 │
                  │   Memory(SQLite)  ◀───────── feedback ──────────────┤                 │
                  └───────┼──────────────────────────────────────────────┼───────────────┘
@@ -52,229 +52,182 @@ origami http://www.exemplo.com.br
                  └───────────────────────────────────────────────────────────────────────┘
 ```
 
-**Pipeline:** `calibração → TargetProfile` → `cérebro consulta KB + memória e emite batch priorizado` → `engine dispara e classifica` → `hit confirmado atualiza profile + dispara regras de fold` → `corpus atualizado alimenta runs futuros`.
+**Pipeline:** `calibration → TargetProfile` → `brain queries KB + memory and emits a prioritized batch` → `engine fires and classifies` → `a confirmed hit updates the profile + triggers fold rules` → `the updated corpus feeds future runs`.
 
-## 3. Componentes
+## 3. Components
 
-### 3.1 Baseline / Calibração (`core/baseline.py`)
-O coração. Constrói um **perfil de não-existência por contexto** (por diretório e por classe de extensão), não um número global — soft-404 varia por pasta e por extensão.
-- Dispara probes garantidamente inexistentes com perfis distintos: random puro, random + extensão de cada classe a testar, path profundo, path com caractere especial.
-- Compara em múltiplas dimensões: status, content-length, word/line count, content-type, redirect target e **simhash do corpo normalizado** (remove CSRF token, nonce, timestamp — coisas dinâmicas que quebram comparação por length pura).
-- Detecta **wildcard routing** e **case-sensitivity** do path (case-insensitive já é sinal forte de Windows/IIS).
+### 3.1 Baseline / Calibration (`core/baseline.py`)
+The heart. It builds a **per-context non-existence profile** (per directory and per extension class), not a single global number — soft-404 varies by folder and extension.
+- Fires guaranteed-nonexistent probes with distinct shapes: plain random, random + each extension class to be tested, deep path, path with a special char.
+- Compares across multiple dimensions: status, content-length, word/line count, content-type, redirect target, and a **simhash of the normalized body** (strips CSRF tokens, nonces, timestamps, WAF support-IDs — dynamic noise that breaks length-only comparison).
+- Detects **wildcard routing** and path **case-sensitivity** (case-insensitive is already a strong Windows/IIS signal).
+- **Redirect handling:** a self-redirect (`/x` → `/x/`, http→https) and a constant-target redirect (every miss → `/action/login`, an auth wall) are both recognized as a single soft-404 pattern instead of "every path is a unique hit".
 
-**Prior art (não reinventar):** a calibração incorpora a lógica de autocalibração do **ffuf `-ac/-acc`** (cluster de respostas de wildcard), do **feroxbuster** e do **gobuster**. O Origami estende isso pra **perfil por contexto** (por diretório + classe de extensão) em vez de um filtro global — que é justamente a fraqueza dessas ferramentas.
+**Prior art (don't reinvent):** calibration borrows the autocalibration logic of **ffuf `-ac/-acc`** (clustering wildcard responses), **feroxbuster** and **gobuster**. Origami extends it to a **per-context profile** (per directory + extension class) instead of a global filter — exactly those tools' weak spot.
 
 ### 3.2 Fingerprint (`core/fingerprint.py`)
-Aditivo, com peso de confiança, **por prefixo de path**. Os sinais **não são escritos à mão** — vêm da ingestão de catálogos (Wappalyzer/nuclei/WhatWeb; ver §3.9). Sinais:
-- **Headers:** `Server`, `X-Powered-By`, ordering/casing, versão HTTP.
+Additive, confidence-weighted, **per path prefix**. Signals come from the curated overlay (and, later, ingested catalogs). Signals:
+- **Headers:** `Server`, `X-Powered-By`, ordering/casing, HTTP version.
 - **Cookies:** `ASP.NET_SessionId`, `.AspNetCore`, `JSESSIONID`, `PHPSESSID`, `laravel_session`, `ci_session`, `connect.sid`.
-- **Error pages forçados:** força 400/403/404/500 e fingerprinta o corpo. Base: o **catálogo de páginas 404 default do 0xdf** (<https://0xdf.gitlab.io/cheatsheets/404>) — mapeia corpo de erro default → stack (nginx, Apache, IIS, Flask, Django, FastAPI, Gin/Fiber, PHP-FPM, Laravel, Symfony, Express, Next.js, Tomcat, Spring Boot, Jetty, Rails, Sinatra, ASP.NET, Blazor). É um *catálogo de fingerprint por página de erro*, não um guia de soft-404.
-- **Favicon hash (mmh3):** um dos sinais mais fortes e subutilizados — mapeia produto inteiro. Base: FingerprintHub e DBs de favicon hash.
-- **Comportamento de extensão:** pede `/x.asp` vs `/x.php` e vê qual é *handled* vs servido como estático.
-- **Descoberta passiva:** robots.txt, sitemap.xml.
-- (futuro) JARM/TLS na camada de transporte.
+- **Forced error pages:** force 400/403/404/500 and fingerprint the body. Basis: the **0xdf default-404-page catalog** (<https://0xdf.gitlab.io/cheatsheets/404>) — maps a default error body → stack (nginx, Apache, IIS, Flask, Django, FastAPI, Gin/Fiber, PHP-FPM, Laravel, Symfony, Express, Next.js, Tomcat, Spring Boot, Jetty, Rails, Sinatra, ASP.NET, Blazor). It is a *fingerprint-by-error-page* catalog, not a soft-404 guide.
+- **Favicon hash (mmh3):** one of the strongest, most under-used signals — maps a whole product. Basis: FingerprintHub and favicon-hash DBs.
+- **WAF / block-page detection:** F5 BIG-IP ASM, Cloudflare, Imperva, Akamai, ModSecurity, Sucuri, etc., by body signature + headers + cookies. A block page is never a finding and the WAF shows in the fingerprint.
+- **Passive discovery:** robots.txt, sitemap.xml.
 
 ### 3.3 Evidence Bus + TargetProfile (`core/evidence.py`)
-Tudo vira evidência tipada e o profile é o estado persistente do alvo (também é a fonte do aprendizado cross-target). **No MVP o "bus" é simples:** uma lista com score + uma função reducer que repondera `tech_scores` — sem pub/sub nem fila de mensagens.
+Everything becomes typed evidence and the profile is the target's persistent state (also the source of cross-target learning). The "bus" is deliberately simple: a scored list + a reducer that re-weights `tech_scores` — no pub/sub, no message queue.
 
-```python
-@dataclass
-class Evidence:
-    source: str        # "header" | "cookie" | "shortscan" | "js" | "favicon" | ...
-    evidence: str      # "header_server_iis"
-    confidence: float  # 0.0–1.0
-    path_prefix: str = "/"
-
-@dataclass
-class TargetProfile:
-    host: str
-    tech_scores: dict[str, float]          # {"asp.net": 0.85, "iis": 0.9}
-    baseline: dict[str, ContextBaseline]   # por prefixo+classe de extensão
-    case_sensitive: bool
-    wildcard: bool
-    enabled_extensions: set[str]
-    findings: list[Finding]
-    evidence: list[Evidence]
-    fingerprint_vector: list[float]        # pro k-NN cross-target (v2)
-```
-
-### 3.4 Knowledge Base (`brain/rules.yaml`)
-Regras externalizadas, extensíveis sem mexer em código. `tech → sinais → extensões/wordlists/paths/folds`.
+### 3.4 Knowledge Base (`brain/overlay.yaml`)
+Externalized rules, extensible without touching code. `tech → signals → extensions/wordlists/paths/folds`.
 
 ```yaml
 - tech: iis
   signals:
-    - {type: header, match: "Server: Microsoft-IIS", weight: 50}
+    - {type: header, name: server, match: "microsoft-iis", weight: 60}
     - {type: cookie, match: "ASP.NET_SessionId", weight: 80}
-    - {type: case_insensitive_path, weight: 30}
   on_confirm:
-    extensions: [.aspx, .asmx, .ashx, .asp, .dll, .config, .svc, .asax, .ascx]
-    wordlist: iis.txt
-    priority_paths: [web.config, trace.axd, elmah.axd, /bin/, App_Data/, /_vti_bin/, WebResource.axd, ScriptResource.axd]
-    folds: [shortscan]            # gated: só dispara se tilde vazar
-
-- tech: php
-  signals:
-    - {type: header, match: "X-Powered-By: PHP", weight: 60}
-    - {type: cookie, match: "PHPSESSID", weight: 80}
-  on_confirm:
-    extensions: [.php, .php3, .php5, .phtml, .inc, .bak, .old]
-    wordlist: php.txt
-    priority_paths: [.env, composer.json, vendor/, info.php, phpinfo.php]
+    extensions: [".aspx", ".asmx", ".ashx", ".asp", ".config", ".asax", ".ascx"]
+    priority_paths: ["web.config", "trace.axd", "elmah.axd", "bin/", "App_Data/"]
+    folds: ["shortscan"]            # gated: only fires if the tilde leaks
 ```
 
 ### 3.5 Scheduler (`core/scheduler.py`)
-Fila de prioridade. Combina evidências e emite batches:
+Priority queue. Combines evidence and emits batches:
 ```
 ASP.NET + ADMIN~1 + api/v1  →
-  P1: /admin/, /admin/login.aspx, /admin/users.aspx     (derivado de evidência forte)
-  P2: /administrator/, /adminportal/                     (variações)
-  P3: wordlist genérica                                  (fallback)
+  P0: memory / js / robots / backup / shortscan seeds   (evidence-derived)
+  P1: word × tech extensions
+  P2: word × base extensions + dir probe
 ```
-Candidato derivado de shortscan/JS tem prioridade máxima (prob. de hit muito maior que palpite de wordlist).
+A shortscan/JS-derived candidate has top priority (much higher hit probability than a wordlist guess).
 
 ### 3.6 Response Classifier (`core/response_classifier.py`)
-Decide hit real vs soft-404. v1 = threshold calibrado de distância simhash ao baseline do contexto + status + word count + content-type + timing. v3 = modelo leve (logistic regression / gradient boosting) sobre essas features. Aprende a reconhecer: 404 fake, login, redirect, blocked, forbidden, directory listing, API error.
+Decides real hit vs soft-404. Engine truth: 404/400 are never hits; a redirect that leaves the requested path is dropped; WAF block pages are dropped. A candidate is a hit when it falls outside the calibrated miss profile for its context (simhash distance + status + redirect kind). Multi-modal soft-404 hosts are handled by **random-sibling verification** (verify a surprising hit with a same-shape random probe; learn the signature). User **filters** (`-mc/-fc/-ms/-fs`) are presentation-only — they never change what gets scanned/recursed.
 
-### 3.7 Módulos de fold (`modules/`)
-Disparados por evidência/calibração. Cada um **emite seeds de alta confiança**, não compete com o brute.
-- **tech/iis, tech/php, tech/apache, tech/tomcat, tech/laravel, …** — pacote de extensões/paths seguros de discovery por stack.
-- **discovery/shortname.py** — ver §4.
-- **discovery/js_parser.py** — extrai endpoints/rotas/versões de JS e joga no queue.
-- **discovery/backups.py** — `.git/`, `.svn/`, `.DS_Store`, `.swp`, `~`, `.bak`, `.old`; folda agressivo gerando variações dos nomes já descobertos.
-- **discovery/api_discovery.py** — Swagger/OpenAPI, introspection GraphQL, `Accept: application/json`, métodos variados; extrapolação de nome (`getUserById` → `getOrderById`).
-- **discovery/robots.py, sitemap.py.**
-- **Path mutation / recursive context:** achou `/admin/login.aspx` → testa `default.aspx`, `web.config`, `bin/`, `login_old.aspx` e recursa em `/admin/`.
-- **WAF-adapt (v2):** 429/403-com-assinatura/captcha → desacelera, jitter, rotaciona UA/header.
+### 3.7 Discovery fold modules (`modules/`)
+Triggered by evidence/calibration. Each **emits high-confidence seeds**; it doesn't compete with the brute.
+- **tech overlay** — per-stack extension/path packs (IIS, PHP, Apache, nginx, Tomcat, Express, Laravel, WordPress, Django).
+- **discovery/shortname.py** — IIS 8.3 shortscan; see §4.
+- **discovery/js_parser.py** — harvests endpoints/routes from HTML/JS; follows webpack chunks and source maps, skips vendor libraries, picks up the RequireJS `data-main` bundle; harvests query/template **parameter names** as pentest intel.
+- **discovery/backups.py** — `.git/`, `.svn/`, `.DS_Store`, `.swp`, `~`, `.bak`, `.old`; folds aggressively, generating variations of already-discovered names.
+- **discovery/robots.py** — robots.txt + sitemap.xml.
+- **modules/waf.py** — WAF/block-page detection (see §3.2).
+- **Vocabulary folding:** the target's own names + extensions (from JS/robots/sitemap + the host/subdomain/path) become scan vocabulary.
+- **Parent-directory recursion:** a deep hit (`/app/x/views/y.html`) reveals `/app/x/` and `/app/x/views/`, which the wordlist+vocab then explore.
+- **WAF-adapt:** 429 / signed-403 / captcha → slow down, jitter (the backoff is already in the engine).
 
-### 3.8 Memory / aprendizado (`brain/memory.py` + `memory.sqlite`)
+### 3.8 Memory / learning (`brain/memory.py` + `memory.sqlite`)
 
-> *O diferencial não é treinar um modelo — é **memória + recuperação + estatística**.* Por isso a separação honesta abaixo: algoritmos baratos e interpretáveis entram cedo; modelo treinado só quando já houver dado rotulado pra justificá-lo.
+> *The differentiator isn't training a model — it's **memory + retrieval + statistics**.* Hence the honest split: cheap, interpretable algorithms enter early; a trained model only once there's labeled data to justify it.
 
-**Algoritmos que entram (cedo, interpretáveis):**
-- **simhash/cluster** pra soft-404 (já no v1, alimenta o classifier).
-- **constraint-filter** pro shortname Regime 1 (já no v1; ver §4).
-- **k-NN sobre o fingerprint** (v2) — corpus `(fingerprint do alvo → paths que existiam)`; "os N alvos mais parecidos tinham esses paths, prioriza". É RAG pra fuzzing, **o "melhora a cada run"**, e é algorítmico, não treinado.
-- **association mining (FP-growth, `mlxtend`)** (v2) — "quando existe `/backup/`, existe `.git/` com prob X".
-- **n-gram/Markov** pra reconstruir nome truncado do shortscan Regime 2 (v2/v3).
+**Algorithms (early, interpretable):**
+- **simhash/cluster** for soft-404 (feeds the classifier).
+- **constraint-filter** for shortscan Regime 1 (see §4).
+- **k-NN over the fingerprint vector** — corpus `(target fingerprint → paths that existed)`; "the N most similar targets had these paths, prioritize them". It's RAG for fuzzing, **the "gets better each run"**, and it's algorithmic, not trained.
+- **association mining** — "when `/backup/` exists, `/.git/` exists with confidence X", mined from the corpus.
+- **n-gram / Markov** to reconstruct a truncated shortscan name (Regime 2): `apiint` → `apiintegracao`.
 
-**Modelo treinado (adiado até ter dado):**
-- **FP-classifier (logistic/GBM)** sobre as features do §3.6 — só depois que v1/v2 já rotularam hits/soft-404.
-- **contextual bandit (Thompson sampling)** — **só importa sob budget apertado** (WAF/rate-limit); sem isso testa-se tudo e ranking é irrelevante. Otimiza **hits por request**.
-- **LLM / rede neural no loop quente: não** — latência, custo, paths alucinados.
+**Trained model (deferred until there's data):**
+- **FP-classifier (logistic/GBM)** over the §3.6 features — only after early runs label hits/soft-404.
+- **contextual bandit (Thompson sampling)** — **only matters under tight budget** (WAF/rate-limit); without that you test everything and ranking is irrelevant. Optimizes **hits per request**.
+- **LLM / neural net in the hot loop: no** — latency, cost, hallucinated paths.
 
-**Host personality / replay:** perfil local reutilizável; roda de novo com conhecimento acumulado.
+### 3.9 Knowledge Base: ingestion + overlay (future)
+The KB will have **two layers**:
+- **Ingested layer (upstream):** adapters convert `wappalyzer technologies/*.json` (fork `tunetheweb`), nuclei tech-templates and the 0xdf-404 catalog → rules + favicon-hash tables. Updatable via `origami update`. No manual signature maintenance.
+- **Overlay layer (ours):** `brain/overlay.yaml` — curated rules + what cross-target learning discovers. It's the versioned reference and **wins over the ingested layer on conflict**.
+- **Licensing:** record each source's license (Wappalyzer fork, SecLists MIT, nuclei) and respect the terms.
 
-### 3.9 Knowledge Base: ingestão + overlay (`brain/ingest/`, `brain/rules.yaml`, `brain/overlay.yaml`)
-O KB tem **duas camadas**:
-- **Camada ingerida (upstream):** adapters em `brain/ingest/` convertem `wappalyzer technologies/*.json` (fork `tunetheweb`), nuclei tech-templates e o catálogo 0xdf-404 → `brain/rules.yaml` + tabelas de favicon hash. Atualizável via `origami update` (= `git pull` no upstream). Sem manutenção manual de assinatura.
-- **Camada overlay (nossa):** `brain/overlay.yaml` — regras curadas + o que o aprendizado cross-target descobre (expansões de shortname confirmadas, associações `/backup/`↔`.git/`, etc.). É a **referência própria/versionada** e **precede a camada ingerida em conflito**.
-- **Licenciamento:** anotar a licença de cada fonte (Wappalyzer fork, SecLists MIT, nuclei) e respeitar os termos na ingestão.
+### 3.10 Operational safety — rate-limit / WAF (`core/httpclient.py`)
+First-class: configurable concurrency cap, jitter, and **adaptive backoff** on 429 / signed-403 / captcha / connection reset; light UA/header rotation. The bandit that **optimizes** budget comes later (§3.8). Goal: don't get blocked and keep the scan within what the target can take.
 
-### 3.10 Segurança operacional — rate-limit / WAF (`core/engine.py`)
-Cidadão de 1ª classe **já no MVP**: cap de concorrência configurável, jitter e **backoff adaptativo** ao detectar 429 / 403-com-assinatura / captcha / connection reset; rotação leve de UA/header. No MVP fica só o backoff + cap; o bandit que **otimiza** budget vem depois (§3.8). Objetivo: não tomar block e manter o scan dentro do que o alvo aguenta.
+### 3.11 Scope and recursion (`core/scanner.py`)
+Recursion-depth cap, same-host/scheme restriction, path-exclusion, and a per-run request ceiling. Two distinct scopes (`core/scope.py`): **parse scope** (same registrable domain — reads the org's own CDN JS) vs **scan scope** (the exact target host — `--scope site` to also scan the CDN). Canonical root redirects (http→https, www) are auto-followed; harvested paths join from the host root so a base path like `/lms/` never doubles.
 
-### 3.11 Escopo e recursão (`core/scanner.py`)
-Cap de profundidade de recursão, restrição a mesmo host/scheme, lista de exclusão de paths e teto de requests por run. Evita explosão combinatória e mantém o scan dentro do escopo autorizado.
+## 4. Shortscan module (8.3 / tilde) — the best IIS fold
 
-## 4. Módulo Shortscan (8.3 / tilde) — o melhor fold do IIS
+The tilde **collapses the search space from impossible to tractable**: it leaks a prefix of up to 6 chars + a 3-char truncated extension, plus `~N` on collision.
 
-O tilde **colapsa o espaço de busca de impossível pra tratável**: entrega prefixo de até 6 chars + extensão truncada em 3, mais `~N` em colisão.
+**Calibration gate:** only enabled if IIS is confirmed **and** the tilde leaks. Origami gates on shortscan's own vulnerability check (the tool emits one status line per recursed directory; the target is vulnerable if **any** is).
 
-**Gate de calibração:** só liga se IIS confirmado **E** o tilde vazar (probe `~1*` lendo delta 404 vs 400). `fsutil 8dot3name` desabilitado ou patch de mitigação → não gasta request.
+**Two regimes:**
+- **Regime 1 — in the wordlist (deterministic, huge gain, no ML):** the short name becomes a *constraint filter*. `ADMINI~1.ASP` → only test entries matching `^admini` of the `asp` family. 100k entries → ~20 candidates. Plus the raw 8.3 name (`ADMINI~1`) and the prefix as a file (with tech extensions) and a directory.
+- **Regime 2 — not in any wordlist (light intelligence):** prefix > 6 chars and uncommon → an **n-gram/Markov generator** conditioned on the prefix + a corpus (the target's own vocabulary + cross-target memory). `apiint` → `apiintegracao`, `apimensagem`, etc.
 
-**Dois regimes:**
-- **Regime 1 — está na wordlist (determinístico, ganho gigante, zero ML):** o short name vira *filtro de constraint*. `ADMINI~1.ASP` → testa só entradas `^admini` da família `asp`. 100k entradas → ~20 candidatos. Brute cego vira brute confirmado.
-- **Regime 2 — não está em wordlist (entra inteligência leve):** nome > 6 chars não-comum → **gerador n-gram/Markov** condicionado no prefixo + contexto (tech, extensão, pasta, idioma do alvo). Ex.: idioma pt-BR aumenta peso de `cliente.aspx` e reduz `customer.aspx`.
+**Bidirectional loop (the origami folding):** confirming `ADMINI~1.ASP → administration.aspx` is labeled data `(truncated → real full name)`. Accumulated across targets, the Regime-2 generator improves each scan.
 
-**Loop bidirecional (o origami dobrando):** confirmar `ADMINI~1.ASP → administration.aspx` é um dado rotulado `(truncado → nome completo real)`. Acumulado entre alvos, aprende a distribuição de expansão e melhora o gerador do Regime 2 a cada scan.
+**Truncated → extension-family table** (fixed lookup): `ASP → {.asp,.aspx}` · `ASA → {.asax,.asa}` · `ASM → {.asmx}` · `ASH → {.ashx}` · `ASC → {.ascx}` · `CON → {.config}` · `CS → {.cs}`.
 
-**Tabela truncado → família de extensão** (lookup fixo na KB):
-`ASP → {.asp,.aspx}` · `ASA → {.asax,.asa}` · `ASM → {.asmx}` · `ASH → {.ashx}` · `ASC → {.ascx}` · `CON → {.config}` · `CS → {.cs}`
+**Integration:** drives `~/go/bin/shortscan` with `--output ndjson`, parses the result, and turns each leaked name into prioritized seeds. Flags `--shortscan` (force) / `--no-shortscan` (disable).
 
-**Cuidados:** `~N` (N>1) ⇒ múltiplos arquivos com mesmo prefixo+ext, gerar várias expansões; short name de diretório (`UPLOAD~1`) abre recursão; o 8.3 raramente é requestável direto em IIS moderno — o valor está na reversão.
+## 5. Tech stack
 
-**Integração:** invoca `~/go/bin/shortscan` (binário Go já instalado), parseia a saída, transforma cada hit em `Evidence{source:"shortscan", confidence:0.95}` consumida com prioridade máxima. Flags `--shortscan` (força) / `--no-shortscan` (desliga).
-
-## 5. Stack tecnológico
-
-| Camada | Tecnologia |
+| Layer | Technology |
 |---|---|
-| Linguagem | Python 3.11+ |
-| Engine HTTP | `asyncio` + `httpx` (worker pool com concorrência limitada) |
-| Parsing HTML/JS | `selectolax` (rápido) ou `beautifulsoup4` (já em uso no protótipo) |
+| Language | Python 3.11+ |
+| HTTP engine | `asyncio` + `httpx` (bounded-concurrency worker pool) |
 | Knowledge base | `PyYAML` |
-| Similaridade de resposta | simhash/LSH (`simhash` ou impl. própria) |
+| Response similarity | own simhash/LSH |
 | Favicon hash | `mmh3` |
-| Persistência | `sqlite3` (stdlib) |
-| Cross-target (v2) | `scikit-learn` (k-NN) ou `faiss`/`annoy`; `mlxtend` (FP-growth) |
-| Bandit (v3) | Thompson sampling próprio (~30 linhas, sem lib) |
-| Saída | JSON + HTML; CLI com `rich` |
-| Catálogos (ingestão) | dados do `tunetheweb/wappalyzer`, nuclei tech-templates, 0xdf-404, FingerprintHub; wordlists SecLists/Assetnote |
-| Teste/benchmark | servidor fake local + harness de métrica `hits/request` e `FP-rate` vs ffuf `-ac` |
-| Externo | `shortscan` (Go, `~/go/bin/shortscan`) |
+| Persistence | `sqlite3` (stdlib) |
+| Output | JSON + HTML; CLI with `rich` |
+| External | `shortscan` (Go, `~/go/bin/shortscan`) |
 
-**Por que não Go/Rust agora:** o diferencial do Origami é o *cérebro* (k-NN, association, bandit, n-gram), trivial em Python; throughput bruto não é o gargalo no MVP. A fronteira limpa permite portar só o engine depois.
+**Why not Go/Rust yet:** Origami's edge is the *brain* (k-NN, association, n-gram, bandit), trivial in Python; raw throughput isn't the bottleneck. The clean boundary lets the engine be ported later.
 
-## 6. Estrutura de diretórios
+## 6. Directory structure
 
 ```
 origami/
-  cli.py                      # entrypoint: origami <url>
+  cli.py                      # entrypoint: origami <url> [<url> ...]
+  banner.py  control.py
   core/
-    scanner.py                # orquestra o pipeline
-    engine.py                 # worker pool asyncio+httpx
-    baseline.py               # calibração por contexto
-    fingerprint.py            # fingerprint aditivo por prefixo
-    evidence.py               # Evidence + TargetProfile + EvidenceBus
-    scheduler.py              # priority queue
-    response_classifier.py    # hit vs soft-404
-    queue.py
+    scanner.py                # orchestrates the pipeline
+    httpclient.py             # async worker pool + backoff
+    baseline.py               # per-context calibration
+    fingerprint.py            # additive per-prefix fingerprint (+ favicon, WAF)
+    evidence.py               # Evidence + ContextBaseline + TargetProfile
+    scheduler.py              # priority queue + vocabulary folding
+    response_classifier.py    # hit vs soft-404 + filters + tags
+    normalize.py  scope.py
   modules/
-    tech/        iis.py apache.py nginx.py tomcat.py laravel.py wordpress.py
-    discovery/   robots.py sitemap.py js_parser.py backups.py api_discovery.py shortname.py
-  wordlists/     base.txt iis.txt aspnet.txt php.txt java.txt api.txt   # + SecLists/Assetnote
+    waf.py
+    discovery/   robots.py  js_parser.py  backups.py  shortname.py
   brain/
-    rules.yaml                # KB — camada ingerida (upstream)
-    overlay.yaml              # KB — camada própria/curada + write-back do aprendizado
-    ingest/                   # adapters: wappalyzer/, nuclei/, zerodf404/, favicon/
-    memory.py                 # corpus, k-NN, association, n-gram (v2+)
-    memory.sqlite
-    model.py
-  output/        json_report.py html_report.py
-  tests/
-    fakeserver/               # IIS soft-404, wildcard, 404 custom, rate-limit
-    benchmark/                # cenários + métrica hits/request vs ffuf
-  banner.py
+    overlay.yaml              # curated KB
+    memory.py                 # SQLite corpus, k-NN, association
+    ngram.py                  # shortscan Regime-2 completer
+    kb.py
+  wordlists/     base.txt
+  output/        json_report.py  html_report.py  artifacts.py  ui.py
+tests/
+  fakeserver/    server.py    # IIS soft-404, wildcard, custom 404, rate-limit
+  benchmark/     bench_folds.py
+  test_core.py
 ```
 
-**Redesenho do zero — o protótipo NÃO é reaproveitado.** O código de Fev/2024 (`origami.py`, `teste*.py`, `modules/*`) é `requests` síncrono, sem baseline, sem evidence bus, sem fingerprint real — reescrever é mais limpo que adaptar. Ele foi movido pra `legacy/` apenas como referência histórica e será apagado quando o MVP estiver de pé. Nenhuma linha migra; no máximo *ideias* sobrevivem em componentes novos e completamente reescritos (ex.: a extração de nomes de links vira `discovery/js_parser.py` async).
+## 7. Status & roadmap
 
-## 7. Roadmap
+**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 32 unit tests):
+- per-context calibration (simhash soft-404, wildcard, case-sensitivity, redirect-kind);
+- additive fingerprint + folds (headers/cookies/error-page + **favicon mmh3**, **WAF detection**);
+- async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
+- scoped recursion + parent-directory recursion from deep hits;
+- **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**);
+- **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **parameter** intel; **backups/VCS**; **robots/sitemap**;
+- **vocabulary folding** (names+extensions from references + host/subdomain/path);
+- **SQLite memory**: **k-NN over fingerprint vectors** + **association mining** + cross-target priming + `--history`;
+- scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins);
+- **multi-target** scanning (`-l/--list`, multiple URLs), each scanned clean;
+- output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).
 
-**MVP (núcleo adaptativo enxuto)** — escopo confirmado:
-1. CLI `origami <url>`.
-2. Baseline por contexto (soft-404 multidimensional + wildcard + case-sensitivity).
-3. Fingerprint inicial (headers, cookies, error pages, favicon mmh3, robots/sitemap).
-4. Evidence bus (lista + reducer) + TargetProfile.
-5. **Overlay curado** (`brain/overlay.yaml`, ~10-15 techs à mão) + módulos **IIS** e **PHP**. *(Ingestão multi-fonte fica pro v2.)*
-6. Scheduler com prioridade + expansão de extensão em tempo real.
-7. Engine async + **backoff/rate-limit** + Response Classifier (threshold simhash) pra filtrar FP.
-8. Escopo/recursão controlados + saída JSON.
-9. **Harness de teste local** (servidor fake) pra desenvolver baseline/classifier sem bater em alvo real.
-10. **Fold shortscan (IIS 8.3)** — gated pela vuln-check do próprio shortscan, expansão Regime 1 (constraint-filter) + seeds de autocomplete. ✅ implementado.
+**Next:**
+- multi-source KB ingestion (Wappalyzer/nuclei/0xdf-404/favicon DBs → KB);
+- mid-scan resume;
+- contextual bandit for request economy under WAFs (hits/budget);
+- a deferred trained FP-classifier once the corpus is large enough.
 
-> **Status (atual):** MVP fechado e além. Prontos e verificados (fake server 404/soft-404/wildcard + alvo real):
-> calibração por contexto; fingerprint+fold (headers/cookies/error-page + **favicon mmh3**); engine async+backoff; classificador soft-404 com **filtros `-mc/-fc/-ms/-fs`** (404/400 fora por padrão); recursão com escopo; **shortscan (IIS 8.3)**; **js_parser**; **backups** (vcs + name-folding); **robots/sitemap**; **memória SQLite + priming cross-target + `--history`**; saída JSON.
-> UX: dashboard `rich` ao vivo com **findings em stream permanente** (nunca perde), status bar fixa (fase, req/s, hits, duração), **`==> directory`** estilo dirb, cor por origem + **tags semânticas** (disclosure/config/auth/admin/api), start/duração, wordlist em uso, **pular dir `n` / sair `q`**, fallback sem rich, `-v/-vv`, `-F`.
-> Robustez (validado em alvo real com WAF): **auto-upgrade de redirect canônico** (http→https); **detecção de WAF** (F5/Cloudflare/Imperva/Akamai/… por corpo+headers+cookies) que não vira finding e aparece no fingerprint; **verificação de hit-surpresa com irmão aleatório** + assinaturas soft-404 aprendidas (multi-modal); normalização de UUID/nonce; **filtros = só exibição** (recursão preservada). **JS→JS** (segue webpack chunks + source maps, pula libs vendor, pega `data-main`). **Vocabulary folding** — nomes+extensões das referências + host/subdomínio/path viram wordlist+extensões. **Shortscan completo**: detecção (gate OR-acumulado), expand (constraint-filter + 8.3 cru + prefixo como dir/arquivo) e **completador n-gram (Regime 2)** pra prefixos truncados. **Parâmetros** colhidos como intel. **Recursão em diretórios-pai** de hits profundos. Saída: **HTML report** + `--out` (params.txt/urls.txt/findings.json). `--scope host|site`. Pacote instalável (`pip install -e .` → `origami`), 30 testes.
+## 8. Testing & evaluation
 
-**v2 — ingestão + aprendizado mais forte:** ingestão multi-fonte (Wappalyzer/nuclei/0xdf-404/favicon DBs → KB); k-NN sobre fingerprint-vector (hoje o priming é por tech compartilhada) + association mining; `api_discovery` (Swagger/GraphQL); gerador n-gram pro Regime 2 do shortscan; resume mid-scan; saída HTML; benchmark `hits/request` vs ffuf.
-
-**v3 — modelo treinado (quando houver dado):** FP-classifier treinado + gerador n-gram pro Regime 2 do shortscan + contextual bandit (hits/budget, só sob WAF/rate-limit). Treino usa o corpus do v1/v2 + servers de teste online.
-
-## 8. Teste e avaliação
-
-- **Harness local (`tests/fakeserver/`):** servidor que emula IIS soft-404, wildcard routing, 404 custom, case-insensitive paths e rate-limit. Permite desenvolver baseline/classifier de forma determinística, sem bater em alvo real.
-- **Benchmark (`tests/benchmark/`):** conjunto de cenários medindo **hits/request** e **FP-rate** do Origami vs **ffuf `-ac`**. É a prova de que adaptativo > cego — sem isso, "é melhor" é só alegação.
-- **Servers online do usuário:** validação realista e fonte de corpus rotulado pro treino posterior (a fase em que o modelo treinado do §3.8 passa a valer a pena).
+- **Local harness (`tests/fakeserver/`):** a server emulating IIS soft-404, wildcard routing, custom 404, case-insensitive paths and rate-limit. Lets baseline/classifier be developed deterministically, without hitting a real target.
+- **Benchmark (`tests/benchmark/`):** scenarios measuring **hits/request** and **FP-rate** vs ffuf `-ac`. The proof that adaptive > blind — without it, "it's better" is just a claim.

@@ -135,6 +135,34 @@ class Memory:
                 scores[path] += s
         return sorted(scores, key=lambda p: -scores[p])[:limit]
 
+    def associate(self, found_paths, min_support: int = 2, min_conf: float = 0.3,
+                  limit: int = 60) -> list[str]:
+        """Association mining over the corpus: given paths already found on this
+        host, return paths that co-occur with them on other hosts above a
+        confidence threshold. conf(B|A) = hosts-with-A-and-B / hosts-with-A.
+        This is the "found /backup/ → also test /.git/" rule, learned from data.
+        """
+        found = set(found_paths)
+        if not found:
+            return []
+        best: dict[str, float] = {}
+        for a in found:
+            hosts_a = [r[0] for r in self.db.execute(
+                "SELECT host FROM corpus WHERE path = ?", (a,))]
+            if len(hosts_a) < min_support:
+                continue
+            qm = ",".join("?" * len(hosts_a))
+            rows = self.db.execute(
+                f"SELECT path, COUNT(DISTINCT host) FROM corpus "
+                f"WHERE host IN ({qm}) GROUP BY path", hosts_a).fetchall()
+            for b, cnt in rows:
+                if b in found:
+                    continue
+                conf = cnt / len(hosts_a)
+                if conf >= min_conf and conf > best.get(b, 0):
+                    best[b] = conf
+        return sorted(best, key=lambda b: -best[b])[:limit]
+
     def prior_findings(self, host: str) -> list[tuple[str, int]]:
         rows = self.db.execute(
             "SELECT path, status FROM corpus WHERE host = ? ORDER BY path", (host,)
