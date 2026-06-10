@@ -224,6 +224,17 @@ class RichUI(NullObserver):
         dt = time.perf_counter() - self.start
         return self.requests / dt if dt > 0 else 0.0
 
+    _PHASES = ["calibrate", "fingerprint", "js-harvest", "shortscan", "scan",
+               "backups", "associations"]
+
+    def _phase_text(self) -> "Text":
+        t = Text()
+        if self.phase_name in self._PHASES:
+            t.append(f"phase {self._PHASES.index(self.phase_name) + 1}/{len(self._PHASES)} · ",
+                     style="dim")
+        t.append(self.phase_name, style="bold cyan")
+        return t
+
     def _header(self) -> Panel:
         badges = Text()
         for tech, score in list(self.techs.items())[:6]:
@@ -239,9 +250,8 @@ class RichUI(NullObserver):
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
         grid.add_column(justify="right")
-        grid.add_row(Text(self.target, style="bold"), fold_txt)
-        if badges.plain:
-            grid.add_row(badges, Text(""))
+        grid.add_row(Text(self.target, style="bold"), self._phase_text())
+        grid.add_row(badges, fold_txt)
         return Panel(grid, title="[bold]Origami[/]", border_style="green")
 
     def _elapsed(self) -> str:
@@ -250,8 +260,7 @@ class RichUI(NullObserver):
 
     def _statusbar(self) -> Text:
         t = Text()
-        t.append(f" {self.phase_name} ", style="bold white on blue")
-        t.append("  reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
+        t.append(" reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
         t.append(" · ", style="dim"); t.append(f"{self._rate():.0f}/s", style="bold")
         t.append(" · hits ", style="dim"); t.append(f"{self.hits}", style="bold green")
         t.append(" · ", style="dim"); t.append(self._elapsed(), style="bold")
