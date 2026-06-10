@@ -134,6 +134,7 @@ async def run(args: argparse.Namespace) -> int:
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                    verify_tls=not args.insecure)
                 async with Engine(cfg) as engine:
+                    engine.on_request = observer.on_request   # live heartbeat, every phase
                     with observer:
                         result = await scan(engine, target, opts, observer, memory, control)
 

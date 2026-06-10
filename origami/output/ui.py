@@ -56,6 +56,7 @@ class NullObserver:
     def phase(self, name: str) -> None: ...
     def start_prefix(self, prefix: str, total: int) -> None: ...
     def tick(self, hit: bool = False) -> None: ...
+    def on_request(self) -> None: ...
     def finding(self, f) -> None: ...
     def fingerprint(self, profile, exts, folds) -> None: ...
     def pushback(self, n: int) -> None: ...
@@ -157,6 +158,10 @@ class RichUI(NullObserver):
 
     def phase(self, name: str) -> None:
         self.phase_name = name
+        # setup/harvest phases have no candidate count → pulse the bar; scan/
+        # shortscan/backups override this via start_prefix with a real total.
+        self._ptotal = 0
+        self._progress.reset(self._task, total=None, description=f"status [bold cyan]{name}[/]")
         self._refresh()
 
     def start_prefix(self, prefix: str, total: int) -> None:
@@ -164,19 +169,22 @@ class RichUI(NullObserver):
         self._ptotal = max(total, 1)
         self._pcompleted = 0
         self._progress.reset(self._task, total=self._ptotal,
-                             description=f"[bold cyan]{prefix}[/]")
+                             description=f"status [bold cyan]{prefix}[/]")
         self._refresh()
 
-    def tick(self, hit: bool = False) -> None:
+    def on_request(self) -> None:
+        # fired by the engine on EVERY fetch (calibrate, fingerprint, js-harvest,
+        # scan…) so reqs/rate and the pulsing bar move during every phase.
         self.requests += 1
+        if self.requests % 5 == 0:
+            self._refresh()
+
+    def tick(self, hit: bool = False) -> None:
         if hit:
             self.hits += 1
-        # clamp so the bar never exceeds its total (extra probes like soft-404
-        # verification or unscheduled passes don't overflow it)
-        self._pcompleted = min(self._ptotal, self._pcompleted + 1)
-        self._progress.update(self._task, completed=self._pcompleted)
-        if self.requests % 7 == 0:
-            self._refresh()
+        if self._ptotal:                      # known total → advance (clamped)
+            self._pcompleted = min(self._ptotal, self._pcompleted + 1)
+            self._progress.update(self._task, completed=self._pcompleted)
 
     def finding(self, f) -> None:
         # Print a PERMANENT line that scrolls above the live region — findings
@@ -357,8 +365,11 @@ class PlainLiveObserver(NullObserver):
         self.prefix = prefix
         self._draw(force=True)
 
-    def tick(self, hit: bool = False) -> None:
+    def on_request(self) -> None:
         self.requests += 1
+        self._draw()
+
+    def tick(self, hit: bool = False) -> None:
         if hit:
             self.hits += 1
         self._draw()
