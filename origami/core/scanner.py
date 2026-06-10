@@ -279,6 +279,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     observer.phase("scan")
     queue: list[tuple[str, int]] = [(base_prefix, 0)]   # (prefix, depth)
     scanned_prefixes: set[str] = set()
+    queued: set[str] = {base_prefix}
     while queue:
         if control.quit:
             observer.log("scan: quit requested — stopping", 0, style="yellow")
@@ -298,14 +299,24 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         observer.log(f"scan {prefix} · {len(cands)} candidates"
                      + (f" · depth {depth}" if depth else ""), 1)
         observer.start_prefix(prefix, len(cands))
-        dirs = await _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control)
+        confirmed, ancestors = await _scan_prefix(
+            engine, profile, prefix, cands, result, opts, observer, control)
 
-        # Queue discovered dirs (incl. ancestors of deep hits) by their depth
-        # relative to the base — a depth cap, not a "+1 per level" rule, so a
-        # deep file like /lms/x/views/y.html recurses /lms/x/ and /lms/x/views/.
-        for d in dirs:
-            if d not in scanned_prefixes and _rel_depth(d, base_prefix) <= opts.max_depth:
-                queue.append((d, _rel_depth(d, base_prefix)))
+        # Confirmed directories (real 403/301 dirs) are recursed before the
+        # speculative ancestor dirs — high-value first, so a deep tree can't
+        # starve the budget before the obvious directories are explored. Depth
+        # is relative to the base, so a deep file recurses each of its parents.
+        def _enqueue(dirs, front):
+            for d in dirs:
+                if d in scanned_prefixes or d in queued:
+                    continue
+                if _rel_depth(d, base_prefix) <= opts.max_depth:
+                    queued.add(d)
+                    item = (d, _rel_depth(d, base_prefix))
+                    queue.insert(0, item) if front else queue.append(item)
+
+        _enqueue(ancestors, front=False)
+        _enqueue(confirmed, front=True)
 
     # 5. dedupe + collapse same-content collisions BEFORE expanding ---------
     # (do this first so the backup fold doesn't explode over hundreds of
@@ -335,20 +346,25 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
 
 async def _is_soft(engine, profile, prefix, probe) -> bool:
-    """Sanity-check a surprising hit with a random sibling.
+    """Sanity-check a surprising hit with a random sibling of the SAME SHAPE.
 
-    Multi-modal soft-404 hosts (302 most paths, generic 200 for others) defeat
-    a single baseline. So before trusting a hit, fire one random sibling of the
-    same shape; if it comes back the same (status + body shape), the response
-    is generic — learn the signature so the rest are filtered for free.
+    The sibling is built in the candidate's OWN directory and mimics its shape
+    — a leading dot for dotfiles, the same extension. So a blanket 403 (server
+    forbids anything under /.git/, or any dotfile) is recognized: /.git/HEAD's
+    403 is only a real finding if /.git/<random> does NOT also 403. Catches both
+    multi-modal soft-404 and generic-403 walls; the signature is then cached.
     """
     path = urlparse(probe.url).path
-    ext = _ext_of(path)
+    own_dir = path.rsplit("/", 1)[0] + "/"
+    name = path.rsplit("/", 1)[-1]
+    lead = "." if name.startswith(".") else ""
+    ext = _ext_of(name[1:] if lead else name)
     rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
-    sib = await engine.fetch(urljoin(profile.base_url, prefix.lstrip("/") + rnd + ext))
+    sib_path = own_dir.lstrip("/") + lead + rnd + ext
+    sib = await engine.fetch(urljoin(_host_root(profile.base_url), sib_path))
     if (sib.ok and sib.status == probe.status
             and hamming(sib.body_simhash, probe.body_simhash) <= bl.SIMHASH_MISS_DISTANCE):
-        cb = resolve_baseline(profile, probe.url, prefix)
+        cb = resolve_baseline(profile, probe.url, own_dir)
         if cb is not None:
             sig = (probe.status, probe.body_simhash)
             if sig not in cb.soft_signatures:
@@ -412,9 +428,14 @@ def _report(observer, result, opts, finding, url) -> None:
                      f"conf {finding.confidence:.2f} · {finding.origin}", 1, style="green")
 
 
-async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control) -> list[str]:
-    """Fire candidates under `prefix`, classify, return discovered subdirs."""
-    discovered_dirs: list[str] = []
+async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control):
+    """Fire candidates under `prefix`. Returns (confirmed_dirs, ancestor_dirs):
+    confirmed dirs (a 403/301/trailing-slash response) are recursed first;
+    ancestor dirs (merely inferred from a deep file path) are speculative and
+    recursed only if budget remains — keeps a deep tree from starving the
+    high-value directories."""
+    confirmed_dirs: list[str] = []
+    ancestor_dirs: list[str] = []
     first_hit_path: str | None = None
 
     for cand in cands:
@@ -441,41 +462,49 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         else:
             url = urljoin(root, prefix.lstrip("/") + cand.path)
         probe = await engine.fetch(url)
+        path = urlparse(url).path
 
-        finding = await _confirm(engine, profile, prefix, probe, cand.origin)
+        # classify() = is this a REAL response (outside the calibrated miss
+        # profile)? — no soft-verification yet. A 404 miss like /internal/ stops
+        # here, so it never gets mistaken for a directory.
+        finding = classify(profile, probe, cand.origin, prefix)
         if finding is None:
             observer.tick(hit=False)
             observer.request(url, probe.status, False)
             continue
 
-        # recursion/dir detection from the real hit — filter-INDEPENDENT, so a
-        # filtered-out 403 dir is still followed into.
-        path = urlparse(url).path
-        if first_hit_path is None and probe.status == 200:
-            first_hit_path = path
-        last = path.rstrip("/").rsplit("/", 1)[-1]
-        has_ext = "." in last
+        # Directory detection from a REAL response (trailing-slash candidate or a
+        # self-redirect). Done before the soft-verify so a blanket-403 directory
+        # is still recursed (to find real 200s inside) even though /dir/ itself
+        # isn't reported.
         is_dir = (cand.path.endswith("/")
-                  or (probe.status == 403 and not has_ext)
                   or (probe.status in (301, 302)
                       and probe.location.rstrip("/").endswith(path.rstrip("/"))))
         if is_dir:
-            discovered_dirs.append(path if path.endswith("/") else path + "/")
-            observer.set_skippable(True)   # a dir now exists → [n] skip becomes useful
+            confirmed_dirs.append(path if path.endswith("/") else path + "/")
+            observer.set_skippable(True)
 
-        # Any confirmed path implies its parent directories exist — recurse them
-        # (a deep JS-harvested file like /lms/x/views/y.html reveals /lms/x/ and
-        # /lms/x/views/, which the wordlist+vocab then explore).
+        # soft-verify a surprising hit with a same-shape random sibling — a
+        # blanket 403/200 wall is recursed (above) but NOT reported.
+        if await _is_soft(engine, profile, prefix, probe):
+            observer.tick(hit=False)
+            observer.request(url, probe.status, False)
+            continue
+
+        if first_hit_path is None and probe.status == 200:
+            first_hit_path = path
+        # A confirmed (real, non-soft) path implies its parent dirs exist —
+        # recurse them (a deep JS file /lms/x/views/y.html reveals /lms/x/ etc.).
         segs = [s for s in path.strip("/").split("/") if s]
         for i in range(1, len(segs)):
-            discovered_dirs.append("/" + "/".join(segs[:i]) + "/")
+            ancestor_dirs.append("/" + "/".join(segs[:i]) + "/")
             observer.set_skippable(True)
 
         _report(observer, result, opts, finding, url)
 
     if first_hit_path:
         await bl.probe_case_sensitivity(engine, profile, first_hit_path)
-    return discovered_dirs
+    return confirmed_dirs, ancestor_dirs
 
 
 def _wordlist_path(opts: ScanOptions):

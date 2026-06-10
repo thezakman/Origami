@@ -164,7 +164,7 @@ class RichUI(NullObserver):
         self._ptotal = max(total, 1)
         self._pcompleted = 0
         self._progress.reset(self._task, total=self._ptotal,
-                             description=f"scan [bold]{prefix}[/]")
+                             description=f"[bold cyan]{prefix}[/]")
         self._refresh()
 
     def tick(self, hit: bool = False) -> None:
@@ -239,8 +239,9 @@ class RichUI(NullObserver):
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
         grid.add_column(justify="right")
-        grid.add_row(Text(self.target, style="bold"), Text(f"phase: {self.phase_name}", style="cyan"))
-        grid.add_row(badges, fold_txt)
+        grid.add_row(Text(self.target, style="bold"), fold_txt)
+        if badges.plain:
+            grid.add_row(badges, Text(""))
         return Panel(grid, title="[bold]Origami[/]", border_style="green")
 
     def _elapsed(self) -> str:
