@@ -118,7 +118,7 @@ async def run(args: argparse.Namespace) -> int:
         wordlist_path=args.wordlist, shortscan=shortscan,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
-        filters=_build_filters(args),
+        exclude=args.exclude or [], filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
@@ -136,6 +136,8 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  user-agent: {args.user_agent}")
     if args.proxy:
         print(f"  proxy    : {args.proxy} (TLS verification off)")
+    if args.exclude:
+        print(f"  exclude  : {', '.join(args.exclude)}")
     if sys.stdin.isatty() and not args.no_ui:
         print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
@@ -270,6 +272,10 @@ def main() -> None:
                     help="disable OpenAPI/Swagger spec discovery + endpoint folding")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
+    ap.add_argument("-x", "--exclude", action="append", metavar="PATTERN",
+                    help="never request or recurse a path containing PATTERN "
+                         "(case-insensitive, repeatable) — safety rail for "
+                         "destructive/out-of-scope endpoints (/logout, /delete)")
     ap.add_argument("--economy", choices=["auto", "on", "off"], default="auto",
                     help="rank candidates by learned hit-rate so the request budget "
                          "buys the most likely names first (auto: on when a WAF is "
