@@ -535,6 +535,24 @@ class TestResume(unittest.TestCase):
             self.assertIsNone(R.load(path))
 
 
+class TestExclude(unittest.TestCase):
+    def _opts(self, patterns):
+        from origami.core.scanner import ScanOptions
+        return ScanOptions(exclude=patterns)
+
+    def test_excluded_matches(self):
+        from origami.core.scanner import _excluded
+        o = self._opts(["logout", "/delete"])
+        self.assertTrue(_excluded("/app/logout", o))
+        self.assertTrue(_excluded("/admin/LogOut.aspx", o))   # case-insensitive
+        self.assertTrue(_excluded("/api/delete/3", o))
+        self.assertFalse(_excluded("/api/users", o))
+
+    def test_empty_exclude_never_matches(self):
+        from origami.core.scanner import _excluded
+        self.assertFalse(_excluded("/logout", self._opts([])))
+
+
 class TestApiDocs(unittest.TestCase):
     def test_swagger2_basepath_and_templating(self):
         from origami.modules.discovery import apidocs

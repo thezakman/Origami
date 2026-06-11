@@ -61,6 +61,16 @@ def _host_root(url: str) -> str:
     return f"{p.scheme}://{p.netloc}/"
 
 
+def _excluded(path: str, opts) -> bool:
+    """True if `path` matches a user `--exclude` pattern (case-insensitive
+    substring) — never fired, never recursed. Safety rail for destructive or
+    out-of-scope endpoints (/logout, /delete, /admin/shutdown)."""
+    if not opts.exclude:
+        return False
+    low = path.lower()
+    return any(pat.lower() in low for pat in opts.exclude)
+
+
 def _is_self_redirect_dir(location: str, path: str) -> bool:
     """True when a 301/302 Location points at this same path (the server adding
     a trailing slash) — the canonical "this is a directory" signal. Compares the
@@ -109,6 +119,7 @@ class ScanOptions:
     max_folds: int = 40           # cap on learned vocabulary names folded into the scan
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
     economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
+    exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
     filters: Filters = field(default_factory=Filters)
 
 
@@ -428,7 +439,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         # is relative to the base, so a deep file recurses each of its parents.
         def _enqueue(dirs, front):
             for d in dirs:
-                if d in scanned or d in queued:
+                if d in scanned or d in queued or _excluded(d, opts):
                     continue
                 if _rel_depth(d, base_prefix) <= opts.max_depth:
                     queued.add(d)
@@ -616,6 +627,9 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             url = urljoin(root, cand.path.lstrip("/"))
         else:
             url = urljoin(root, prefix.lstrip("/") + cand.path)
+        if _excluded(urlparse(url).path, opts):     # safety rail — never fire it
+            observer.tick(hit=False)
+            continue
         probe = await engine.fetch(url)
         path = urlparse(url).path
 
@@ -693,6 +707,8 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
             if engine.total_requests >= opts.max_requests:
                 break
             url = urljoin(_host_root(profile.base_url), var)
+            if _excluded(urlparse(url).path, opts):
+                continue
             probe = await engine.fetch(url)
             finding = await _confirm(engine, profile, prefix, probe, "backup")
             if finding is None:
@@ -716,6 +732,8 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
         if engine.total_requests >= opts.max_requests:
             break
         p = "/" + path.lstrip("/")
+        if _excluded(p, opts):
+            continue
         prefix = p.rsplit("/", 1)[0] + "/"
         await bl.calibrate(engine, profile, [(prefix, _ext_of(p))])
         probe = await engine.fetch(urljoin(root, p.lstrip("/")))
@@ -799,6 +817,8 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     for url, prefix in urls:
         if engine.total_requests >= opts.max_requests:
             break
+        if _excluded(urlparse(url).path, opts):
+            continue
         probe = await engine.fetch(url)
         finding = await _confirm(engine, profile, prefix, probe, "shortscan")
         if finding is None:
