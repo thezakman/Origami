@@ -249,7 +249,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if opts.js and root.body:
         observer.phase("js-harvest")
         js_paths, js_params = await _guard(observer, "js-harvest",
-                                           js_parser.harvest(engine, base_url, root.body),
+                                           js_parser.harvest(engine, base_url, root.body,
+                                                             on_progress=observer.progress),
                                            (set(), set()))
         js_paths = _scope_paths(js_paths, profile.host, opts.scope)   # scope discipline
         js_paths = set(sorted(js_paths)[:MAX_HARVEST_SEEDS])          # cap the blast radius
@@ -274,7 +275,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if opts.apidocs:
         observer.phase("api-docs")
         spec_url, api_paths = await _guard(observer, "api-docs",
-                                           apidocs.harvest(engine, base_url), (None, set()))
+                                           apidocs.harvest(engine, base_url,
+                                                           on_progress=observer.progress),
+                                           (None, set()))
         api_paths = _scope_paths(api_paths, profile.host, opts.scope)
         if spec_url:
             root_seeds += [(p, "apidocs") for p in sorted(api_paths)]

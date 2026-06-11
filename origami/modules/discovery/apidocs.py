@@ -76,12 +76,14 @@ def extract_endpoints(spec: dict) -> set[str]:
     return {p for p in out if p and p != "/"}
 
 
-async def harvest(engine, base_url: str) -> tuple[str | None, set[str]]:
+async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, set[str]]:
     """Probe spec locations; on the first that parses, return (spec_url, paths).
 
     `paths` includes the spec's own path, so the disclosure is reported too.
     """
-    for cand in SPEC_PATHS:
+    for i, cand in enumerate(SPEC_PATHS, 1):
+        if on_progress is not None:
+            on_progress(i, len(SPEC_PATHS))
         url = urljoin(base_url, cand.lstrip("/"))
         probe = await engine.fetch(url, keep_body=True)
         if not (probe.ok and probe.status == 200 and probe.body):

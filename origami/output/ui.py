@@ -23,7 +23,7 @@ try:
     from rich.console import Console, Group
     from rich.live import Live
     from rich.panel import Panel
-    from rich.progress import BarColumn, Progress, TextColumn
+    from rich.progress import BarColumn, Progress, ProgressColumn, TextColumn
     from rich.table import Table
     from rich.text import Text
     HAS_RICH = True
@@ -61,6 +61,7 @@ class NullObserver:
 
     def phase(self, name: str) -> None: ...
     def start_prefix(self, prefix: str, total: int) -> None: ...
+    def progress(self, done: int, total: int) -> None: ...
     def tick(self, hit: bool = False) -> None: ...
     def on_request(self) -> None: ...
     def finding(self, f) -> None: ...
@@ -120,6 +121,29 @@ def _status_style(code: int) -> str:
     return "red"
 
 
+class _CountColumn(ProgressColumn):
+    """`done/total` for a determinate phase; blank when indeterminate (the
+    pulsing bar already says 'working') so it never reads a stuck '0/1'."""
+
+    def render(self, task) -> "Text":
+        if task.total is None:
+            return Text("", style="dim")
+        return Text(f"{int(task.completed)}/{int(task.total)}", style="dim")
+
+
+class _LiveDashboard:
+    """Wrapper whose __rich__ rebuilds the whole dashboard on every render, so
+    rich's auto-refresh (refresh_per_second) animates reqs/rate/elapsed/conc and
+    the progress bar continuously — otherwise they only move on an explicit
+    refresh and freeze during a slow request."""
+
+    def __init__(self, ui: "RichUI") -> None:
+        self._ui = ui
+
+    def __rich__(self):
+        return self._ui._render()
+
+
 class RichUI(NullObserver):
     streamed = True
 
@@ -141,15 +165,16 @@ class RichUI(NullObserver):
         self.skippable = False
         self._progress = Progress(
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=None),
-            TextColumn("{task.completed}/{task.total}"),
+            BarColumn(bar_width=None, pulse_style="cyan"),
+            _CountColumn(),
             console=console,
             expand=True,
         )
         self._task = self._progress.add_task("waiting", total=1)
         self._ptotal = 1
         self._pcompleted = 0
-        self._live = Live(self._render(), console=console, refresh_per_second=12,
+        # A dynamic renderable so auto-refresh redraws the live stats every tick.
+        self._live = Live(_LiveDashboard(self), console=console, refresh_per_second=10,
                           transient=False)
 
     # ---- lifecycle ----------------------------------------------------------
@@ -167,11 +192,17 @@ class RichUI(NullObserver):
 
     def phase(self, name: str) -> None:
         self.phase_name = name
-        # setup/harvest phases have no candidate count → pulse the bar; scan/
-        # shortscan/backups override this via start_prefix with a real total.
+        # Setup/harvest phases have no candidate count → an INDETERMINATE bar
+        # that pulses (animated by auto-refresh). reset(total=None) keeps the old
+        # total in rich, so set it on the task directly. A request-heavy fold
+        # (js-harvest, api-docs) then calls progress() to switch it to a real,
+        # filling bar; scan/shortscan/backups use start_prefix.
         self._ptotal = 0
-        self._progress.reset(self._task, total=None, description=f"status [bold cyan]{name}[/]")
-        self._refresh()
+        self._pcompleted = 0
+        task = self._progress.tasks[0]
+        task.completed = 0
+        task.total = None                          # → animated pulse
+        self._progress.update(self._task, description=f"status [bold cyan]{name}[/]")
 
     def start_prefix(self, prefix: str, total: int) -> None:
         self.prefix = prefix
@@ -182,11 +213,16 @@ class RichUI(NullObserver):
         self._refresh()
 
     def on_request(self) -> None:
-        # fired by the engine on EVERY fetch (calibrate, fingerprint, js-harvest,
-        # scan…) so reqs/rate and the pulsing bar move during every phase.
+        # fired by the engine on EVERY fetch; the dynamic renderable animates the
+        # stats on its own (auto-refresh), so we just count here.
         self.requests += 1
-        if self.requests % 5 == 0:
-            self._refresh()
+
+    def progress(self, done: int, total: int) -> None:
+        # a request-heavy setup fold (js-harvest, api-docs) reporting how far it
+        # is — fills the bar instead of leaving it pinned at 0/1.
+        self._ptotal = max(total, 1)
+        self._pcompleted = min(done, self._ptotal)
+        self._progress.update(self._task, completed=self._pcompleted, total=self._ptotal)
 
     def tick(self, hit: bool = False) -> None:
         if hit:

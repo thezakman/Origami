@@ -134,7 +134,7 @@ _FOLLOW_EXT = (".js", ".mjs", ".map")
 
 
 async def harvest(engine, base_url: str, root_body: bytes,
-                  max_scripts: int = 40) -> tuple[set[str], set[str]]:
+                  max_scripts: int = 40, on_progress=None) -> tuple[set[str], set[str]]:
     """Parse the root body and same-host scripts, following JS→JS references
     (webpack chunks, source maps) up to a fetch budget.
 
@@ -165,4 +165,6 @@ async def harvest(engine, base_url: str, root_body: bytes,
                     nxt = urljoin(base_url, np)
                     if nxt not in seen:
                         queue.append(nxt)
+        if on_progress is not None:        # fills the live bar as scripts are scraped
+            on_progress(fetched, min(max_scripts, fetched + len(queue)))
     return paths, params
