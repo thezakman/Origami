@@ -5,14 +5,14 @@
 Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it **calibrates before attacking**, fingerprints the stack (additively, per path-prefix), and then *folds* its strategy as evidence appears — by header, cookie, response, directory or file. Every finding becomes evidence that re-weights the modules and expands the wordlist in real time. With each run it also learns across targets.
 
 ```
-          /\                                 .
-         /  \        .                      /_\
-        / /\ \  _ __ _  __ _  __ _ _ __ ___  _
-       /_/  \_\| '__| |/ _` |/ _` | '_ ` _ \| |
-       \ \  / /| |  | | (_| | (_| | | | | | | |
-        \ \/ / |_|  |_|\__, |\__,_|_| |_| |_|_|
-         \  / adaptive |___/ content discovery
-          \/
+   /\                                 .
+  /  \        .                      /_\
+ / /\ \  _ __ _  __ _  __ _ _ __ ___  _
+/_/  \_\| '__| |/ _` |/ _` | '_ ` _ \| |
+\ \  / /| |  | | (_| | (_| | | | | | | |
+ \ \/ / |_|  |_|\__, |\__,_|_| |_| |_|_|
+  \  / adaptive |___/ content discovery
+   \/
 ```
 
 ## Why it's different
