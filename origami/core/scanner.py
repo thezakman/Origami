@@ -61,6 +61,15 @@ def _host_root(url: str) -> str:
     return f"{p.scheme}://{p.netloc}/"
 
 
+def _is_self_redirect_dir(location: str, path: str) -> bool:
+    """True when a 301/302 Location points at this same path (the server adding
+    a trailing slash) — the canonical "this is a directory" signal. Compares the
+    parsed path for EQUALITY (so /login → /gateway/login is not a self-redirect),
+    while still matching an absolute Location (http://host/x/) against its path.
+    """
+    return urlparse(location).path.rstrip("/") == path.rstrip("/")
+
+
 def _rel_depth(prefix: str, base_prefix: str) -> int:
     """How many directory levels `prefix` is below the scan base."""
     base = [s for s in base_prefix.strip("/").split("/") if s]
@@ -610,12 +619,15 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             continue
 
         # Directory detection from a REAL response (trailing-slash candidate or a
-        # self-redirect). Done before the soft-verify so a blanket-403 directory
-        # is still recursed (to find real 200s inside) even though /dir/ itself
-        # isn't reported.
+        # self-redirect to the same path + "/"). Done before the soft-verify so a
+        # blanket-403 directory is still recursed (to find real 200s inside) even
+        # though /dir/ itself isn't reported. Compare the redirect's PATH for
+        # equality (not a suffix) so /login → /gateway/login isn't mistaken for a
+        # directory self-redirect, while an absolute Location (http://h/x/) still
+        # matches its own path.
         is_dir = (cand.path.endswith("/")
                   or (probe.status in (301, 302)
-                      and probe.location.rstrip("/").endswith(path.rstrip("/"))))
+                      and _is_self_redirect_dir(probe.location, path)))
         if is_dir:
             confirmed_dirs.append(path if path.endswith("/") else path + "/")
             observer.set_skippable(True)

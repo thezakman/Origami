@@ -535,6 +535,23 @@ class TestResume(unittest.TestCase):
             self.assertIsNone(R.load(path))
 
 
+class TestDirRedirect(unittest.TestCase):
+    def test_self_redirect_relative(self):
+        from origami.core.scanner import _is_self_redirect_dir
+        self.assertTrue(_is_self_redirect_dir("/admin/", "/admin"))     # added trailing slash
+        self.assertTrue(_is_self_redirect_dir("/admin", "/admin"))
+
+    def test_self_redirect_absolute(self):
+        from origami.core.scanner import _is_self_redirect_dir
+        self.assertTrue(_is_self_redirect_dir("http://h/admin/", "/admin"))
+
+    def test_cross_path_redirect_is_not_a_dir(self):
+        from origami.core.scanner import _is_self_redirect_dir
+        # /login 302 -> /gateway/login must NOT look like a directory self-redirect
+        self.assertFalse(_is_self_redirect_dir("/gateway/login", "/login"))
+        self.assertFalse(_is_self_redirect_dir("http://h/auth?next=/login", "/login"))
+
+
 class TestDedup(unittest.TestCase):
     def test_dedup_by_url_keeps_best_confidence(self):
         from origami.core.response_classifier import Finding
