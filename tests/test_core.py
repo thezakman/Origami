@@ -72,6 +72,44 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestLiveProgress(unittest.TestCase):
+    def _ui(self):
+        try:
+            from origami.output.ui import RichUI
+        except Exception:
+            self.skipTest("rich not available")
+        return RichUI("http://x")
+
+    def test_setup_phase_is_indeterminate_then_fills(self):
+        ui = self._ui()
+        ui.phase("fingerprint")
+        self.assertIsNone(ui._progress.tasks[0].total)   # pulse, not a stuck 0/1
+        ui.phase("js-harvest")
+        self.assertIsNone(ui._progress.tasks[0].total)
+        ui.progress(3, 10)                                # fold reports → fills
+        task = ui._progress.tasks[0]
+        self.assertEqual(task.completed, 3)
+        self.assertEqual(task.total, 10)
+        ui.progress(40, 40)
+        self.assertEqual(ui._progress.tasks[0].completed, 40)
+
+    def test_count_column_blank_when_indeterminate(self):
+        from origami.output.ui import _CountColumn
+        ui = self._ui()
+        ui.phase("calibrate")
+        col = _CountColumn().render(ui._progress.tasks[0])
+        self.assertEqual(str(col), "")                    # no "0/1"
+        ui.start_prefix("/admin/", 50)
+        self.assertIn("/", str(_CountColumn().render(ui._progress.tasks[0])))
+
+    def test_dynamic_dashboard_rerenders(self):
+        from origami.output.ui import _LiveDashboard
+        ui = self._ui()
+        dash = _LiveDashboard(ui)
+        self.assertIsNotNone(dash.__rich__())     # rebuilds the renderable each call
+        self.assertIsNotNone(dash.__rich__())
+
+
 class TestBaseWordlist(unittest.TestCase):
     def test_loads_clean_and_curated(self):
         from origami.core.scheduler import load_wordlist
