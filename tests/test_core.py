@@ -72,6 +72,20 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestBaseWordlist(unittest.TestCase):
+    def test_loads_clean_and_curated(self):
+        from origami.core.scheduler import load_wordlist
+        w = load_wordlist()
+        self.assertGreaterEqual(len(w), 200)                 # a real default, not a demo stub
+        self.assertEqual(len(w), len(set(w)), "no duplicate entries")
+        for x in w:
+            self.assertEqual(x, x.lower())                   # lowercase
+            self.assertNotIn(".", x)                          # bare names — ext fold appends
+            self.assertFalse(any(c in x for c in "/ \t"))     # no slashes/whitespace
+        for must in ("admin", "login", "api", "config", "backup", "upload"):
+            self.assertIn(must, w)
+
+
 class TestTagging(unittest.TestCase):
     def tags(self, path, status=200):
         from origami.core.response_classifier import tag_finding

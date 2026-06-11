@@ -53,7 +53,7 @@ Common flags:
 
 | flag | meaning |
 |---|---|
-| `-w FILE` | wordlist (default: small builtin; point at SecLists/Assetnote) |
+| `-w FILE` | wordlist (default: curated ~280-word builtin; point at SecLists/Assetnote for exhaustive runs) |
 | `-d N` | recursion depth (default 1) |
 | `-c N` / `-t S` | concurrency / timeout |
 | `-k` | skip TLS verification |
