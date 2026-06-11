@@ -34,7 +34,7 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import waf
-from origami.modules.discovery import backups, js_parser, robots, shortname
+from origami.modules.discovery import apidocs, backups, js_parser, robots, shortname
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -53,7 +53,7 @@ MAX_HARVEST_SEEDS = 2000
 
 # Origins whose paths are root-absolute (joined from the host root, not the
 # current prefix) — harvested references point at app-root paths.
-_SEED_ORIGINS = {"memory", "js", "robots"}
+_SEED_ORIGINS = {"memory", "js", "robots", "apidocs"}
 
 
 def _host_root(url: str) -> str:
@@ -104,6 +104,7 @@ class ScanOptions:
     wordlist_path: str | None = None
     shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
+    apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
     backups: bool = True          # VCS/dotfile probes + backup-name folding
     max_folds: int = 40           # cap on learned vocabulary names folded into the scan
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
@@ -243,6 +244,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         root_seeds += [(p, "robots") for p in sorted(robots_paths)]
         observer.log(f"robots/sitemap: {len(robots_paths)} paths", 1, style="cyan")
 
+    # OpenAPI/Swagger spec → fold the whole declared API surface in as seeds.
+    api_paths: set[str] = set()
+    if opts.apidocs:
+        observer.phase("api-docs")
+        spec_url, api_paths = await apidocs.harvest(engine, base_url)
+        api_paths = _scope_paths(api_paths, profile.host, opts.scope)
+        if spec_url:
+            root_seeds += [(p, "apidocs") for p in sorted(api_paths)]
+            observer.log(f"api-docs: OpenAPI/Swagger spec at {urlparse(spec_url).path} "
+                         f"→ {len(api_paths)} endpoints folded", 0, style="cyan")
+
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]
 
@@ -250,7 +262,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # from the references discovered above, and weave it into the scan — capped
     # by --max-folds so a chatty SPA can't explode the request budget. Kept by
     # frequency: the most-referenced tokens are the most valuable.
-    names_ctr, exts_ctr = derive_vocabulary(js_paths | robots_paths)
+    names_ctr, exts_ctr = derive_vocabulary(js_paths | robots_paths | api_paths)
     learned_names = [n for n, _ in names_ctr.most_common(opts.max_folds)]
     # the target's own name (host labels + base path) is prime vocabulary
     tgt = target_tokens(profile.host, base_prefix)

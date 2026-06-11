@@ -20,6 +20,7 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
 - **Calibrate before attacking.** Per-context soft-404 profiling (per directory *and* extension class) using a normalized-body **simhash** — so CSRF tokens, nonces, timestamps and WAF support-IDs don't fool it.
 - **Evidence-guided folding.** Detect IIS → fold in `.aspx/.asmx/.ashx/.config`, priority paths and the shortscan module. Detect PHP/Apache/Tomcat/Express/Laravel/WordPress/Django → their own packs.
 - **Reads the target's own code.** Harvests endpoints from HTML/JS — follows webpack chunks and source maps, **skips vendor libraries**, picks up the RequireJS `data-main` bundle. Same-site CDN JS is read for intel; only the target host is scanned (`--scope site` to also scan the CDN).
+- **Folds in the whole API surface.** Probes the common OpenAPI/Swagger spec locations (`/swagger.json`, `/openapi.json`, `/v3/api-docs`…); when one parses, every declared path becomes a seed (with the `basePath`/`servers` prefix applied), surfacing endpoints no wordlist would guess.
 - **Vocabulary folding** — the org's own names and extensions (from JS/robots/sitemap **and** the host/subdomain/path) become scan vocabulary.
 - **IIS 8.3 shortscan** — drives the [`shortscan`](https://github.com/thezakman/shortscan) binary, constraint-filters the wordlist, tries the raw 8.3 name and the prefix as dir/file, and **completes truncated names with a character n-gram model** (`APIINT~1` → `apiintegracao`).
 - **WAF / block-page detection** (F5 ASM, Cloudflare, Imperva, Akamai, ModSecurity, Sucuri…) — block pages never become findings, and the WAF shows in the fingerprint.
@@ -62,7 +63,7 @@ Common flags:
 | `-mc` / `-fc` / `-ms` / `-fs` | match/filter status codes & sizes (ffuf-style) |
 | `--scope host\|site` | scan only the host (default) or also same-site CDN |
 | `--shortscan` / `--no-shortscan` | force / disable the IIS 8.3 fold (auto when IIS detected) |
-| `--no-js` / `--no-backups` | disable those discovery folds |
+| `--no-js` / `--no-apidocs` / `--no-backups` | disable those discovery folds |
 | `--max-folds N` | cap learned-vocabulary names folded in (default 40) |
 | `--economy auto\|on\|off` | rank candidates by learned hit-rate (auto: on under a WAF) |
 | `-v` / `-vv` | verbose: phases & hits / every request |
