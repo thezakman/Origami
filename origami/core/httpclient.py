@@ -65,6 +65,7 @@ class EngineConfig:
     max_retries: int = 2
     user_agent: str = DEFAULT_UA
     headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
+    proxy: str = ""                             # route through an intercepting proxy (Burp/ZAP), e.g. http://127.0.0.1:8080
     follow_redirects: bool = False              # we want to *see* redirects
     verify_tls: bool = False                    # pentest targets: don't choke on certs
     backoff_base: float = 0.8                   # seconds, grows on pushback
@@ -112,6 +113,7 @@ class Engine:
             timeout=self.cfg.timeout,
             follow_redirects=self.cfg.follow_redirects,
             verify=self.cfg.verify_tls,
+            proxy=self.cfg.proxy or None,
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )

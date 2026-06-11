@@ -134,6 +134,8 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
     if args.user_agent:
         print(f"  user-agent: {args.user_agent}")
+    if args.proxy:
+        print(f"  proxy    : {args.proxy} (TLS verification off)")
     if sys.stdin.isatty() and not args.no_ui:
         print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
@@ -153,7 +155,8 @@ async def run(args: argparse.Namespace) -> int:
                 observer = ui.make_observer(target, enabled=not args.no_ui,
                                             verbosity=args.verbose, full_url=args.full_url)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
-                                   verify_tls=not args.insecure, headers=_parse_headers(args.header),
+                                   verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
+                                   proxy=args.proxy or "", headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent)
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
@@ -233,6 +236,9 @@ def main() -> None:
                          "for authenticated scans")
     ap.add_argument("-A", "--user-agent", metavar="UA",
                     help="override the User-Agent header")
+    ap.add_argument("--proxy", metavar="URL",
+                    help="route all traffic through an intercepting proxy "
+                         "(e.g. http://127.0.0.1:8080 for Burp/ZAP); implies -k")
     ap.add_argument("--json", help="write JSON report to this path")
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
