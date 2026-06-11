@@ -121,7 +121,7 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
 @dataclass
 class ScanOptions:
     max_depth: int = 1            # 0 = root only
-    max_requests: int = 5000      # hard cap per run (§3.11)
+    max_requests: int = 15000     # hard cap per run (§3.11); raise for big wordlists/deep trees
     wordlist_path: str | None = None
     shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
@@ -476,10 +476,16 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         memory.record_word_stats(ranker.deltas(), techs)   # learn even if interrupted
     if interrupted:
         # Leave the checkpoint on disk for `--resume`; skip folds + memory
-        # (those run once, on the clean finish).
+        # (those run once, on the clean finish). Say WHY we stopped — it's our
+        # own budget/quit, NOT the target dropping us.
         observer.pushback(engine.pushback_events)
-        observer.log("scan: interrupted — checkpoint saved (resume with --resume)",
-                     0, style="yellow")
+        if control.quit:
+            reason = "you pressed q"
+        else:
+            reason = (f"hit the --max-requests {opts.max_requests} budget "
+                      f"(raise it with --max-requests N)")
+        observer.log(f"scan: stopped — {reason}. {len(result.findings)} findings so far; "
+                     f"checkpoint saved → continue with --resume", 0, style="yellow")
         return result
 
     # 5. dedupe + collapse same-content collisions BEFORE expanding ---------

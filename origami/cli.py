@@ -230,7 +230,9 @@ def main() -> None:
     ap.add_argument("-t", "--timeout", type=float, default=10.0)
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
     ap.add_argument("-w", "--wordlist", help="path to wordlist (default: builtin base.txt)")
-    ap.add_argument("--max-requests", type=int, default=5000)
+    ap.add_argument("--max-requests", type=int, default=15000,
+                    help="hard request budget per target (default 15000); on a slow/"
+                         "throttled target lower it, or stop with q and --resume later")
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
     ap.add_argument("-H", "--header", action="append", metavar="'Name: Value'",
                     help="extra header sent on every request; repeatable "
