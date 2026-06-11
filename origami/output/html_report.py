@@ -28,6 +28,7 @@ h1{font-size:20px;margin:0;color:#e3b341}
 .tag.disclosure{background:#8b1a1a;color:#fff}.tag.config{background:#9e6a03;color:#fff}
 .tag.api{background:#1f6feb;color:#fff}.tag.auth{background:#6e40c9;color:#fff}
 .tag.admin{background:#0e7490;color:#fff}.tag.source{background:#1f6f3f;color:#fff}
+.tag.upload{background:#9e6a03;color:#fff}.tag.debug{background:#b91c1c;color:#fff}
 input{background:var(--card);border:1px solid var(--bd);color:var(--fg);padding:8px 12px;border-radius:6px;width:340px;margin-bottom:12px}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd);white-space:nowrap}

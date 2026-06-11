@@ -100,6 +100,7 @@ ORIGIN_STYLE = {
 TAG_STYLE = {
     "disclosure": "bold white on red", "config": "yellow", "api": "blue",
     "admin": "cyan", "auth": "magenta", "source": "green",
+    "upload": "bright_yellow", "debug": "bright_red",
 }
 
 
