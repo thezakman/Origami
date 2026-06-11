@@ -72,6 +72,45 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestTagging(unittest.TestCase):
+    def tags(self, path, status=200):
+        from origami.core.response_classifier import tag_finding
+        return tag_finding("https://h" + path, status)
+
+    def test_auth_english_and_ptbr_concatenated(self):
+        self.assertIn("auth", self.tags("/security/views/login.tpl.html"))
+        self.assertIn("auth", self.tags("/redefinirsenha/views/redefinir.tpl.html"))
+        self.assertIn("auth", self.tags("/security/views/esqueciminhasenha.tpl.html"))
+        self.assertIn("auth", self.tags("/conta/cadastro"))
+
+    def test_401_forces_auth(self):
+        self.assertIn("auth", self.tags("/whatever", status=401))
+
+    def test_dashboard_is_not_admin(self):
+        # a user dashboard view must NOT be tagged admin (the over-broad bug)
+        self.assertNotIn("admin", self.tags("/aprendizagem/views/dashboard.tpl.html"))
+        self.assertIn("admin", self.tags("/admin/users"))
+        self.assertIn("admin", self.tags("/administrador/painel"))   # PT admin
+
+    def test_extension_needles_are_precise(self):
+        # .cs tags C# source but NOT a .css stylesheet (the substring bug)
+        self.assertIn("source", self.tags("/app/Program.cs"))
+        self.assertNotIn("source", self.tags("/assets/style.css"))
+
+    def test_disclosure_segments_and_exts(self):
+        self.assertIn("disclosure", self.tags("/.git/HEAD"))
+        self.assertIn("disclosure", self.tags("/backup/db.sql"))
+        self.assertIn("disclosure", self.tags("/conf/id_rsa"))
+        # 'secretaria' must not trip a disclosure (bare 'secret' was removed)
+        self.assertNotIn("disclosure", self.tags("/secretaria/alunos"))
+
+    def test_new_categories(self):
+        self.assertIn("upload", self.tags("/files/upload.aspx"))
+        self.assertIn("debug", self.tags("/actuator/health"))
+        self.assertIn("api", self.tags("/api/v3/users"))
+        self.assertIn("config", self.tags("/app/web.config"))
+
+
 class TestFilters(unittest.TestCase):
     def test_default_accepts_all(self):
         f = Filters()

@@ -32,24 +32,53 @@ class Finding:
     simhash: int = 0     # body fingerprint — for same-content collision collapse
 
 
-# Substring → tag. First match per group wins; a finding can carry several.
-# `disclosure` is the one you want to see in red.
+# needle → tag. A finding can carry several. Two needle kinds (see `_matches`):
+#   * dot-needles (".bak", ".cs") match a real file EXTENSION or path segment —
+#     so ".cs" tags Program.cs but NOT style.css, and ".git" tags /.git/HEAD;
+#   * plain needles (substring) catch concatenated names too — Brazilian view
+#     templates like `redefinirsenha` / `esqueciminhasenha` still hit "senha".
+# Over-broad needles are deliberately avoided ("dashboard" tagged every user
+# dashboard as admin; "import" hit "important", ".cs" hit ".css").
 _TAG_RULES = [
-    ("disclosure", (".env", ".git", ".svn", ".hg", ".bak", ".old", ".swp", ".orig",
-                    ".save", ".sql", "dump", "backup", "id_rsa", ".htpasswd",
-                    "credentials", ".ds_store", ".key", ".pem")),
+    ("disclosure", (".env", ".git", ".svn", ".hg", ".bak", ".old", ".swp", ".swo",
+                    ".orig", ".save", ".tmp", ".sql", ".sqlite", "dump", "backup",
+                    "id_rsa", "id_dsa", ".htpasswd", "credential", ".ds_store",
+                    ".key", ".pem", ".pfx", ".p12", ".crt", ".cer", ".ppk", ".ovpn",
+                    ".kdbx", ".netrc", ".pgpass", "bash_history", "wp-config", ".tfstate")),
     ("config", ("web.config", ".htaccess", "appsettings", "composer.json",
-                "package.json", ".npmrc", "config.php", "settings.py")),
-    ("api", ("/api/", "swagger", "openapi", "graphql", "/v1/", "/v2/", "api-docs", ".wsdl")),
-    ("admin", ("/admin", "manager", "/console", "dashboard", "/cpanel")),
-    ("auth", ("login", "signin", "logon", "/auth", "oauth", "/sso", "logout")),
-    ("source", (".java", ".rb", ".go", ".cs", ".inc", ".phps")),
+                "package.json", ".npmrc", "config.php", "settings.py", ".ini",
+                ".conf", ".cfg", "web.xml", ".properties", "nginx", "php.ini",
+                "dockerfile", "docker-compose")),
+    ("api", ("/api/", "swagger", "openapi", "graphql", "/v1/", "/v2/", "/v3/",
+             "api-docs", ".wsdl", "/rest/", "/soap", "/rpc", "/jsonrpc")),
+    ("admin", ("/admin", "administrator", "administrador", "wp-admin", "phpmyadmin",
+               "adminer", "/manager/", "/cpanel", "/webadmin", "/admincp", "/console/")),
+    ("auth", ("login", "signin", "sign-in", "signup", "register", "logon", "logout",
+              "/auth", "oauth", "/sso", "saml", "senha", "password", "passwd",
+              "cadastro", "recuperar", "redefinir", "esqueci", "autentica",
+              "/2fa", "/otp", "/mfa")),
+    ("upload", ("upload", "/uploads", "/files/", "attachment", "filemanager")),
+    ("debug", ("phpinfo", "trace.axd", "actuator", "server-status", "server-info",
+               "/debug", "elmah", "/_profiler", "/metrics", "/healthz")),
+    ("source", (".java", ".rb", ".go", ".cs", ".py", ".pl", ".lua", ".inc",
+                ".phps", ".kt", ".scala", ".class")),
 ]
+
+
+def _matches(path: str, needle: str) -> bool:
+    """A dot-needle matches a real extension or whole path segment (so ".cs"
+    doesn't fire on ".css", and ".git" fires on /.git/HEAD); any other needle is
+    a plain substring (catches concatenated names like `esqueciminhasenha`)."""
+    if needle.startswith("."):
+        last = path.rsplit("/", 1)[-1]
+        ext = ("." + last.rsplit(".", 1)[-1]) if "." in last else ""
+        return ext == needle or last == needle or needle in path.split("/")
+    return needle in path
 
 
 def tag_finding(url: str, status: int) -> list[str]:
     p = urlparse(url).path.lower()
-    tags = [tag for tag, needles in _TAG_RULES if any(n in p for n in needles)]
+    tags = [tag for tag, needles in _TAG_RULES if any(_matches(p, n) for n in needles)]
     if status == 401 and "auth" not in tags:
         tags.append("auth")
     return tags
