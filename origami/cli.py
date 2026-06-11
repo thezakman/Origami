@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from origami import banner
+from origami import __version__, banner
 from origami.brain.memory import DEFAULT_DB, Memory
 from origami.control import keyboard_control
 from origami.core import resume as resume_mod
@@ -29,6 +29,21 @@ def _int_set(s: str | None) -> set[int] | None:
     if not s:
         return None
     return {int(x) for x in s.replace(" ", "").split(",") if x}
+
+
+def _parse_headers(items) -> dict[str, str]:
+    """`-H "Name: Value"` (repeatable) → header dict. Used for authenticated
+    scans (Cookie:, Authorization:, custom headers)."""
+    out: dict[str, str] = {}
+    for raw in items or []:
+        if ":" not in raw:
+            raise SystemExit(f"[!] bad header (need 'Name: Value'): {raw!r}")
+        name, _, value = raw.partition(":")
+        name = name.strip()
+        if not name:
+            raise SystemExit(f"[!] bad header (empty name): {raw!r}")
+        out[name] = value.strip()
+    return out
 
 
 def _build_filters(args) -> Filters:
@@ -115,6 +130,10 @@ async def run(args: argparse.Namespace) -> int:
     print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
     print(f"  filters  : codes {fdesc}")
+    if args.header:
+        print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
+    if args.user_agent:
+        print(f"  user-agent: {args.user_agent}")
     if sys.stdin.isatty() and not args.no_ui:
         print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
@@ -134,7 +153,8 @@ async def run(args: argparse.Namespace) -> int:
                 observer = ui.make_observer(target, enabled=not args.no_ui,
                                             verbosity=args.verbose, full_url=args.full_url)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
-                                   verify_tls=not args.insecure)
+                                   verify_tls=not args.insecure, headers=_parse_headers(args.header),
+                                   user_agent=args.user_agent or EngineConfig.user_agent)
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
@@ -184,7 +204,20 @@ def _show_history(args) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="origami", description="Adaptive content discovery engine.")
+    ap = argparse.ArgumentParser(
+        prog="origami", description="Adaptive content discovery engine.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  origami https://example.com\n"
+            "  origami https://example.com/app/ -w wordlist.txt -d 2\n"
+            "  origami -l targets.txt --out results/\n"
+            "  origami https://example.com -H 'Cookie: session=abc' -H 'Authorization: Bearer X'\n"
+            "  origami https://example.com --resume          # continue an interrupted scan\n"
+            "  origami --update                               # refresh the fingerprint catalog\n"
+        ))
+    ap.add_argument("-V", "--version", action="version",
+                    version=f"origami {__version__}")
     ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
     ap.add_argument("-l", "--list", metavar="FILE",
                     help="file with target URLs, one per line (# comments allowed)")
@@ -194,6 +227,12 @@ def main() -> None:
     ap.add_argument("-w", "--wordlist", help="path to wordlist (default: builtin base.txt)")
     ap.add_argument("--max-requests", type=int, default=5000)
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
+    ap.add_argument("-H", "--header", action="append", metavar="'Name: Value'",
+                    help="extra header sent on every request; repeatable "
+                         "(e.g. -H 'Cookie: sid=…' -H 'Authorization: Bearer …') — "
+                         "for authenticated scans")
+    ap.add_argument("-A", "--user-agent", metavar="UA",
+                    help="override the User-Agent header")
     ap.add_argument("--json", help="write JSON report to this path")
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
@@ -214,9 +253,10 @@ def main() -> None:
                     help="show full URLs instead of just paths")
     ap.add_argument("--fp", "--fingerprint", action="store_true", dest="fp",
                     help="print the fingerprint panel (tech/WAF/folds/params) at the end")
-    ap.add_argument("--shortscan", action="store_true",
+    sc = ap.add_mutually_exclusive_group()
+    sc.add_argument("--shortscan", action="store_true",
                     help="force the IIS 8.3 shortscan fold (default: auto when IIS detected)")
-    ap.add_argument("--no-shortscan", action="store_true",
+    sc.add_argument("--no-shortscan", action="store_true",
                     help="disable the shortscan fold")
     ap.add_argument("--no-js", action="store_true",
                     help="disable JS/HTML endpoint harvesting")

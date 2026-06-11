@@ -56,6 +56,8 @@ Common flags:
 | `-d N` | recursion depth (default 1) |
 | `-c N` / `-t S` | concurrency / timeout |
 | `-k` | skip TLS verification |
+| `-H 'Name: Value'` | extra request header, repeatable (auth/cookies — see below) |
+| `-A UA` | override the User-Agent |
 | `-mc` / `-fc` / `-ms` / `-fs` | match/filter status codes & sizes (ffuf-style) |
 | `--scope host\|site` | scan only the host (default) or also same-site CDN |
 | `--shortscan` / `--no-shortscan` | force / disable the IIS 8.3 fold (auto when IIS detected) |
@@ -68,8 +70,20 @@ Common flags:
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |
 | `--resume` | continue an interrupted scan from its checkpoint |
+| `--update` | refresh the fingerprint catalog (Wappalyzer) into the KB |
+| `-V` | print version |
 
-Live controls: **`n`** skip the current directory (once one is discovered), **`q`** quit.
+Run `origami -h` for the full list. Live controls: **`n`** skip the current directory (once one is discovered), **`q`** quit.
+
+### Authenticated scans
+
+Pass session cookies or tokens with `-H` (repeatable) to scan behind a login — they're sent on every request:
+
+```bash
+origami https://app.example.com \
+  -H 'Cookie: session=…; csrf=…' \
+  -H 'Authorization: Bearer eyJ…'
+```
 
 Every scan checkpoints its state (fingerprint, findings, pending directory queue)
 after each directory, so an interrupted run — `q`, Ctrl-C, or the `--max-requests`
@@ -87,8 +101,25 @@ checkpoint so repeated resumes never duplicate the report.
 
 ## Output
 
-- **Live dashboard** — findings stream as permanent lines (`code size origin conf url tags`) under a pinned status bar with phase, req/s, hits, duration and `==> directory` markers.
+- **Live dashboard** — findings stream as permanent lines under a pinned status bar with phase, req/s, hits, duration, the adaptive concurrency (drops as `⤓conc N` under WAF backoff) and `==> directory` markers.
 - **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable), `params.txt` (harvested parameter surface — a drop-in fuzzing list) and `urls.txt`.
+
+The final report groups findings by confidence, tagged by kind (`disclosure`, `config`, `api`, `admin`, `auth`, `source`) and coloured by where each came from (`js`, `robots`, `backup`, `wordlist`, `memory`, `shortscan`…):
+
+```
+Findings (16)  ·  fingerprint: iis, asp.net
+┏━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ code ┃      size ┃ src       ┃ conf ┃ tags       ┃ path                      ┃
+┡━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 200  │       15B │ js        │ 0.95 │ api admin  │ /api/v2/admin/secret      │
+│ 200  │       32B │ js        │ 0.95 │            │ /reports/export.ashx      │
+│ 200  │       52B │ robots    │ 0.95 │ admin      │ /private/dashboard.aspx   │
+│ 200  │       21B │ backup    │ 0.95 │ disclosure │ /.git/HEAD                │
+│ 200  │       36B │ backup    │ 0.95 │ disclosure │ /.env                     │
+│ 403  │       48B │ priority  │ 0.85 │ config     │ /web.config               │
+│ 200  │       68B │ wordlist  │ 0.95 │ admin auth │ /admin/login.aspx         │
+└──────┴───────────┴───────────┴──────┴────────────┴───────────────────────────┘
+```
 
 ## How it works
 
