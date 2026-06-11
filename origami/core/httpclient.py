@@ -64,6 +64,7 @@ class EngineConfig:
     jitter: tuple[float, float] = (0.0, 0.05)   # seconds, uniform
     max_retries: int = 2
     user_agent: str = DEFAULT_UA
+    headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
     follow_redirects: bool = False              # we want to *see* redirects
     verify_tls: bool = False                    # pentest targets: don't choke on certs
     backoff_base: float = 0.8                   # seconds, grows on pushback
@@ -106,11 +107,12 @@ class Engine:
         return max(1, int(self._limit))
 
     async def __aenter__(self) -> "Engine":
+        # User-Agent first so an explicit -H "User-Agent: ..." override wins.
         self._client = httpx.AsyncClient(
             timeout=self.cfg.timeout,
             follow_redirects=self.cfg.follow_redirects,
             verify=self.cfg.verify_tls,
-            headers={"User-Agent": self.cfg.user_agent},
+            headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )
         return self

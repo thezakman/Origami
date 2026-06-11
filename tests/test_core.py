@@ -535,6 +535,28 @@ class TestResume(unittest.TestCase):
             self.assertIsNone(R.load(path))
 
 
+class TestHeaderParse(unittest.TestCase):
+    def test_parse_headers(self):
+        from origami.cli import _parse_headers
+        h = _parse_headers(["Cookie: sid=abc", "Authorization: Bearer x.y.z"])
+        self.assertEqual(h["Cookie"], "sid=abc")
+        self.assertEqual(h["Authorization"], "Bearer x.y.z")
+
+    def test_parse_headers_value_with_colon(self):
+        from origami.cli import _parse_headers
+        h = _parse_headers(["X-Time: 12:30:00"])         # only first colon splits
+        self.assertEqual(h["X-Time"], "12:30:00")
+
+    def test_parse_headers_empty(self):
+        from origami.cli import _parse_headers
+        self.assertEqual(_parse_headers(None), {})
+
+    def test_parse_headers_bad(self):
+        from origami.cli import _parse_headers
+        with self.assertRaises(SystemExit):
+            _parse_headers(["no-colon-here"])
+
+
 class TestDirRedirect(unittest.TestCase):
     def test_self_redirect_relative(self):
         from origami.core.scanner import _is_self_redirect_dir
