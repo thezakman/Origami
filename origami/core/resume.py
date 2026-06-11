@@ -86,7 +86,8 @@ def _finding_from_dict(d: dict) -> Finding:
 # ---- save / load --------------------------------------------------------------
 
 def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
-         priority_paths, root_seeds, base_prefix, queue, scanned, start_offset=0) -> None:
+         priority_paths, root_seeds, base_prefix, queue, scanned, start_offset=0,
+         front_cands=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     state = {
         "version": 1,
@@ -100,6 +101,7 @@ def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
         "queue": [list(q) for q in queue],
         "scanned": sorted(scanned),
         "start_offset": start_offset,        # candidate index to resume the front prefix from
+        "front_cands": [list(c) for c in (front_cands or [])],  # exact ordered (path,origin) of the interrupted prefix
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state))
@@ -120,6 +122,7 @@ def load(path: Path) -> dict | None:
     d["root_seeds"] = [tuple(s) for s in d["root_seeds"]]
     d["queue"] = [tuple(q) for q in d["queue"]]
     d["exts"] = set(d["exts"])
+    d["front_cands"] = [tuple(c) for c in d.get("front_cands", [])]
     return d
 
 
