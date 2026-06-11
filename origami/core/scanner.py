@@ -80,6 +80,17 @@ def _is_self_redirect_dir(location: str, path: str) -> bool:
     return urlparse(location).path.rstrip("/") == path.rstrip("/")
 
 
+async def _guard(observer, label, coro, default):
+    """Run a discovery fold in isolation. A parser bug or a pathological response
+    on one fold (malformed JSON spec, weird JS, broken sitemap) skips just that
+    fold with a note — the scan keeps going instead of dying on one bad target."""
+    try:
+        return await coro
+    except Exception as e:                       # noqa: BLE001 — isolation is the point
+        observer.log(f"{label}: skipped ({type(e).__name__}: {e})", 0, style="yellow")
+        return default
+
+
 def _rel_depth(prefix: str, base_prefix: str) -> int:
     """How many directory levels `prefix` is below the scan base."""
     base = [s for s in base_prefix.strip("/").split("/") if s]
@@ -237,7 +248,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     if opts.js and root.body:
         observer.phase("js-harvest")
-        js_paths, js_params = await js_parser.harvest(engine, base_url, root.body)
+        js_paths, js_params = await _guard(observer, "js-harvest",
+                                           js_parser.harvest(engine, base_url, root.body),
+                                           (set(), set()))
         js_paths = _scope_paths(js_paths, profile.host, opts.scope)   # scope discipline
         js_paths = set(sorted(js_paths)[:MAX_HARVEST_SEEDS])          # cap the blast radius
         root_seeds += [(p, "js") for p in sorted(js_paths)]
@@ -250,7 +263,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                          f"(pentest input surface)", 0, style="cyan")
 
     # robots.txt + sitemap.xml — free passive intel
-    robots_paths = _scope_paths(await robots.harvest(engine, base_url), profile.host, opts.scope)
+    robots_raw = await _guard(observer, "robots", robots.harvest(engine, base_url), set())
+    robots_paths = _scope_paths(robots_raw, profile.host, opts.scope)
     if robots_paths:
         root_seeds += [(p, "robots") for p in sorted(robots_paths)]
         observer.log(f"robots/sitemap: {len(robots_paths)} paths", 1, style="cyan")
@@ -259,7 +273,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     api_paths: set[str] = set()
     if opts.apidocs:
         observer.phase("api-docs")
-        spec_url, api_paths = await apidocs.harvest(engine, base_url)
+        spec_url, api_paths = await _guard(observer, "api-docs",
+                                           apidocs.harvest(engine, base_url), (None, set()))
         api_paths = _scope_paths(api_paths, profile.host, opts.scope)
         if spec_url:
             root_seeds += [(p, "apidocs") for p in sorted(api_paths)]
@@ -310,7 +325,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # 3. shortscan fold (IIS 8.3) — high-value seeds before the generic scan
     if _should_shortscan(opts, folds):
-        await _shortscan_pass(engine, profile, base_url, words, result, opts, observer)
+        await _guard(observer, "shortscan",
+                     _shortscan_pass(engine, profile, base_url, words, result, opts, observer),
+                     None)
 
     # 4. recursive scan + folds (checkpointed) -----------------------------
     queue: list[tuple[str, int]] = [(base_prefix, 0)]   # (prefix, depth)
@@ -469,12 +486,14 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
 
     # 6. backup/source fold around confirmed files -------------------------
     if opts.backups:
-        await _backup_fold(engine, profile, result, opts, observer)
+        await _guard(observer, "backups",
+                     _backup_fold(engine, profile, result, opts, observer), None)
         result.findings = _dedupe_and_collapse(result.findings, observer)
 
     # 6.5 association fold — corpus rules ("found /backup/ → test /.git/")
     if memory is not None:
-        await _association_fold(engine, profile, result, opts, observer, memory)
+        await _guard(observer, "associations",
+                     _association_fold(engine, profile, result, opts, observer, memory), None)
         result.findings = _dedupe_and_collapse(result.findings, observer)
 
     observer.pushback(engine.pushback_events)

@@ -535,6 +535,25 @@ class TestResume(unittest.TestCase):
             self.assertIsNone(R.load(path))
 
 
+class TestFoldIsolation(unittest.TestCase):
+    def test_guard_isolates_exceptions(self):
+        import asyncio
+        from origami.core.scanner import _guard
+        from origami.output.ui import NullObserver
+        obs = NullObserver()
+
+        async def boom():
+            raise ValueError("bad response")
+
+        async def good():
+            return "ok"
+
+        # a crashing fold yields the default; the scan would carry on
+        self.assertEqual(asyncio.run(_guard(obs, "x", boom(), "DEFAULT")), "DEFAULT")
+        # a healthy fold passes its value through
+        self.assertEqual(asyncio.run(_guard(obs, "x", good(), "DEFAULT")), "ok")
+
+
 class TestExclude(unittest.TestCase):
     def _opts(self, patterns):
         from origami.core.scanner import ScanOptions
