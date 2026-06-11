@@ -121,7 +121,7 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
 @dataclass
 class ScanOptions:
     max_depth: int = 1            # 0 = root only
-    max_requests: int = 15000     # hard cap per run (§3.11); raise for big wordlists/deep trees
+    max_requests: int = 0         # hard cap per run (§3.11); 0 = unlimited (default)
     wordlist_path: str | None = None
     shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
@@ -632,8 +632,8 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     hit_cap = False
     for idx in range(skip, len(cands)):
         cand = cands[idx]
-        if engine.total_requests >= opts.max_requests or control.quit:
-            consumed, hit_cap = idx, True       # stopped here — resume from idx
+        if (opts.max_requests and engine.total_requests >= opts.max_requests) or control.quit:
+            consumed, hit_cap = idx, True       # stopped here — resume from idx (0 = unlimited)
             break
         if control.skip_prefix:
             control.skip_prefix = False
@@ -732,7 +732,7 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         for var in backups.variations(path):
-            if engine.total_requests >= opts.max_requests:
+            if opts.max_requests and engine.total_requests >= opts.max_requests:
                 break
             url = urljoin(_host_root(profile.base_url), var)
             if _excluded(urlparse(url).path, opts):
@@ -757,7 +757,7 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
     observer.start_prefix("associations", len(assoc))
     root = _host_root(profile.base_url)
     for path in assoc:
-        if engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
             break
         p = "/" + path.lstrip("/")
         if _excluded(p, opts):
@@ -843,7 +843,7 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
 
     observer.start_prefix("shortscan", len(urls))
     for url, prefix in urls:
-        if engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
             break
         if _excluded(urlparse(url).path, opts):
             continue
