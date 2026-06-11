@@ -57,6 +57,14 @@ EXISTING = {
     "/default.aspx.bak": ("text/plain", b"<%-- backup of default.aspx with secrets --%>"),
     "/.git/HEAD": ("text/plain", b"ref: refs/heads/main\n"),
     "/.env": ("text/plain", b"DB_PASSWORD=hunter2\nAPI_KEY=sk-test\n"),
+    # OpenAPI spec → exercises the apidocs fold. Declares endpoints reachable
+    # nowhere else (not in the wordlist, JS, or robots).
+    "/swagger.json": ("application/json",
+                      b'{"openapi":"3.0.1","servers":[{"url":"/api/v3"}],"paths":{'
+                      b'"/billing/invoices":{"get":{}},"/billing/{id}":{"get":{}},'
+                      b'"/internal/metrics":{"get":{}}}}'),
+    "/api/v3/billing/invoices": ("application/json", b'{"invoices":[]}'),
+    "/api/v3/internal/metrics": ("application/json", b'{"uptime":1234}'),
 }
 PROTECTED = {"/web.config", "/bin/", "/admin/"}  # answer 403
 

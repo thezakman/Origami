@@ -535,6 +535,36 @@ class TestResume(unittest.TestCase):
             self.assertIsNone(R.load(path))
 
 
+class TestApiDocs(unittest.TestCase):
+    def test_swagger2_basepath_and_templating(self):
+        from origami.modules.discovery import apidocs
+        spec = {"swagger": "2.0", "basePath": "/api/v2",
+                "paths": {"/users": {}, "/users/{id}": {}, "/orders/list": {}}}
+        eps = apidocs.extract_endpoints(spec)
+        self.assertIn("/api/v2/users", eps)            # static, kept whole
+        self.assertIn("/api/v2/orders/list", eps)
+        self.assertIn("/api/v2/users/", eps)           # templated → static dir
+        self.assertNotIn("/api/v2/users/{id}", eps)    # never the literal template
+
+    def test_openapi3_server_url(self):
+        from origami.modules.discovery import apidocs
+        spec = {"openapi": "3.0.1", "servers": [{"url": "https://h.example/api/v3"}],
+                "paths": {"/ping": {}}}
+        self.assertIn("/api/v3/ping", apidocs.extract_endpoints(spec))
+
+    def test_is_spec_and_load(self):
+        import json
+        from origami.modules.discovery import apidocs
+        good = json.dumps({"openapi": "3.0", "paths": {"/a": {}}}).encode()
+        self.assertTrue(apidocs._is_spec(apidocs._load(good)))
+        self.assertIsNone(apidocs._load(b"not json at all {{{"))
+        self.assertFalse(apidocs._is_spec({"hello": "world"}))   # no paths/openapi
+
+    def test_no_paths_returns_empty(self):
+        from origami.modules.discovery import apidocs
+        self.assertEqual(apidocs.extract_endpoints({"openapi": "3.0"}), set())
+
+
 class TestHeaderParse(unittest.TestCase):
     def test_parse_headers(self):
         from origami.cli import _parse_headers

@@ -93,6 +93,7 @@ ORIGIN_STYLE = {
     "memory": "magenta", "js": "blue", "shortscan": "bright_magenta",
     "backup": "red", "robots": "green", "priority": "cyan",
     "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
+    "apidocs": "bright_blue",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
@@ -239,8 +240,8 @@ class RichUI(NullObserver):
         dt = time.perf_counter() - self.start
         return self.requests / dt if dt > 0 else 0.0
 
-    _PHASES = ["calibrate", "fingerprint", "js-harvest", "shortscan", "scan",
-               "backups", "associations"]
+    _PHASES = ["calibrate", "fingerprint", "js-harvest", "api-docs", "shortscan",
+               "scan", "backups", "associations"]
 
     def _phase_text(self) -> "Text":
         # header shows only the position (the name lives in the status-bar chip)

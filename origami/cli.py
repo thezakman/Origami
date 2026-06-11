@@ -116,7 +116,7 @@ async def run(args: argparse.Namespace) -> int:
     opts = ScanOptions(
         max_depth=args.depth, max_requests=args.max_requests,
         wordlist_path=args.wordlist, shortscan=shortscan,
-        js=not args.no_js, backups=not args.no_backups,
+        js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         filters=_build_filters(args),
     )
@@ -266,6 +266,8 @@ def main() -> None:
                     help="disable the shortscan fold")
     ap.add_argument("--no-js", action="store_true",
                     help="disable JS/HTML endpoint harvesting")
+    ap.add_argument("--no-apidocs", action="store_true",
+                    help="disable OpenAPI/Swagger spec discovery + endpoint folding")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
     ap.add_argument("--economy", choices=["auto", "on", "off"], default="auto",
