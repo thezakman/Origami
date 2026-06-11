@@ -311,13 +311,17 @@ def main() -> None:
         sys.exit(_show_history(args))
     if not args.url and not args.list:
         ap.error("give at least one target URL or --list FILE")
+    if args.wordlist and not Path(args.wordlist).is_file():
+        ap.error(f"wordlist not found: {args.wordlist}")
+    if args.list and not Path(args.list).is_file():
+        ap.error(f"target list not found: {args.list}")
 
     if not args.no_ui:
         banner.show()
     try:
         sys.exit(asyncio.run(run(args)))
     except KeyboardInterrupt:
-        print("\n[!] interrupted")
+        print("\n[!] interrupted — continue with --resume")
         sys.exit(130)
 
 

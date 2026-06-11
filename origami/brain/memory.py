@@ -84,7 +84,12 @@ class Memory:
     def __init__(self, db_path: Path | str = DEFAULT_DB) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(self.path))
+        self.db = sqlite3.connect(str(self.path), timeout=10.0)
+        # WAL + a busy timeout so concurrent scans (multi-target, parallel runs)
+        # sharing one DB don't fail with "database is locked".
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=10000")
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(_SCHEMA)
         self.db.commit()
 
