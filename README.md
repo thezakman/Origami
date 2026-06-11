@@ -58,6 +58,7 @@ Common flags:
 | `-k` | skip TLS verification |
 | `-H 'Name: Value'` | extra request header, repeatable (auth/cookies — see below) |
 | `-A UA` | override the User-Agent |
+| `--proxy URL` | route through an intercepting proxy (Burp/ZAP); implies `-k` |
 | `-mc` / `-fc` / `-ms` / `-fs` | match/filter status codes & sizes (ffuf-style) |
 | `--scope host\|site` | scan only the host (default) or also same-site CDN |
 | `--shortscan` / `--no-shortscan` | force / disable the IIS 8.3 fold (auto when IIS detected) |
@@ -83,6 +84,12 @@ Pass session cookies or tokens with `-H` (repeatable) to scan behind a login —
 origami https://app.example.com \
   -H 'Cookie: session=…; csrf=…' \
   -H 'Authorization: Bearer eyJ…'
+```
+
+Route everything through Burp/ZAP to inspect or replay what Origami sends (`--proxy` turns off TLS verification, since intercepting proxies present their own cert):
+
+```bash
+origami https://app.example.com --proxy http://127.0.0.1:8080
 ```
 
 Every scan checkpoints its state (fingerprint, findings, pending directory queue)
