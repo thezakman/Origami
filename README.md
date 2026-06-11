@@ -80,8 +80,10 @@ origami https://example.com --max-requests 2000   # hits the cap, saves a checkp
 origami https://example.com --resume               # continues; no re-fingerprinting
 ```
 
-A clean finish removes the checkpoint. Resume granularity is per-directory: the
-directory in progress when you stopped is re-run from the start.
+A clean finish removes the checkpoint. The checkpoint records the candidate
+offset within the directory in progress, so a resume continues from where it
+stopped (not from the directory's start), and findings are URL-deduped on every
+checkpoint so repeated resumes never duplicate the report.
 
 ## Output
 

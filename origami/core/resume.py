@@ -86,7 +86,7 @@ def _finding_from_dict(d: dict) -> Finding:
 # ---- save / load --------------------------------------------------------------
 
 def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
-         priority_paths, root_seeds, base_prefix, queue, scanned) -> None:
+         priority_paths, root_seeds, base_prefix, queue, scanned, start_offset=0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     state = {
         "version": 1,
@@ -99,6 +99,7 @@ def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
         "base_prefix": base_prefix,
         "queue": [list(q) for q in queue],
         "scanned": sorted(scanned),
+        "start_offset": start_offset,        # candidate index to resume the front prefix from
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state))

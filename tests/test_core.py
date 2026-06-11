@@ -511,6 +511,42 @@ class TestResume(unittest.TestCase):
         from origami.core import resume as R
         self.assertIsNone(R.load(Path("/nonexistent/nope.json")))
 
+    def test_start_offset_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        from origami.core import resume as R
+        from origami.core.evidence import TargetProfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "s.json"
+            R.save(path, profile=TargetProfile(host="h", base_url="http://h/"),
+                   findings=[], requests_made=0, folds=set(), words=[], exts=set(),
+                   priority_paths=[], root_seeds=[], base_prefix="/",
+                   queue=[("/a/", 1)], scanned=set(), start_offset=137)
+            self.assertEqual(R.load(path)["start_offset"], 137)
+
+    def test_bad_version_rejected(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from origami.core import resume as R
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "s.json"
+            path.write_text(json.dumps({"version": 99}))
+            self.assertIsNone(R.load(path))
+
+
+class TestDedup(unittest.TestCase):
+    def test_dedup_by_url_keeps_best_confidence(self):
+        from origami.core.response_classifier import Finding
+        from origami.core.scanner import _dedup_by_url
+        fs = [Finding("http://h/a", 200, 10, "", 0.4, "wordlist"),
+              Finding("http://h/a", 200, 10, "", 0.9, "memory"),
+              Finding("http://h/b", 200, 10, "", 0.5, "wordlist")]
+        out = {f.url: f for f in _dedup_by_url(fs)}
+        self.assertEqual(len(out), 2)                 # /a collapsed to one
+        self.assertEqual(out["http://h/a"].confidence, 0.9)
+        self.assertEqual(out["http://h/a"].origin, "memory")
+
 
 if __name__ == "__main__":
     unittest.main()

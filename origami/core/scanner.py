@@ -310,18 +310,22 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
                             base_prefix=state["base_prefix"], words=state["words"],
                             exts=state["exts"], priority_paths=state["priority_paths"],
                             root_seeds=state["root_seeds"], queue=list(state["queue"]),
-                            scanned=set(state["scanned"]), resume_path=resume_path)
+                            scanned=set(state["scanned"]), resume_path=resume_path,
+                            start_offset=state.get("start_offset", 0))
 
 
 async def _scan_loop(engine, profile, opts, observer, memory, control, result, *,
                      base_prefix, words, exts, priority_paths, root_seeds,
-                     queue, scanned, resume_path):
+                     queue, scanned, resume_path, start_offset=0):
     """The recursive directory walk + post-scan folds, checkpointed per prefix.
 
-    A prefix is added to `scanned` only after it's fully fired — if the scan is
-    interrupted (quit / request cap) mid-prefix, that prefix stays at the front
-    of the queue so a resume re-runs it from the start. State is flushed to
-    `resume_path` after every prefix so a hard kill loses at most one prefix.
+    A prefix is added to `scanned` only after every candidate fired. If the scan
+    is interrupted (quit / request cap) mid-prefix, the prefix stays at the front
+    of the queue AND the candidate offset reached is checkpointed, so a resume
+    continues that prefix from where it stopped (`start_offset`) rather than
+    re-running it whole. Findings are URL-deduped on every checkpoint so a
+    re-fired prefix can't duplicate the report. State is flushed after every
+    prefix, so a hard kill loses at most one (partial) prefix of progress.
     """
     recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
     queued: set[str] = {p for p, _ in queue} | scanned
@@ -337,14 +341,19 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     if economy and ranker is not None:
         observer.log("economy mode: ranking candidates by learned hit-rate "
                      "(request budget is tight)", 0, style="cyan")
+    # The candidate offset is only meaningful with a stable order — economy mode
+    # reshuffles per run, so there a partial prefix re-runs whole (dedup makes
+    # that harmless) instead of offset-resuming.
+    use_offset = not (economy and ranker is not None)
 
-    def _checkpoint():
+    def _checkpoint(offset=0):
         if resume_path is not None:
+            result.findings = _dedup_by_url(result.findings)
             resume_mod.save(resume_path, profile=profile, findings=result.findings,
                             requests_made=engine.total_requests, folds=result.folds,
                             words=words, exts=exts, priority_paths=priority_paths,
                             root_seeds=root_seeds, base_prefix=base_prefix,
-                            queue=queue, scanned=scanned)
+                            queue=queue, scanned=scanned, start_offset=offset)
 
     observer.phase("scan")
     interrupted = False
@@ -352,10 +361,12 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         if control.quit:
             observer.log("scan: quit requested — stopping", 0, style="yellow")
             interrupted = True
+            _checkpoint(0)
             break
         prefix, depth = queue.pop(0)
         if prefix in scanned:
             continue
+        offset, start_offset = start_offset, 0      # offset applies to the first popped prefix only
 
         if prefix != base_prefix:
             observer.directory(prefix, depth)
@@ -365,17 +376,19 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         cands = build_candidates(priority_paths if is_base else [], words, exts,
                                  extra_seeds=root_seeds if is_base else None)
         observer.log(f"scan {prefix} · {len(cands)} candidates"
-                     + (f" · depth {depth}" if depth else ""), 1)
+                     + (f" · depth {depth}" if depth else "")
+                     + (f" · resuming from {offset}" if offset else ""), 1)
         observer.start_prefix(prefix, len(cands))
-        confirmed, ancestors = await _scan_prefix(
+        confirmed, ancestors, consumed, hit_cap = await _scan_prefix(
             engine, profile, prefix, cands, result, opts, observer, control,
-            ranker=ranker, economy=economy)
+            ranker=ranker, economy=economy, skip=offset)
 
-        # Interrupted mid-prefix → leave it at the front for a clean resume.
-        if control.quit or engine.total_requests >= opts.max_requests:
+        # Interrupted mid-prefix → re-queue at the front with the offset reached
+        # (or 0 under economy, where the order isn't reproducible) for resume.
+        if hit_cap:
             queue.insert(0, (prefix, depth))
             interrupted = True
-            _checkpoint()
+            _checkpoint(consumed if use_offset else 0)
             break
         scanned.add(prefix)
 
@@ -394,7 +407,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
 
         _enqueue(ancestors, front=False)
         _enqueue(confirmed, front=True)
-        _checkpoint()
+        _checkpoint(0)
 
     result.requests_made = engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -474,6 +487,21 @@ async def _confirm(engine, profile, prefix, probe, origin):
     return finding
 
 
+def _dedup_by_url(findings):
+    """Collapse repeats of the same URL to the highest-confidence one.
+
+    Cheap and safe to run mid-scan — a resumed/re-fired prefix re-discovers URLs
+    already in the restored findings, so without this the report would balloon
+    with duplicates on every resume.
+    """
+    best: dict[str, Finding] = {}
+    for f in findings:
+        cur = best.get(f.url)
+        if cur is None or f.confidence > cur.confidence:
+            best[f.url] = f
+    return list(best.values())
+
+
 def _dedupe_and_collapse(findings, observer):
     """URL-dedup (keep best confidence) + collapse same-template collisions.
 
@@ -484,14 +512,10 @@ def _dedupe_and_collapse(findings, observer):
     representative + a count. The real content found by recursion (distinct
     lengths) is untouched.
     """
-    best: dict[str, Finding] = {}
-    for f in findings:
-        cur = best.get(f.url)
-        if cur is None or f.confidence > cur.confidence:
-            best[f.url] = f
+    deduped = _dedup_by_url(findings)
 
     clusters: dict[tuple, list] = defaultdict(list)
-    for f in best.values():
+    for f in deduped:
         clusters[(f.status, f.length)].append(f)
 
     out, collapsed = [], 0
@@ -523,33 +547,40 @@ def _report(observer, result, opts, finding, url) -> None:
 
 
 async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control,
-                       ranker=None, economy=False):
-    """Fire candidates under `prefix`. Returns (confirmed_dirs, ancestor_dirs):
-    confirmed dirs (a 403/301/trailing-slash response) are recursed first;
-    ancestor dirs (merely inferred from a deep file path) are speculative and
-    recursed only if budget remains — keeps a deep tree from starving the
-    high-value directories."""
+                       ranker=None, economy=False, skip=0):
+    """Fire candidates under `prefix`. Returns (confirmed_dirs, ancestor_dirs,
+    consumed, hit_cap): confirmed dirs (a 403/301/trailing-slash response) are
+    recursed first; ancestor dirs (merely inferred from a deep file path) are
+    speculative. `consumed` is the index of the next unfired candidate and
+    `hit_cap` is True when we stopped early on the request cap / quit — together
+    they let a resume continue this prefix from where it stopped (`skip`) instead
+    of re-running it whole."""
     confirmed_dirs: list[str] = []
     ancestor_dirs: list[str] = []
     first_hit_path: str | None = None
 
     # Economy mode: keep anchored candidates (memory/js/priority seeds) up front,
     # but reorder the generic wordlist tier by the bandit's learned hit-rate so
-    # the budget buys the most likely names first.
-    if economy and ranker is not None:
+    # the budget buys the most likely names first. Skipped when resuming a
+    # partial prefix (skip>0) so the candidate order matches the offset.
+    if economy and ranker is not None and skip == 0:
         anchored = [c for c in cands if c.origin != "wordlist"]
         wl = [c for c in cands if c.origin == "wordlist"]
         wl.sort(key=lambda c: -ranker.sample(word_of(c.path)))
         cands = anchored + wl
 
-    for cand in cands:
+    consumed = len(cands)
+    hit_cap = False
+    for idx in range(skip, len(cands)):
+        cand = cands[idx]
         if engine.total_requests >= opts.max_requests or control.quit:
+            consumed, hit_cap = idx, True       # stopped here — resume from idx
             break
         if control.skip_prefix:
             control.skip_prefix = False
             if observer.skippable:
                 observer.log(f"skip: {prefix} (next)", 0, style="yellow")
-                break
+                break                           # user skipped the dir → it's done
             # no directory discovered yet → skipping would just end the scan
             # (same as quit), so ignore it.
             observer.log("(n ignored — no subdirectory discovered yet; use q to quit)",
@@ -614,7 +645,7 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
 
     if first_hit_path:
         await bl.probe_case_sensitivity(engine, profile, first_hit_path)
-    return confirmed_dirs, ancestor_dirs
+    return confirmed_dirs, ancestor_dirs, consumed, hit_cap
 
 
 def _wordlist_path(opts: ScanOptions):

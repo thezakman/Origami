@@ -55,7 +55,7 @@ class Ranker:
 
     def _ab(self, word: str) -> tuple[float, float]:
         h, m = self.stats.get(word, (0, 0))
-        dh, dm = self._delta.get(word, (0, 0))
+        dh, dm = self._delta.get(word, (0, 0))   # list when present, tuple default — both unpack
         return self.prior_hit + h + dh, self.prior_miss + m + dm
 
     def expected(self, word: str) -> float:
