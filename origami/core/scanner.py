@@ -289,7 +289,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         api_paths = _scope_paths(api_paths, profile.host, opts.scope)
         if spec_url:
             root_seeds += [(p, "apidocs") for p in sorted(api_paths)]
-            observer.log(f"api-docs: OpenAPI/Swagger spec at {urlparse(spec_url).path} "
+            observer.log(f"api-docs: API spec/index at {urlparse(spec_url).path} "
                          f"→ {len(api_paths)} endpoints folded", 0, style="cyan")
 
     if opts.backups:
