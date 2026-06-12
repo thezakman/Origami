@@ -170,6 +170,14 @@ class Engine:
                     last_err = f"{type(e).__name__}: {e}"
                     self._note_pushback()
                     continue
+                except (ValueError, UnicodeError, httpx.InvalidURL) as e:
+                    # A malformed candidate URL — e.g. a wordlist/payload whose raw
+                    # chars (`${...}`, quotes, braces) break httpx/urllib URL
+                    # parsing — raises a NON-httpx error that retrying can't fix.
+                    # Skip just this one URL with an error probe so a single bad
+                    # candidate can't crash the whole scan.
+                    return Probe(url, method, 0, 0, 0, 0, "", "", 0, 0.0,
+                                 error=f"bad-url: {type(e).__name__}: {e}")
 
                 if probe.status in _PUSHBACK and attempt < self.cfg.max_retries:
                     self._note_pushback()

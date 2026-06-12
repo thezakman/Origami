@@ -63,7 +63,7 @@ def derive_vocabulary(paths) -> tuple[Counter, Counter]:
     names: Counter = Counter()
     exts: Counter = Counter()
     for p in paths:
-        if "://" in p:           # full CDN URL — don't tokenize host into vocab
+        if p.startswith(("http://", "https://")):   # full CDN URL — don't tokenize host into vocab
             p = p.split("://", 1)[1].split("/", 1)[-1]
         for seg in p.strip("/").split("/"):
             if not seg:
