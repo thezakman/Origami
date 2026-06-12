@@ -127,6 +127,8 @@ class ScanOptions:
     js: bool = True               # harvest endpoints from HTML/JS
     apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
     backups: bool = True          # VCS/dotfile probes + backup-name folding
+    extensions: list[str] = field(default_factory=list)  # user-forced extensions (".php" form)
+    ext_only: bool = False        # use ONLY `extensions` (ignore fingerprint + learned)
     max_folds: int = 40           # cap on learned vocabulary names folded into the scan
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
     economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
@@ -212,6 +214,12 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if fav is not None:
         observer.log(f"favicon mmh3={fav}", 1)
     exts, priority_paths, folds = fp.confirmed_actions(profile, kb)
+    # User-forced extensions (-X): replace the auto-detected set under --ext-only,
+    # else add to it. Propagates to calibration, candidates and recursion.
+    if opts.ext_only and opts.extensions:
+        exts = set(opts.extensions)
+    elif opts.extensions:
+        exts |= set(opts.extensions)
     result.folds = folds
     observer.fingerprint(profile, exts, folds)
 
@@ -298,7 +306,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     learned_names = list(dict.fromkeys(list(tgt) + learned_names))
     # extensions multiply the WHOLE wordlist, so they get a tighter cap.
     ext_cap = max(6, opts.max_folds // 8)
-    learned_exts = {e for e, _ in exts_ctr.most_common(ext_cap)} - exts
+    learned_exts = set() if opts.ext_only else (
+        {e for e, _ in exts_ctr.most_common(ext_cap)} - exts)
     exts |= learned_exts
 
     root_exts = (set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
@@ -430,7 +439,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         else:
             is_base = prefix == base_prefix
             cands = build_candidates(priority_paths if is_base else [], words, exts,
-                                     extra_seeds=root_seeds if is_base else None)
+                                     extra_seeds=root_seeds if is_base else None,
+                                     base_exts=([""] if opts.ext_only else None))
             if economy and ranker is not None:      # rank the wordlist tier (anchored seeds stay first)
                 anchored = [c for c in cands if c.origin != "wordlist"]
                 wl = [c for c in cands if c.origin == "wordlist"]

@@ -94,12 +94,15 @@ def build_candidates(
     words: list[str],
     enabled_extensions: set[str],
     extra_seeds: list[tuple[str, str]] | None = None,
+    base_exts: list[str] | None = None,
 ) -> list[Candidate]:
     """Ordered, de-duplicated candidate list for one prefix.
 
     P0 extra seeds (memory / js / backup) + evidence-derived priority paths →
     P1 word×tech-ext → P2 word×base-ext. `extra_seeds` is (path, origin).
+    `base_exts` overrides the generic P2 extension set (used by --ext-only).
     """
+    base_exts = BASE_EXTS if base_exts is None else base_exts
     seen: set[str] = set()
     out: list[Candidate] = []
 
@@ -118,7 +121,7 @@ def build_candidates(
         for ext in tech_exts:
             add(f"{w}{ext}", 1, "wordlist")
     for w in words:                                  # P2: generic extensions + dir probe
-        for ext in BASE_EXTS:
+        for ext in base_exts:
             add(f"{w}{ext}", 2, "wordlist")
         add(f"{w}/", 2, "wordlist")                  # trailing slash -> directory
 

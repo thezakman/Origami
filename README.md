@@ -54,6 +54,8 @@ Common flags:
 | flag | meaning |
 |---|---|
 | `-w FILE` | wordlist (default: curated ~280-word builtin; point at SecLists/Assetnote for exhaustive runs) |
+| `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
+| `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
 | `-d N` | recursion depth (default 1) |
 | `-c N` / `-t S` | concurrency / timeout |
 | `-k` | skip TLS verification |
