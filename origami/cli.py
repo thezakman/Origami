@@ -31,6 +31,20 @@ def _int_set(s: str | None) -> set[int] | None:
     return {int(x) for x in s.replace(" ", "").split(",") if x}
 
 
+def _ext_list(items) -> list[str]:
+    """`-X php,asp -X bak` (comma and/or repeated) → ['.php', '.asp', '.bak'],
+    normalized: stripped, leading-dot, lowercased, de-duplicated, order kept."""
+    out: list[str] = []
+    for raw in items or []:
+        for part in raw.split(","):
+            e = part.strip().lstrip(".").lower()
+            if e:
+                dotted = "." + e
+                if dotted not in out:
+                    out.append(dotted)
+    return out
+
+
 def _parse_headers(items) -> dict[str, str]:
     """`-H "Name: Value"` (repeatable) → header dict. Used for authenticated
     scans (Cookie:, Authorization:, custom headers)."""
@@ -118,7 +132,8 @@ async def run(args: argparse.Namespace) -> int:
         wordlist_path=args.wordlist, shortscan=shortscan,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
-        exclude=args.exclude or [], filters=_build_filters(args),
+        exclude=args.exclude or [], extensions=_ext_list(args.ext),
+        ext_only=args.ext_only, filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
@@ -129,6 +144,10 @@ async def run(args: argparse.Namespace) -> int:
     print(f"  targets  : {len(targets)}" + (f"  (list: {args.list})" if args.list else ""))
     print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
+    exts = _ext_list(args.ext)
+    if exts:
+        print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
+              + (" (only)" if args.ext_only else " (+ auto)"))
     print(f"  filters  : codes {fdesc}")
     if args.header:
         print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
@@ -230,6 +249,12 @@ def main() -> None:
     ap.add_argument("-t", "--timeout", type=float, default=10.0)
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
     ap.add_argument("-w", "--wordlist", help="path to wordlist (default: builtin base.txt)")
+    ap.add_argument("-X", "--ext", "--extensions", action="append", metavar="LIST",
+                    help="extensions to brute-force, comma list and/or repeatable "
+                         "(e.g. -X php,asp,bak); ADDED to the fingerprint-detected ones")
+    ap.add_argument("--ext-only", action="store_true",
+                    help="use ONLY the -X extensions (ignore fingerprint-detected and "
+                         "learned extensions)")
     ap.add_argument("--max-requests", type=int, default=0,
                     help="request budget per target (default 0 = unlimited); set N to cap "
                          "a slow/throttled target, or stop with q and --resume later")
@@ -313,6 +338,8 @@ def main() -> None:
         sys.exit(_show_history(args))
     if not args.url and not args.list:
         ap.error("give at least one target URL or --list FILE")
+    if args.ext_only and not args.ext:
+        ap.error("--ext-only requires -X/--ext (the extensions to use)")
     if args.wordlist and not Path(args.wordlist).is_file():
         ap.error(f"wordlist not found: {args.wordlist}")
     if args.list and not Path(args.list).is_file():

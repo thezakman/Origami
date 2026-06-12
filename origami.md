@@ -220,7 +220,7 @@ tests/
 - **multi-source KB ingestion** (`--update`: Wappalyzer catalog → KB rules, overlay wins on conflict);
 - **mid-scan resume** (`--resume`): checkpoint the loop state per directory, continue an interrupted run with no re-fingerprinting;
 - **contextual bandit** (`--economy`): Beta-Thompson candidate ranking by learned hit-rate, conditioned on confirmed techs, for request economy under WAFs;
-- scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins, `-x/--exclude` safety rail);
+- scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins, `-x/--exclude` safety rail, `-X/--ext` + `--ext-only` manual extensions);
 - pentest plumbing: custom headers (`-H`, authenticated scans), `-A` user-agent, `--proxy` (Burp/ZAP), AIMD adaptive concurrency + body-size cap;
 - **multi-target** scanning (`-l/--list`, multiple URLs), each scanned clean;
 - output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).

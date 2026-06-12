@@ -693,6 +693,36 @@ class TestApiDocs(unittest.TestCase):
         self.assertEqual(apidocs.extract_endpoints({"openapi": "3.0"}), set())
 
 
+class TestExtList(unittest.TestCase):
+    def test_normalizes_and_dedups(self):
+        from origami.cli import _ext_list
+        self.assertEqual(_ext_list(["php,asp"]), [".php", ".asp"])
+        self.assertEqual(_ext_list(["php", ".ASP", "php"]), [".php", ".asp"])
+        self.assertEqual(_ext_list(["bak, old "]), [".bak", ".old"])
+        self.assertEqual(_ext_list(None), [])
+        self.assertEqual(_ext_list([""]), [])
+
+
+class TestExtCandidates(unittest.TestCase):
+    def test_base_exts_override_for_ext_only(self):
+        from origami.core.scheduler import build_candidates
+        # ext_only path: P1 = user exts, P2 base reduced to just the bare word
+        cands = {c.path for c in build_candidates(
+            [], ["admin"], {".php"}, base_exts=[""])}
+        self.assertIn("admin.php", cands)        # P1 user extension
+        self.assertIn("admin", cands)            # P2 bare word
+        self.assertIn("admin/", cands)           # dir probe always
+        self.assertNotIn("admin.txt", cands)     # generic exts suppressed
+        self.assertNotIn("admin.html", cands)
+
+    def test_default_base_exts_keep_generics(self):
+        from origami.core.scheduler import build_candidates
+        cands = {c.path for c in build_candidates([], ["admin"], {".php"})}
+        self.assertIn("admin.php", cands)
+        self.assertIn("admin.txt", cands)        # default generic set kept
+        self.assertIn("admin.html", cands)
+
+
 class TestHeaderParse(unittest.TestCase):
     def test_parse_headers(self):
         from origami.cli import _parse_headers
