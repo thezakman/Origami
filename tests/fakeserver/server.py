@@ -65,6 +65,13 @@ EXISTING = {
                       b'"/internal/metrics":{"get":{}}}}'),
     "/api/v3/billing/invoices": ("application/json", b'{"invoices":[]}'),
     "/api/v3/internal/metrics": ("application/json", b'{"uptime":1234}'),
+    # JSON:API index (Drupal-style) → exercises the apidocs JSON:API fold.
+    "/jsonapi": ("application/vnd.api+json",
+                 b'{"jsonapi":{"version":"1.0"},"data":[],"links":{'
+                 b'"self":{"href":"/jsonapi"},'
+                 b'"node--secretdoc":{"href":"/jsonapi/node/secretdoc"},'
+                 b'"user--user":{"href":"/jsonapi/user/user"}}}'),
+    "/jsonapi/node/secretdoc": ("application/vnd.api+json", b'{"data":[{"id":"leak"}]}'),
 }
 PROTECTED = {"/web.config", "/bin/", "/admin/"}  # answer 403
 

@@ -1,13 +1,16 @@
-"""OpenAPI / Swagger discovery (§3.7 folding, API surface).
+"""API-surface discovery: OpenAPI / Swagger / JSON:API (§3.7 folding).
 
-Modern apps describe their whole API in a machine-readable spec, and it's almost
-always reachable unauthenticated at a well-known path. One `swagger.json` can
-list hundreds of endpoints a wordlist would never guess — so we probe the common
-spec locations, and when one parses, fold its declared paths in as high-value
-seeds (origin "apidocs"). The spec file itself is a finding worth reporting.
+Modern apps describe their whole API in a machine-readable document, almost
+always reachable unauthenticated at a well-known path. One file can list hundreds
+of endpoints a wordlist would never guess — so we probe the common locations,
+and when one parses, fold its declared paths in as high-value seeds (origin
+"apidocs"). The document itself is a finding worth reporting.
 
-Templated paths (`/users/{id}`) can't be fetched literally, so we seed the
-static prefix (`/users/`) as a directory; fully-static paths are seeded whole.
+Two shapes are understood:
+  * OpenAPI / Swagger — `paths` object (templated `/users/{id}` → seed the static
+    dir `/users/`; fully-static paths seeded whole), with `basePath`/`servers`;
+  * JSON:API — the Drupal-style `/jsonapi` index, whose `links` object lists
+    every resource collection URL.
 """
 
 from __future__ import annotations
@@ -15,18 +18,21 @@ from __future__ import annotations
 import json
 from urllib.parse import urljoin, urlparse
 
-# Common unauthenticated spec locations, ordered by prevalence across stacks
-# (Swagger UI defaults, springfox/springdoc, .NET Swashbuckle, NestJS, etc.).
+# Common unauthenticated locations, ordered by prevalence (Swagger UI defaults,
+# springfox/springdoc, .NET Swashbuckle, NestJS, then the JSON:API index).
 SPEC_PATHS = (
     "/swagger.json", "/swagger/v1/swagger.json", "/openapi.json", "/openapi.yaml",
     "/v2/api-docs", "/v3/api-docs", "/api-docs", "/api/swagger.json",
     "/api/openapi.json", "/api/v1/swagger.json", "/api/v2/api-docs",
     "/swagger-resources", "/.well-known/openapi.json", "/swagger/docs/v1",
+    "/jsonapi", "/jsonapi/index",          # JSON:API index (Drupal, etc.)
 )
+
+MAX_API_PATHS = 300                        # cap folded endpoints — a big API can be huge
 
 
 def _load(body: bytes) -> dict | None:
-    """Parse a spec body as JSON, then YAML; None if neither yields a dict."""
+    """Parse a body as JSON, then YAML; None if neither yields a dict."""
     try:
         d = json.loads(body)
     except (json.JSONDecodeError, ValueError):
@@ -37,6 +43,8 @@ def _load(body: bytes) -> dict | None:
             return None
     return d if isinstance(d, dict) else None
 
+
+# ---- OpenAPI / Swagger --------------------------------------------------------
 
 def _is_spec(d: dict) -> bool:
     return ("swagger" in d or "openapi" in d) and isinstance(d.get("paths"), dict)
@@ -58,7 +66,8 @@ def _base_prefix(spec: dict) -> str:
 
 
 def extract_endpoints(spec: dict) -> set[str]:
-    """Declared paths → root-absolute scan seeds (static prefix for templated)."""
+    """OpenAPI declared paths → root-absolute scan seeds (static prefix for
+    templated)."""
     paths = spec.get("paths")
     if not isinstance(paths, dict):
         return set()
@@ -76,11 +85,39 @@ def extract_endpoints(spec: dict) -> set[str]:
     return {p for p in out if p and p != "/"}
 
 
-async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, set[str]]:
-    """Probe spec locations; on the first that parses, return (spec_url, paths).
+# ---- JSON:API -----------------------------------------------------------------
 
-    `paths` includes the spec's own path, so the disclosure is reported too.
+def _is_jsonapi(d: dict, ctype: str = "") -> bool:
+    if "vnd.api+json" in (ctype or ""):
+        return True
+    return isinstance(d.get("jsonapi"), dict) and isinstance(d.get("links"), dict)
+
+
+def extract_jsonapi_links(d: dict) -> set[str]:
+    """JSON:API index `links` → root-absolute resource paths.
+
+    Each link value is either a URL string or a `{"href": url, ...}` object.
     """
+    links = d.get("links")
+    if not isinstance(links, dict):
+        return set()
+    out: set[str] = set()
+    for v in links.values():
+        href = v.get("href") if isinstance(v, dict) else (v if isinstance(v, str) else None)
+        if not isinstance(href, str):
+            continue
+        path = urlparse(href).path if "://" in href else href
+        if isinstance(path, str) and path.startswith("/") and path != "/":
+            out.add(path.split("?")[0].split("#")[0])
+    return out
+
+
+# ---- driver -------------------------------------------------------------------
+
+async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, set[str]]:
+    """Probe the API-document locations; on the first that parses (OpenAPI or
+    JSON:API), return (url, paths). `paths` includes the document's own path so
+    the disclosure is reported too."""
     for i, cand in enumerate(SPEC_PATHS, 1):
         if on_progress is not None:
             on_progress(i, len(SPEC_PATHS))
@@ -88,10 +125,16 @@ async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, 
         probe = await engine.fetch(url, keep_body=True)
         if not (probe.ok and probe.status == 200 and probe.body):
             continue
-        spec = _load(probe.body)
-        if spec is None or not _is_spec(spec):
+        doc = _load(probe.body)
+        if doc is None:
             continue
-        endpoints = extract_endpoints(spec)
-        endpoints.add("/" + cand.lstrip("/"))    # the spec file itself
+        if _is_spec(doc):
+            endpoints = extract_endpoints(doc)
+        elif _is_jsonapi(doc, probe.content_type):
+            endpoints = extract_jsonapi_links(doc)
+        else:
+            continue
+        endpoints = set(sorted(endpoints)[:MAX_API_PATHS])
+        endpoints.add("/" + cand.lstrip("/"))    # the document itself
         return url, endpoints
     return None, set()

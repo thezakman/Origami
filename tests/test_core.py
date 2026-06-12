@@ -692,6 +692,26 @@ class TestApiDocs(unittest.TestCase):
         from origami.modules.discovery import apidocs
         self.assertEqual(apidocs.extract_endpoints({"openapi": "3.0"}), set())
 
+    def test_jsonapi_detect_and_extract(self):
+        from origami.modules.discovery import apidocs
+        doc = {"jsonapi": {"version": "1.0"}, "data": [], "links": {
+            "self": {"href": "https://h/jsonapi"},
+            "node--article": {"href": "https://h/jsonapi/node/article?page=1"},
+            "user--user": {"href": "https://h/jsonapi/user/user"},
+            "weird": "https://h/jsonapi/taxonomy_term/tags"}}
+        self.assertTrue(apidocs._is_jsonapi(doc))
+        eps = apidocs.extract_jsonapi_links(doc)
+        self.assertIn("/jsonapi/node/article", eps)      # query stripped
+        self.assertIn("/jsonapi/user/user", eps)
+        self.assertIn("/jsonapi/taxonomy_term/tags", eps)  # bare-string link
+        self.assertNotIn("/", eps)
+
+    def test_jsonapi_by_content_type(self):
+        from origami.modules.discovery import apidocs
+        # no 'jsonapi' key, but the vnd.api+json content-type identifies it
+        self.assertTrue(apidocs._is_jsonapi({"data": []}, "application/vnd.api+json"))
+        self.assertFalse(apidocs._is_jsonapi({"data": []}, "application/json"))
+
 
 class TestExtList(unittest.TestCase):
     def test_normalizes_and_dedups(self):
