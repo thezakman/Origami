@@ -30,8 +30,12 @@ PRIOR_MISS = 4.0
 def word_of(path: str) -> str:
     """The candidate's basename without extension, lowercased — the unit that
     generalizes across hosts (``/api/login.aspx`` and ``/login`` share ``login``)."""
-    last = urlparse(path).path.rstrip("/").rsplit("/", 1)[-1] if "://" in path \
-        else path.rstrip("/").rsplit("/", 1)[-1]
+    # startswith, NOT `"://" in path`: a wordlist/payload candidate whose path
+    # merely CONTAINS `://` (e.g. an OGNL `${...http://x...}`) is still relative,
+    # and running urlparse on arbitrary payload chars is best avoided.
+    last = (urlparse(path).path.rstrip("/").rsplit("/", 1)[-1]
+            if path.startswith(("http://", "https://"))
+            else path.rstrip("/").rsplit("/", 1)[-1])
     if "." in last:
         last = last.rsplit(".", 1)[0]
     return last.lower()

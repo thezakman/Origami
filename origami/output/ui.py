@@ -236,7 +236,11 @@ class RichUI(NullObserver):
         # are never truncated or lost, unlike a fixed-height table.
         self.findings.append(f)
         style = _status_style(f.status)
-        ostyle = ORIGIN_STYLE.get(f.origin, "white")
+        # 2xx = accessible content (a real hit) → bright origin. 401/403/3xx =
+        # "exists but blocked / redirect" → dim the origin so the eye doesn't
+        # read a forbidden path as a successful find.
+        accessible = 200 <= f.status < 300
+        ostyle = ORIGIN_STYLE.get(f.origin, "white") if accessible else "dim"
         tags = _tag_markup(getattr(f, "tags", []))
         note = f" [dim]({f.note})[/]" if getattr(f, "note", "") else ""
         # fixed-width columns first, URL last → everything lines up cleanly.
@@ -432,8 +436,11 @@ class PlainLiveObserver(NullObserver):
 
     def finding(self, f) -> None:
         tags = f" \x1b[1;31m[{','.join(f.tags)}]\x1b[0m" if getattr(f, "tags", None) else ""
-        self._emit(f"\x1b[32m+\x1b[0m {f.status}  \x1b[2m{f.length:>8}B\x1b[0m  "
-                   f"{f.origin:<9} \x1b[2m{f.confidence:.2f}\x1b[0m {self.disp(f.url)}{tags}")
+        accessible = 200 <= f.status < 300
+        marker = "\x1b[32m+\x1b[0m" if accessible else "\x1b[33m·\x1b[0m"   # + accessible / · blocked
+        origin = f"{f.origin:<9}" if accessible else f"\x1b[2m{f.origin:<9}\x1b[0m"
+        self._emit(f"{marker} {f.status}  \x1b[2m{f.length:>8}B\x1b[0m  "
+                   f"{origin} \x1b[2m{f.confidence:.2f}\x1b[0m {self.disp(f.url)}{tags}")
 
     def directory(self, prefix: str, depth: int) -> None:
         self._emit(f"\x1b[1;35m==>\x1b[0m directory {prefix} \x1b[2m(depth {depth})\x1b[0m")

@@ -77,7 +77,7 @@ def extract_paths(body: bytes, base_url: str) -> set[str]:
         s = _clean(s)
         if s is None:
             return
-        if "://" in s:                      # absolute URL
+        if s.startswith(("http://", "https://")):   # absolute URL
             u = urlparse(s)
             if u.netloc and not same_site(u.netloc, host):
                 return                       # third party → drop

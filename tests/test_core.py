@@ -72,6 +72,43 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestUrlRobustness(unittest.TestCase):
+    """A wordlist/payload candidate whose path contains `://` (a Struts2 OGNL
+    `${...http://x...}`) must not be mistaken for an absolute URL and must never
+    crash the scan — the bug that killed a 10-minute run at request 1523."""
+
+    def test_join_candidate_payload_with_internal_scheme(self):
+        from origami.core.scanner import _join_candidate
+        root = "https://h/"
+        payload = "${(x)://(y)}"
+        u = _join_candidate(root, "lms/", payload)
+        self.assertTrue(u.startswith("https://h/lms/"))   # absolute, under prefix
+        self.assertEqual(_join_candidate(root, "/", "https://cdn/x"), "https://cdn/x")
+        self.assertEqual(_join_candidate(root, "deep/", "/admin"), "https://h/admin")
+
+    def test_scope_keeps_payload_relative(self):
+        from origami.core.scanner import _scope_paths
+        self.assertIn("/${(x)://(y)}", _scope_paths(["/${(x)://(y)}"], "h", "host"))
+        # a real CDN absolute URL is still dropped in host scope
+        self.assertNotIn("https://cdn/x", _scope_paths(["https://cdn/x"], "h", "host"))
+
+    def test_word_of_payload_no_crash(self):
+        from origami.brain.bandit import word_of
+        self.assertIsInstance(word_of("${(x)://(y)}.aspx"), str)
+
+    def test_fetch_survives_malformed_url(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig
+
+        async def go():
+            async with Engine(EngineConfig(max_retries=0)) as e:
+                return await e.fetch("${(x)://(y)}")      # never raises → error probe
+
+        p = asyncio.run(go())
+        self.assertFalse(p.ok)
+        self.assertEqual(p.status, 0)
+
+
 class TestLiveProgress(unittest.TestCase):
     def _ui(self):
         try:

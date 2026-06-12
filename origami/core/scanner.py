@@ -61,6 +61,25 @@ def _host_root(url: str) -> str:
     return f"{p.scheme}://{p.netloc}/"
 
 
+def _join_candidate(root: str, prefix: str, path: str) -> str:
+    """Build the absolute URL for a candidate path.
+
+    An absolute-URL candidate (a same-site CDN seed) is used as-is; a leading-/
+    path is root-absolute; anything else resolves under `prefix`.
+
+    Uses `startswith`, NOT `"://" in path`: a wordlist/payload candidate whose
+    body merely CONTAINS `://` (e.g. a Struts2 OGNL `${...http://x...}`) is still
+    a relative path — treating it as an absolute URL sends a schemeless URL to
+    httpx and crashes the scan. Here it becomes `https://host/${...}` (absolute),
+    which is what a vuln payload should be anyway.
+    """
+    if path.startswith(("http://", "https://")):
+        return path
+    if path.startswith("/"):
+        return urljoin(root, path.lstrip("/"))
+    return urljoin(root, prefix.lstrip("/") + path)
+
+
 def _excluded(path: str, opts) -> bool:
     """True if `path` matches a user `--exclude` pattern (case-insensitive
     substring) — never fired, never recursed. Safety rail for destructive or
@@ -107,14 +126,15 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
     """
     out: set[str] = set()
     for p in paths:
-        if "://" in p:                       # same-site CDN full URL (js kept it)
+        if p.startswith(("http://", "https://")):   # same-site CDN full URL (js kept it)
             if scope == "site" and same_site(urlparse(p).netloc, host):
                 out.add(p)
             continue
         if p.startswith("//"):
             continue
         if p.lstrip("/"):
-            out.add(p)                       # keep leading-/ (root-abs vs relative)
+            out.add(p)                       # keep leading-/ (root-abs vs relative); a
+            #                                  payload with an internal :// stays relative
     return out
 
 
@@ -656,15 +676,9 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
                          0, style="dim")
         # Join against the host root so a base path like /lms/ never doubles.
         # A full URL (same-site CDN, scope=site) is fetched as-is; a leading-/
-        # seed is root-absolute; a relative seed (Angular-style templateUrl)
-        # resolves under the current app prefix.
-        root = _host_root(profile.base_url)
-        if "://" in cand.path:
-            url = cand.path
-        elif cand.path.startswith("/"):
-            url = urljoin(root, cand.path.lstrip("/"))
-        else:
-            url = urljoin(root, prefix.lstrip("/") + cand.path)
+        # seed is root-absolute; a relative seed (Angular-style templateUrl, or a
+        # payload with an internal ://) resolves under the current app prefix.
+        url = _join_candidate(_host_root(profile.base_url), prefix, cand.path)
         if _excluded(urlparse(url).path, opts):     # safety rail — never fire it
             observer.tick(hit=False)
             continue

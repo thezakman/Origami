@@ -59,7 +59,7 @@ def _base_prefix(spec: dict) -> str:
     servers = spec.get("servers")
     if isinstance(servers, list) and servers and isinstance(servers[0], dict):
         url = servers[0].get("url", "")
-        path = urlparse(url).path if "://" in url else url
+        path = urlparse(url).path if url.startswith(("http://", "https://")) else url
         if isinstance(path, str) and path.startswith("/"):
             return path.rstrip("/")
     return ""
@@ -106,7 +106,7 @@ def extract_jsonapi_links(d: dict) -> set[str]:
         href = v.get("href") if isinstance(v, dict) else (v if isinstance(v, str) else None)
         if not isinstance(href, str):
             continue
-        path = urlparse(href).path if "://" in href else href
+        path = urlparse(href).path if href.startswith(("http://", "https://")) else href
         if isinstance(path, str) and path.startswith("/") and path != "/":
             out.add(path.split("?")[0].split("#")[0])
     return out
