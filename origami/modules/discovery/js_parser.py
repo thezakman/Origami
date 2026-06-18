@@ -68,6 +68,39 @@ def _clean(raw: str) -> str | None:
     return raw
 
 
+# URLs / paths inside response-header values (CSP, Link).
+_HDR_ABS = re.compile(r"https?://[^\s;,'\"<>()]+")
+_HDR_PATH = re.compile(r"[<\s;,](/[A-Za-z0-9_\-./%~]{2,100})")
+
+
+def extract_header_paths(headers: dict, base_url: str) -> set[str]:
+    """Endpoints declared in response headers — free recon, no extra request.
+
+    CSP (connect-src/form-action) and the Link header (rel=preload/prefetch)
+    routinely name real same-host endpoints; we pull those out and scope them
+    like any other seed.
+    """
+    host = urlparse(base_url).netloc
+    out: set[str] = set()
+    for name in ("content-security-policy", "content-security-policy-report-only",
+                 "link", "x-pingback"):
+        val = headers.get(name, "")
+        if not val:
+            continue
+        for m in _HDR_ABS.findall(val):
+            u = urlparse(m)
+            if u.netloc and not same_host(u.netloc, host):
+                continue                          # cross-host origin → drop
+            p = _clean((u.path or "").split("?")[0])
+            if p and p.startswith("/") and p != "/":
+                out.add(p)
+        for m in _HDR_PATH.findall(val):
+            p = _clean(m.split("?")[0].split("#")[0])
+            if p and p.startswith("/") and p != "/":
+                out.add(p)
+    return out
+
+
 def extract_paths(body: bytes, base_url: str) -> set[str]:
     """Return same-host candidate paths (relative to base) found in `body`."""
     host = urlparse(base_url).netloc

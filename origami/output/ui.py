@@ -95,6 +95,7 @@ ORIGIN_STYLE = {
     "backup": "red", "robots": "green", "priority": "cyan",
     "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
     "apidocs": "bright_blue", "wellknown": "bright_cyan", "graphql": "bright_magenta",
+    "header": "blue",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.

@@ -54,7 +54,7 @@ MAX_HARVEST_SEEDS = 2000
 
 # Origins whose paths are root-absolute (joined from the host root, not the
 # current prefix) — harvested references point at app-root paths.
-_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown"}
+_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown", "header"}
 
 
 def _host_root(url: str) -> str:
@@ -296,6 +296,19 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         if js_params:
             observer.log(f"params: {len(js_params)} parameter names harvested "
                          f"(pentest input surface)", 0, style="cyan")
+
+    # Endpoints declared in the root response headers (CSP, Link) — free, no
+    # extra request. Available even when there's no HTML body to harvest.
+    if opts.js:
+        hdr_paths = _scope_paths(js_parser.extract_header_paths(root.headers, base_url),
+                                 profile.host, opts.scope)
+        if hdr_paths:
+            root_seeds += [(p, "header") for p in sorted(hdr_paths)]
+            js_paths |= hdr_paths                     # feed the vocabulary fold too
+            observer.log(f"headers: {len(hdr_paths)} endpoints from CSP/Link", 1, style="cyan")
+            if opts.graph:
+                src = urlparse(base_url).path or "/"
+                result.edges += [(src, p) for p in sorted(hdr_paths)]
 
     # robots.txt + sitemap.xml — free passive intel
     robots_raw = await _guard(observer, "robots", robots.harvest(engine, base_url), set())

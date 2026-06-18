@@ -214,7 +214,7 @@ tests/
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
 - scoped recursion + parent-directory recursion from deep hits;
 - **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**);
-- **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **parameter** intel; **backups/VCS**; **robots/sitemap**; **OpenAPI/Swagger + JSON:API** spec discovery; **`.well-known/`** (OIDC/OAuth auth-endpoint folding + security.txt); **GraphQL introspection** (confirms the endpoint + harvests schema fields);
+- **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **CSP/Link header** endpoints + **parameter** intel; **backups/VCS**; **robots/sitemap**; **OpenAPI/Swagger + JSON:API** spec discovery; **`.well-known/`** (OIDC/OAuth auth-endpoint folding + security.txt); **GraphQL introspection** (confirms the endpoint + harvests schema fields);
 - **vocabulary folding** (names+extensions from references + host/subdomain/path);
 - **SQLite memory**: **k-NN over fingerprint vectors** + **association mining** + cross-target priming + `--history`;
 - **multi-source KB ingestion** (`--update`: Wappalyzer catalog → KB rules, overlay wins on conflict);
