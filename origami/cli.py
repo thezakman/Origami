@@ -117,7 +117,8 @@ def _write_outputs(args, result, target, multi: bool) -> None:
         d = str(Path(args.out) / _slug(target)) if multi else args.out
         info = artifacts.write_artifacts(result, d)
         print(f"[+] artifacts written to {info['dir']}/ "
-              f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
+              f"(report.html, graph.html [{info['hidden']} hidden], findings.json, "
+              f"params.txt={info['params']}, urls.txt={info['urls']})")
     if args.graph:
         path = _suffix(args.graph, _slug(target)) if multi else args.graph
         hp, dp, n_hidden = graph.write(result, path)
@@ -138,7 +139,8 @@ async def run(args: argparse.Namespace) -> int:
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         exclude=args.exclude or [], extensions=_ext_list(args.ext),
-        ext_only=args.ext_only, graph=bool(args.graph), filters=_build_filters(args),
+        ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
+        filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()

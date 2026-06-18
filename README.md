@@ -115,7 +115,7 @@ checkpoint so repeated resumes never duplicate the report.
 ## Output
 
 - **Live dashboard** — findings stream as permanent lines under a pinned status bar with phase, req/s, hits, duration, the adaptive concurrency (drops as `⤓conc N` under WAF backoff) and `==> directory` markers.
-- **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable), `params.txt` (harvested parameter surface — a drop-in fuzzing list) and `urls.txt`.
+- **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable, links to the graph), **`graph.html`** (endpoint topology with an "only hidden" filter) + `graph.dot`, `params.txt` (harvested parameter surface — a drop-in fuzzing list) and `urls.txt`.
 
 The final report groups findings by confidence, tagged by kind (`disclosure`, `config`, `api`, `admin`, `auth`, `source`) and coloured by where each came from (`js`, `robots`, `backup`, `wordlist`, `memory`, `shortscan`…):
 
