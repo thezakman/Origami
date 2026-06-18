@@ -956,7 +956,8 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
-        for label, method, rpath, headers in bypass403.variants(path):
+        ci = profile.case_sensitive is False
+        for label, method, rpath, headers in bypass403.variants(path, case_insensitive=ci):
             if opts.max_requests and engine.total_requests >= opts.max_requests:
                 return
             url = urljoin(root, rpath.lstrip("/"))
@@ -967,6 +968,8 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
                 continue                                  # 2xx with actual content only
             if hamming(probe.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
                 continue                                  # just the homepage — not a bypass
+            if f.simhash and hamming(probe.body_simhash, f.simhash) <= bl.SIMHASH_MISS_DISTANCE:
+                continue                                  # same body as the 403 page — only the status flipped
             if await _confirm(engine, profile, prefix, probe, "bypass403") is None:
                 continue                                  # soft-404 / catch-all
             bf = Finding(f.url, probe.status, probe.length, probe.content_type, 0.9,

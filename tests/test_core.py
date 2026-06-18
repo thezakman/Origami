@@ -117,6 +117,31 @@ class TestBypass403(unittest.TestCase):
         v = variants("/x")
         paths = [(m, meth, frozenset(h.items())) for lbl, meth, m, h in v]
         self.assertEqual(len(paths), len(set(paths)))    # no duplicate variants
+        # the no-op (plain GET of the path, no headers) is never emitted
+        self.assertFalse(any(meth == "GET" and m == "/x" and not h
+                             for _, meth, m, h in v))
+
+    def test_variants_drop_useless_fragment(self):
+        # a trailing '#' fragment is never sent to the server → useless variant
+        from origami.modules.bypass403 import variants
+        self.assertFalse(any("#" in m for _, _, m, _ in variants("/admin")))
+
+    def test_variants_skip_case_tricks_on_insensitive_host(self):
+        # on a case-insensitive (IIS) ACL, upper/swapcase hit the same resource
+        from origami.modules.bypass403 import variants
+        cs = {m for _, _, m, _ in variants("/AdMin", case_insensitive=False)}
+        ci = {m for _, _, m, _ in variants("/AdMin", case_insensitive=True)}
+        self.assertIn("/ADMIN", cs)                      # case mutation present when sensitive
+        self.assertNotIn("/ADMIN", ci)                   # dropped when insensitive
+        self.assertTrue(ci.issubset(cs))                 # ci is strictly a subset
+
+    def test_variants_cover_new_techniques(self):
+        from origami.modules.bypass403 import variants
+        v = variants("/admin")
+        paths = {m for _, _, m, _ in v}
+        for expected in ("/./admin", "/admin;/", "/admin/..;/", "/%2e/admin"):
+            self.assertIn(expected, paths)
+        self.assertTrue(any(h.get("Referer") for _, _, _, h in v))
 
 
 class TestSitemapIndex(unittest.TestCase):
