@@ -208,6 +208,20 @@ class Memory:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def recall_names(self, limit: int = 2000) -> list[str]:
+        """Distinct file/dir basenames (extension stripped) seen across ALL past
+        targets — the cross-target name corpus that lets the shortscan completer
+        reverse an 8.3 prefix into a real name it has met before (§4 loop)."""
+        names: set[str] = set()
+        for (path,) in self.db.execute("SELECT DISTINCT path FROM corpus"):
+            base = (path or "").rstrip("/").rsplit("/", 1)[-1]
+            if "." in base:
+                base = base.rsplit(".", 1)[0]
+            base = base.lower()
+            if 3 <= len(base) <= 40 and base.replace("_", "").replace("-", "").isalnum():
+                names.add(base)
+        return sorted(names)[:limit]
+
     # ---- persistence -------------------------------------------------------
 
     def record_run(self, profile, result) -> int:

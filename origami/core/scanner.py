@@ -443,7 +443,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # 3. shortscan fold (IIS 8.3) — high-value seeds before the generic scan
     if _should_shortscan(opts, folds):
         await _guard(observer, "shortscan",
-                     _shortscan_pass(engine, profile, base_url, words, result, opts, observer),
+                     _shortscan_pass(engine, profile, base_url, words, result, opts,
+                                     observer, memory),
                      None)
 
     # 4. recursive scan + folds (checkpointed) -----------------------------
@@ -961,7 +962,8 @@ def _should_shortscan(opts: ScanOptions, folds: set[str]) -> bool:
     return "shortscan" in folds          # auto: IIS confirmed the fold
 
 
-async def _shortscan_pass(engine, profile, base_url, words, result, opts, observer) -> None:
+async def _shortscan_pass(engine, profile, base_url, words, result, opts, observer,
+                          memory=None) -> None:
     """Gate on shortscan's own vuln check, expand 8.3 names, scan the seeds."""
     observer.phase("shortscan")
     res = await shortname.run_shortscan(
@@ -988,10 +990,18 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
                      + (f" → {e.fullname}" if e.fullname else ""), 2)
 
     tech_exts = tuple(sorted(profile.enabled_extensions))
-    cands = shortname.expand(res.entries, words, tech_exts)
+    # Cross-target memory: real names seen on past targets help reverse an 8.3
+    # prefix into a name we've met before (§4 learning loop). Folded into both
+    # the constraint-filter and the n-gram corpus.
+    mem_names = memory.recall_names() if memory is not None else []
+    if mem_names:
+        observer.log(f"shortscan: {len(mem_names)} names recalled from past scans "
+                     f"(cross-target completion)", 1, style="cyan")
+    sc_words = list(dict.fromkeys(list(words) + mem_names))
+    cands = shortname.expand(res.entries, sc_words, tech_exts)
 
     # Regime 2: n-gram completion of truncated prefixes the wordlist can't cover.
-    ng = NGram(order=3).train(words)
+    ng = NGram(order=3).train(sc_words)
     gen_exts = tech_exts or (".aspx", ".asmx", ".ashx", "")
     n_gen = 0
     for e in res.entries:
