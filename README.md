@@ -25,6 +25,7 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
 - **Vocabulary folding** — the org's own names and extensions (from JS/robots/sitemap **and** the host/subdomain/path) become scan vocabulary.
 - **IIS 8.3 shortscan** — drives the [`shortscan`](https://github.com/thezakman/shortscan) binary, constraint-filters the wordlist, tries the raw 8.3 name and the prefix as dir/file, and **completes truncated names with a character n-gram model** (`APIINT~1` → `apiintegracao`).
 - **WAF / block-page detection** (F5 ASM, Cloudflare, Imperva, Akamai, ModSecurity, Sucuri…) — block pages never become findings, and the WAF shows in the fingerprint.
+- **HTTP method discovery.** One OPTIONS request flags dangerous verbs enabled in production — PUT/DELETE, TRACE/TRACK (XST), PATCH, and the WebDAV set (PROPFIND/MKCOL/MOVE/COPY).
 - **Smart noise control** — 404/400 are never hits; redirects that leave the path (auth walls) are dropped; identical-content collisions collapse; deep hits reveal their parent directories for recursion.
 - **Cross-target memory** — SQLite corpus primes new scans from past ones; the n-gram completer improves as it grows.
 - **Endpoint graph** (`--graph`) — turns the harvested references into a self-contained HTML graph (who references whom) that highlights **orphan/hidden endpoints**: paths reachable only from JavaScript or an API spec, never linked from a page — often the interesting ones.
