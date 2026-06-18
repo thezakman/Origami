@@ -38,6 +38,17 @@ class TestSimhash(unittest.TestCase):
         b = b"<html><body>welcome dashboard reports settings logout</body></html>"
         self.assertGreater(hamming(simhash(a), simhash(b)), 3)
 
+    def test_volatile_comment_with_inner_gt_dropped(self):
+        # A comment carrying a literal '>' (IE-conditional, "a > b") must be
+        # dropped WHOLE — the generic <[^>]+> tag rule alone would truncate at
+        # the inner '>', leaking the volatile tail into the structural hash.
+        a = b"<html><body><h1>App</h1><!-- build 12345 > rev aaaaaa --></body></html>"
+        b = b"<html><body><h1>App</h1><!-- build 99999 > rev zzzzzz --></body></html>"
+        self.assertEqual(hamming(simhash(a), simhash(b)), 0)
+        c = b"<!--[if lt IE 9]><script src=x.js?v=111></script><![endif]--><h1>Home</h1>"
+        d = b"<!--[if lt IE 9]><script src=x.js?v=222></script><![endif]--><h1>Home</h1>"
+        self.assertEqual(hamming(simhash(c), simhash(d)), 0)
+
 
 class TestClassify(unittest.TestCase):
     def _profile_with_baseline(self, miss_body=b"<html>not found</html>", status=404):
