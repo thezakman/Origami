@@ -134,18 +134,25 @@ _FOLLOW_EXT = (".js", ".mjs", ".map")
 
 
 async def harvest(engine, base_url: str, root_body: bytes,
-                  max_scripts: int = 40, on_progress=None) -> tuple[set[str], set[str]]:
+                  max_scripts: int = 40,
+                  on_progress=None) -> tuple[set[str], set[str], list[tuple[str, str]]]:
     """Parse the root body and same-host scripts, following JS→JS references
     (webpack chunks, source maps) up to a fetch budget.
 
-    Returns (paths, params): paths to scan, plus query/template parameter names
-    harvested as pentest input-surface intel.
+    Returns (paths, params, edges): paths to scan, query/template parameter
+    names (pentest input-surface intel), and provenance edges
+    (source_path, target_path) — root→script, root→path, script→path — for the
+    endpoint graph.
     """
     host = urlparse(base_url).netloc
+    root_src = urlparse(base_url).path or "/"
     paths = extract_paths(root_body, base_url)
     params = extract_params(root_body)
+    edges: list[tuple[str, str]] = [(root_src, p) for p in paths]
 
-    queue = list(script_urls(root_body, base_url, limit=max_scripts))
+    scripts = list(script_urls(root_body, base_url, limit=max_scripts))
+    edges += [(root_src, urlparse(s).path) for s in scripts]       # root → <script src>
+    queue = list(scripts)
     queue += [urljoin(base_url, p) for p in paths
               if p.endswith(_FOLLOW_EXT) and not _is_vendor(p)]
     seen: set[str] = set()
@@ -158,13 +165,16 @@ async def harvest(engine, base_url: str, root_body: bytes,
         pr = await engine.fetch(url, keep_body=True)
         fetched += 1
         if pr.ok and pr.body:
-            paths |= extract_paths(pr.body, base_url)
+            src = urlparse(url).path                                # the script we're in
+            new = extract_paths(pr.body, base_url)
+            paths |= new
             params |= extract_params(pr.body)
-            for np in extract_paths(pr.body, base_url):
+            edges += [(src, np) for np in new]                      # script → path
+            for np in new:
                 if np.endswith(_FOLLOW_EXT) and not _is_vendor(np):
                     nxt = urljoin(base_url, np)
                     if nxt not in seen:
                         queue.append(nxt)
         if on_progress is not None:        # fills the live bar as scripts are scraped
             on_progress(fetched, min(max_scripts, fetched + len(queue)))
-    return paths, params
+    return paths, params, edges

@@ -26,6 +26,7 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
 - **WAF / block-page detection** (F5 ASM, Cloudflare, Imperva, Akamai, ModSecurity, Sucuri…) — block pages never become findings, and the WAF shows in the fingerprint.
 - **Smart noise control** — 404/400 are never hits; redirects that leave the path (auth walls) are dropped; identical-content collisions collapse; deep hits reveal their parent directories for recursion.
 - **Cross-target memory** — SQLite corpus primes new scans from past ones; the n-gram completer improves as it grows.
+- **Endpoint graph** (`--graph`) — turns the harvested references into a self-contained HTML graph (who references whom) that highlights **orphan/hidden endpoints**: paths reachable only from JavaScript or an API spec, never linked from a page — often the interesting ones.
 - **Pentest-ready output** — live `rich` dashboard (streaming, never loses findings), JSON, self-contained HTML report, and a `--out` directory with `params.txt` / `urls.txt` for the next tool.
 
 ## Install
@@ -72,6 +73,7 @@ Common flags:
 | `-v` / `-vv` | verbose: phases & hits / every request |
 | `-F` | show full URLs instead of paths |
 | `--json FILE` / `--html FILE` / `--out DIR` | reports & artifacts |
+| `--graph FILE` | endpoint graph (provenance + orphan/hidden endpoints) → FILE.html + FILE.dot |
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |
 | `--resume` | continue an interrupted scan from its checkpoint |

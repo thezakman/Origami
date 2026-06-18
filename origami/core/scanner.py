@@ -153,6 +153,7 @@ class ScanOptions:
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
     economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
     exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
+    graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     filters: Filters = field(default_factory=Filters)
 
 
@@ -174,6 +175,7 @@ class ScanResult:
     folds: set[str] = field(default_factory=set)
     pushbacks: int = 0            # 429/reset events — target throttled us
     completed: bool = False       # False if interrupted (quit/cap) → resumable
+    edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -276,14 +278,16 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     if opts.js and root.body:
         observer.phase("js-harvest")
-        js_paths, js_params = await _guard(observer, "js-harvest",
+        js_paths, js_params, js_edges = await _guard(observer, "js-harvest",
                                            js_parser.harvest(engine, base_url, root.body,
                                                              on_progress=observer.progress),
-                                           (set(), set()))
+                                           (set(), set(), []))
         js_paths = _scope_paths(js_paths, profile.host, opts.scope)   # scope discipline
         js_paths = set(sorted(js_paths)[:MAX_HARVEST_SEEDS])          # cap the blast radius
         root_seeds += [(p, "js") for p in sorted(js_paths)]
         profile.parameters |= js_params
+        if opts.graph:
+            result.edges += js_edges
         if js_paths:
             observer.log(f"js: {len(js_paths)} same-host endpoints harvested from HTML/JS",
                          1, style="cyan")
@@ -297,6 +301,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if robots_paths:
         root_seeds += [(p, "robots") for p in sorted(robots_paths)]
         observer.log(f"robots/sitemap: {len(robots_paths)} paths", 1, style="cyan")
+        if opts.graph:
+            result.edges += [("/robots.txt", p) for p in sorted(robots_paths)]
 
     # OpenAPI/Swagger spec → fold the whole declared API surface in as seeds.
     api_paths: set[str] = set()
@@ -311,6 +317,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             root_seeds += [(p, "apidocs") for p in sorted(api_paths)]
             observer.log(f"api-docs: API spec/index at {urlparse(spec_url).path} "
                          f"→ {len(api_paths)} endpoints folded", 0, style="cyan")
+            if opts.graph:
+                spec_path = urlparse(spec_url).path
+                result.edges += [(spec_path, p) for p in sorted(api_paths) if p != spec_path]
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]

@@ -22,7 +22,7 @@ from origami.core import resume as resume_mod
 from origami.core.httpclient import Engine, EngineConfig
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
-from origami.output import artifacts, html_report, json_report, ui
+from origami.output import artifacts, graph, html_report, json_report, ui
 
 
 def _int_set(s: str | None) -> set[int] | None:
@@ -118,6 +118,11 @@ def _write_outputs(args, result, target, multi: bool) -> None:
         info = artifacts.write_artifacts(result, d)
         print(f"[+] artifacts written to {info['dir']}/ "
               f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
+    if args.graph:
+        path = _suffix(args.graph, _slug(target)) if multi else args.graph
+        hp, dp = graph.write(result, path)
+        print(f"[+] endpoint graph written to {hp} (+ {Path(dp).name}) · "
+              f"{len(graph.orphans(graph.build(result)))} hidden endpoints")
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -133,7 +138,7 @@ async def run(args: argparse.Namespace) -> int:
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         exclude=args.exclude or [], extensions=_ext_list(args.ext),
-        ext_only=args.ext_only, filters=_build_filters(args),
+        ext_only=args.ext_only, graph=bool(args.graph), filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
@@ -157,6 +162,8 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  proxy    : {args.proxy} (TLS verification off)")
     if args.exclude:
         print(f"  exclude  : {', '.join(args.exclude)}")
+    if args.graph:
+        print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
     if sys.stdin.isatty() and not args.no_ui:
         print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
@@ -272,6 +279,9 @@ def main() -> None:
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
                     help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt)")
+    ap.add_argument("--graph", metavar="FILE",
+                    help="write an endpoint graph (provenance + orphan/hidden endpoints) "
+                         "to FILE.html, plus a Graphviz FILE.dot")
     ap.add_argument("--db", default=str(DEFAULT_DB),
                     help=f"memory DB path (default: {DEFAULT_DB})")
     ap.add_argument("--no-learn", action="store_true",

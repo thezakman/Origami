@@ -223,6 +223,7 @@ tests/
 - scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins, `-x/--exclude` safety rail, `-X/--ext` + `--ext-only` manual extensions);
 - pentest plumbing: custom headers (`-H`, authenticated scans), `-A` user-agent, `--proxy` (Burp/ZAP), AIMD adaptive concurrency + body-size cap;
 - **multi-target** scanning (`-l/--list`, multiple URLs), each scanned clean;
+- **endpoint graph** (`--graph`): provenance edges (js/robots/apidocs → target) → self-contained SVG + DOT, with orphan/hidden-endpoint detection;
 - output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).
 
 **Next:**
