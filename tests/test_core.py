@@ -553,6 +553,20 @@ class TestShortname(unittest.TestCase):
         self.assertIn("WEBREF~1.CON", paths)
         self.assertNotIn("WEBREFWEBREF~1.CON", paths)
 
+    def test_expand_case_insensitive_collapses_variants(self):
+        # IIS host: the resolved fullname (WEBSERVICES), the lowercased prefix
+        # (webservices) and a mixed-case wordlist match (WebServices) are one
+        # resource — collapse to a single candidate when case_insensitive=True.
+        r = shortname.parse_ndjson(
+            '{"type":"status","vulnerable":true}\n'
+            '{"type":"file","baseurl":"http://t/","shorttilde":"WEBSER~1",'
+            '"shortfile":"WEBSER","shortext":"","fullname":"WEBSERVICES"}\n')
+        words = ["WebServices"]
+        ci = [p for _, p in shortname.expand(r.entries, words, case_insensitive=True)]
+        self.assertEqual(sum(1 for p in ci if p.lower() == "webservices"), 1)
+        cs = [p for _, p in shortname.expand(r.entries, words, case_insensitive=False)]
+        self.assertGreater(sum(1 for p in cs if p.lower() == "webservices"), 1)
+
 
 class TestRobots(unittest.TestCase):
     def test_robots(self):

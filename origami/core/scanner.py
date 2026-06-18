@@ -1012,6 +1012,13 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     observer.log(f"shortscan: VULNERABLE · {len(res.entries)} 8.3 names leaked", 1, style="cyan")
     profile.add_evidence(Evidence(source="shortscan", tech="iis",
                                   detail=f"8.3 leak · {len(res.entries)} names", weight=20))
+    # 8.3 short names only exist on Windows/NTFS, which is case-insensitive —
+    # a definitive signal, available NOW (before the first main-scan hit that
+    # detect_case_sensitivity would otherwise wait for). Setting it here makes
+    # the case-variant dedup below (and in _report / the final collapse) fire on
+    # this fold's own findings, so /WEBSERVICES == /webservices == /WebServices.
+    if profile.case_sensitive is None:
+        profile.case_sensitive = False
     for e in res.entries:
         observer.log(f"  8.3: {e.tilde}.{e.ext}"
                      + (f" → {e.fullname}" if e.fullname else ""), 2)
@@ -1025,7 +1032,8 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
         observer.log(f"shortscan: {len(mem_names)} names recalled from past scans "
                      f"(cross-target completion)", 1, style="cyan")
     sc_words = list(dict.fromkeys(list(words) + mem_names))
-    cands = shortname.expand(res.entries, sc_words, tech_exts)
+    cands = shortname.expand(res.entries, sc_words, tech_exts,
+                             case_insensitive=profile.case_sensitive is False)
 
     # Regime 2: n-gram completion of truncated prefixes the wordlist can't cover.
     ng = NGram(order=3).train(sc_words)
