@@ -65,6 +65,12 @@ EXISTING = {
                       b'"/internal/metrics":{"get":{}}}}'),
     "/api/v3/billing/invoices": ("application/json", b'{"invoices":[]}'),
     "/api/v3/internal/metrics": ("application/json", b'{"uptime":1234}'),
+    # OIDC index → exercises the .well-known fold (auth endpoints folded as seeds)
+    "/.well-known/openid-configuration": ("application/json",
+        b'{"issuer":"http://127.0.0.1","authorization_endpoint":"/oauth2/authorize",'
+        b'"token_endpoint":"/oauth2/token","jwks_uri":"/oauth2/jwks.json"}'),
+    "/oauth2/authorize": ("text/html", b"<html><body>OAuth Authorize</body></html>"),
+    "/oauth2/jwks.json": ("application/json", b'{"keys":[]}'),
     # JSON:API index (Drupal-style) → exercises the apidocs JSON:API fold.
     "/jsonapi": ("application/vnd.api+json",
                  b'{"jsonapi":{"version":"1.0"},"data":[],"links":{'

@@ -34,7 +34,7 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import waf
-from origami.modules.discovery import apidocs, backups, js_parser, robots, shortname
+from origami.modules.discovery import apidocs, backups, js_parser, robots, shortname, wellknown
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -53,7 +53,7 @@ MAX_HARVEST_SEEDS = 2000
 
 # Origins whose paths are root-absolute (joined from the host root, not the
 # current prefix) — harvested references point at app-root paths.
-_SEED_ORIGINS = {"memory", "js", "robots", "apidocs"}
+_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown"}
 
 
 def _host_root(url: str) -> str:
@@ -321,6 +321,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             if opts.graph:
                 spec_path = urlparse(spec_url).path
                 result.edges += [(spec_path, p) for p in sorted(api_paths) if p != spec_path]
+
+    # .well-known/ — OIDC/OAuth index (auth endpoints), security.txt, etc.
+    wk_paths, wk_edges = await _guard(observer, "well-known",
+                                      wellknown.harvest(engine, base_url), (set(), []))
+    wk_paths = _scope_paths(wk_paths, profile.host, opts.scope)
+    if wk_paths:
+        root_seeds += [(p, "wellknown") for p in sorted(wk_paths)]
+        observer.log(f"well-known: {len(wk_paths)} paths "
+                     f"(OIDC/OAuth + security.txt)", 1, style="cyan")
+        if opts.graph:
+            result.edges += wk_edges
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]
