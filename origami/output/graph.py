@@ -250,7 +250,8 @@ def to_html(m: GraphModel, host: str) -> str:
 <span><i style="background:#39c5cf"></i>3xx</span><span><i style="background:#f85149"></i>other</span>
 <span><i style="background:#6e7681"></i>referenced</span>
 <span><i class="ring"></i>hidden (JS/spec-only)</span>
-<span>— containment&nbsp;&nbsp;– – reference</span></div>
+<span>— containment&nbsp;&nbsp;– – reference</span>
+<label class="only"><input type="checkbox" id="oo"> only hidden</label></div>
 <div id="vp"><svg id="g" viewBox="0 0 {w} {h}" width="{w}" height="{h}">{''.join(parts)}</svg></div>
 <div class="orphans"><b>Hidden / orphan endpoints</b><ul>{orphan_html}</ul></div>
 <script>{_GRAPH_JS}</script></body></html>"""
@@ -273,6 +274,9 @@ svg{background:var(--bg)}
 .node text{fill:var(--fg);font-size:11px}
 .node-hidden circle{stroke:#f85149;stroke-width:2}
 .node-hidden text{fill:#f85149}
+.only{margin-left:auto;color:var(--fg);cursor:pointer}
+svg.only-hidden .node:not(.node-hidden){opacity:.12}
+svg.only-hidden .edge{opacity:.05}
 .orphans{padding:12px 22px;border-top:1px solid var(--bd)}
 .orphans ul{columns:3;margin:6px 0 0;padding-left:18px}
 .orphans b{color:#f85149}
@@ -288,6 +292,8 @@ const g=document.getElementById('g');let s=1;
 vp.addEventListener('wheel',e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
  s=Math.min(4,Math.max(.2,s*(e.deltaY<0?1.1:0.9)));
  g.style.width=(g.viewBox.baseVal.width*s)+'px';g.style.height=(g.viewBox.baseVal.height*s)+'px'},{passive:false});
+const oo=document.getElementById('oo');
+if(oo)oo.addEventListener('change',e=>g.classList.toggle('only-hidden',e.target.checked));
 """
 
 

@@ -22,6 +22,7 @@ h1{font-size:20px;margin:0;color:#e3b341}
 .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px 16px}
 .card b{color:var(--mut);font-weight:400;margin-right:8px}
+.card a{color:#79c0ff;text-decoration:none}.card .hidden{color:#f85149}
 .badge{display:inline-block;padding:1px 8px;border-radius:10px;margin:2px;font-size:12px}
 .tech{background:#1f6f3f;color:#fff}.waf{background:#8b1a1a;color:#fff}
 .fold{background:#1f6feb;color:#fff}.tag{background:#30363d;color:#c9d1d9}
@@ -51,7 +52,7 @@ def _scls(code: int) -> str:
     return f"s{code // 100}" if 100 <= code < 600 else "s4"
 
 
-def render(result) -> str:
+def render(result, n_hidden: int | None = None) -> str:
     p = result.profile
     e = html.escape
     techs = "".join(f'<span class="badge tech">{e(t)} {s:.0f}</span>'
@@ -66,6 +67,10 @@ def render(result) -> str:
         cards.append(f'<div class="card"><b>folds</b>{folds}</div>')
     if p.pushbacks if hasattr(p, "pushbacks") else result.pushbacks:
         cards.append(f'<div class="card"><b>throttling</b>{result.pushbacks} backoff</div>')
+    if n_hidden is not None:
+        cards.append(f'<div class="card"><b>topology</b>'
+                     f'<a href="graph.html">endpoint graph →</a> '
+                     f'<span class="hidden">{n_hidden} hidden</span></div>')
 
     rows = []
     for f in result.findings:
@@ -95,6 +100,6 @@ def render(result) -> str:
 <script>{_JS}</script></body></html>"""
 
 
-def write(result, path: str) -> None:
+def write(result, path: str, n_hidden: int | None = None) -> None:
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(render(result))
+        fh.write(render(result, n_hidden=n_hidden))

@@ -127,6 +127,20 @@ class TestEndpointGraph(unittest.TestCase):
         self.assertIn("<svg", graph.to_html(m, "h"))   # no crash on empty graph
         self.assertIn("digraph", graph.to_dot(m))
 
+    def test_orphan_filter_control(self):
+        from origami.output import graph
+        h = graph.to_html(graph.build(self._result()), "h")
+        self.assertIn('id="oo"', h)                    # "only hidden" toggle
+        self.assertIn("only-hidden", h)                # the CSS/JS hook
+
+    def test_report_links_graph_when_hidden_given(self):
+        from origami.output import html_report
+        r = self._result()
+        h = html_report.render(r, n_hidden=3)
+        self.assertIn('href="graph.html"', h)
+        self.assertIn("3 hidden", h)
+        self.assertNotIn('href="graph.html"', html_report.render(r))   # no card without count
+
 
 class TestUrlRobustness(unittest.TestCase):
     """A wordlist/payload candidate whose path contains `://` (a Struts2 OGNL
