@@ -72,6 +72,25 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestMethods(unittest.TestCase):
+    def test_parse_allow_flags_dangerous(self):
+        from origami.modules.discovery.methods import parse_allow
+        methods, danger = parse_allow("GET, POST, PUT, DELETE, options, TRACE")
+        self.assertEqual(methods, ["DELETE", "GET", "OPTIONS", "POST", "PUT", "TRACE"])
+        self.assertEqual(danger, ["DELETE", "PUT", "TRACE"])
+
+    def test_parse_allow_safe_set(self):
+        from origami.modules.discovery.methods import parse_allow
+        _, danger = parse_allow("GET, HEAD, POST, OPTIONS")
+        self.assertEqual(danger, [])
+        self.assertEqual(parse_allow("")[1], [])
+
+    def test_webdav_flagged(self):
+        from origami.modules.discovery.methods import parse_allow
+        _, danger = parse_allow("GET, PROPFIND, MKCOL, MOVE")
+        self.assertEqual(danger, ["MKCOL", "MOVE", "PROPFIND"])
+
+
 class TestHeaderHarvest(unittest.TestCase):
     def test_extract_from_csp_and_link(self):
         from origami.modules.discovery.js_parser import extract_header_paths

@@ -34,8 +34,8 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import waf
-from origami.modules.discovery import (apidocs, backups, graphql, js_parser, robots,
-                                        shortname, wellknown)
+from origami.modules.discovery import (apidocs, backups, graphql, js_parser, methods,
+                                        robots, shortname, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -262,6 +262,20 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # Missing a class (e.g. .json) would drop those candidates to the coarse
     # no-baseline rule, which a soft-404 host defeats. calibrate() de-dupes by
     # ext class, so passing many concrete extensions is cheap.
+    # HTTP methods (OPTIONS) — flag dangerous verbs (PUT/DELETE/TRACE/WebDAV).
+    m_status, m_methods, m_danger = await _guard(observer, "methods",
+                                                 methods.probe(engine, base_url), (0, [], []))
+    if m_methods:
+        observer.log(f"methods: {', '.join(m_methods)}", 1)
+    if m_danger:
+        mf = Finding(base_url, m_status or 200, root.length, root.content_type, 0.7,
+                     "methods", note=f"dangerous methods: {', '.join(m_danger)}",
+                     tags=["config"])
+        result.findings.append(mf)
+        observer.finding(mf)
+        observer.log(f"methods: dangerous verbs enabled → {', '.join(m_danger)}",
+                     0, style="bold red")
+
     # assemble high-priority root seeds: memory (cross-target) + js + backups
     root_seeds: list[tuple[str, str]] = []
 

@@ -167,6 +167,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, "text/html", b"<h1>404 Not Found</h1>")
 
+    def do_OPTIONS(self):
+        # advertise a dangerous method set so the methods fold has something to flag
+        self._send(200, "text/plain", b"", {"Allow": "GET, POST, PUT, DELETE, OPTIONS"})
+
     def _miss(self, path: str):
         body = b"<html><body><h1>Not Found</h1><p>The resource was not found.</p>" + _nonce() + b"</body></html>"
         if self.profile == "wildcard":
