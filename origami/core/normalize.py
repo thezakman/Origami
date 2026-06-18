@@ -19,6 +19,7 @@ import re
 # Volatile fragments we blank out before hashing, so dynamic noise doesn't move
 # the structural fingerprint. Order doesn't matter; all are applied.
 _VOLATILE = [
+    re.compile(rb"<!--.*?-->", re.S),                              # HTML comments (build-id/CSRF/timestamps/IE-conditional) -> drop whole, before the tag rule which a `>` inside a comment would truncate
     re.compile(rb"<[^>]+>", re.I),                                  # all tags -> drop attrs/nonces
     re.compile(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
                rb"[0-9a-f]{4}-[0-9a-f]{12}", re.I),                 # UUID (WAF support IDs etc.)
