@@ -390,6 +390,19 @@ class TestLiveProgress(unittest.TestCase):
         ui.start_prefix("/admin/", 50)
         self.assertIn("/", str(_CountColumn().render(ui._progress.tasks[0])))
 
+    def test_highlights_surface_high_value(self):
+        from origami.core.response_classifier import Finding
+        ui = self._ui()
+        ui.findings = [Finding("u1", 200, 1, "", 0.9, "js", tags=["disclosure", "config"]),
+                       Finding("u2", 200, 1, "", 0.9, "bypass403", tags=["admin"]),
+                       Finding("u3", 200, 1, "", 0.7, "methods", tags=["config"])]
+        h = ui._highlights()
+        self.assertIn("disclosure", h)
+        self.assertIn("403-bypass", h)
+        self.assertIn("dangerous-methods", h)
+        self.assertIn("config", h)
+        self.assertEqual(self._ui()._highlights(), "")   # empty when no findings
+
     def test_dynamic_dashboard_rerenders(self):
         from origami.output.ui import _LiveDashboard
         ui = self._ui()
