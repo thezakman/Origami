@@ -210,7 +210,7 @@ tests/
 
 **Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 42 unit tests):
 - per-context calibration (simhash soft-404, wildcard, case-sensitivity, redirect-kind);
-- additive fingerprint + folds (headers/cookies/error-page + **favicon mmh3**, **WAF detection**);
+- additive fingerprint + folds (headers/cookies + **favicon mmh3**, **WAF detection**, and a **default-error-page → stack catalogue** that fingerprints nginx/Apache/IIS/Tomcat/Jetty/Express/Spring-Boot/Django/Flask/Laravel/ASP.NET/PHP header-independently — the hard CDN/WAF case);
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
 - scoped recursion + parent-directory recursion from deep hits;
 - **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**);
@@ -227,7 +227,7 @@ tests/
 - output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).
 
 **Next:**
-- favicon/tech DBs beyond Wappalyzer (nuclei tech-templates, 0xdf-404, FingerprintHub) into the ingestion layer;
+- favicon/tech DBs beyond Wappalyzer (nuclei tech-templates, FingerprintHub favicon hashes) into the ingestion layer;
 - a deferred trained FP-classifier once the corpus is large enough to label.
 
 ## 8. Testing & evaluation

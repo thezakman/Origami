@@ -57,6 +57,49 @@ def _signal_hit(sig: Signal, probe: Probe) -> str | None:
     return None
 
 
+# Default error/landing page → stack (the 0xdf-404 catalogue idea, §3.2). These
+# strings appear in a server/framework's *default* error body, so they
+# fingerprint the stack even when the Server header is stripped (CDN/WAF) — the
+# hard real-world case. Matched ONLY against forced-error probes (high precision:
+# the probe responses ARE error pages, not content). (needle, tech, weight).
+_ERROR_PAGE_SIGNS: list[tuple[str, str, float]] = [
+    ("<center>nginx</center>", "nginx", 60),
+    ("<address>apache", "apache", 60),
+    ("apache tomcat/", "tomcat", 70),
+    ("powered by jetty", "jetty", 70),
+    ("cannot get /", "express", 65),                       # Express default 404
+    ("whitelabel error page", "springboot", 80),           # Spring Boot
+    ("you're seeing this error because you have", "django", 75),  # Django DEBUG
+    ("werkzeug", "flask", 55),                             # Werkzeug (Flask) traceback/debugger
+    ("whoops, looks like something went wrong", "laravel", 70),
+    ("server error in '/' application", "aspnet", 70),     # ASP.NET YSOD
+    ("<b>fatal error</b>", "php", 55),                     # PHP fatal error
+    ("internet information services", "iis", 55),
+]
+
+
+def apply_error_signals(profile: TargetProfile, error_probes: list[Probe],
+                        path_prefix: str = "/") -> None:
+    """Fingerprint the stack from default error-page bodies (header-independent).
+
+    De-dupes per tech so one stack matched on several probes scores once.
+    """
+    seen: set[str] = set()
+    for probe in error_probes:
+        if not probe.ok or not probe.body_head:
+            continue
+        body = probe.body_head.lower().decode("latin-1", "replace")
+        for needle, tech, weight in _ERROR_PAGE_SIGNS:
+            if tech in seen:
+                continue
+            if needle in body:
+                seen.add(tech)
+                profile.add_evidence(Evidence(
+                    source="error_page", tech=tech,
+                    detail=f"default error page ~= {needle!r}",
+                    weight=weight, path_prefix=path_prefix))
+
+
 def apply_signals(profile: TargetProfile, probes: list[Probe], kb: list[TechRule],
                   path_prefix: str = "/") -> None:
     """Match every rule's signals against every probe; emit evidence.

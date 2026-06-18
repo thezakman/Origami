@@ -72,6 +72,39 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestErrorPageFingerprint(unittest.TestCase):
+    def _fp(self, body):
+        from origami.core.fingerprint import apply_error_signals
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="h", base_url="http://h/")
+        apply_error_signals(p, [make_probe(status=404, body=body)])
+        return p
+
+    def test_detects_stack_header_independent(self):
+        self.assertGreaterEqual(self._fp(b"<html>Whitelabel Error Page</html>")
+                                .tech_scores.get("springboot", 0), 50)
+        self.assertGreaterEqual(self._fp(b"Cannot GET /aaaa.aspx")
+                                .tech_scores.get("express", 0), 50)
+        self.assertGreaterEqual(self._fp(b"<hr><center>nginx</center></body>")
+                                .tech_scores.get("nginx", 0), 50)
+        self.assertGreaterEqual(self._fp(b"Server Error in '/' Application.")
+                                .tech_scores.get("aspnet", 0), 50)
+
+    def test_no_false_positive_on_content(self):
+        # the bare word in page CONTENT must not fingerprint — we require the
+        # specific default-error string.
+        p = self._fp(b"<html>welcome to our nginx hosting + django tutorial blog</html>")
+        self.assertEqual(p.tech_scores.get("nginx", 0), 0)
+        self.assertEqual(p.tech_scores.get("django", 0), 0)
+
+    def test_springboot_error_folds_actuator(self):
+        from origami.brain.kb import load_kb
+        from origami.core.fingerprint import confirmed_actions
+        p = self._fp(b"<html><body>Whitelabel Error Page</body></html>")
+        _, paths, _ = confirmed_actions(p, load_kb())
+        self.assertTrue(any("actuator" in x for x in paths))
+
+
 class TestEndpointGraph(unittest.TestCase):
     def _result(self):
         from origami.core.scanner import ScanResult

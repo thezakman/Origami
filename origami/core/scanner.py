@@ -226,6 +226,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     observer.phase("fingerprint")
     errors = await fp.forced_error_probes(engine, base_url)
     fp.apply_signals(profile, [root, *errors], kb)
+    fp.apply_error_signals(profile, errors)        # default-error-page → stack (header-independent)
     for pr in (root, *errors):
         w = waf.detect(pr)
         if w:
