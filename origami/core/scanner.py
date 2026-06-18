@@ -618,19 +618,22 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     # 5. dedupe + collapse same-content collisions BEFORE expanding ---------
     # (do this first so the backup fold doesn't explode over hundreds of
     # identical pages — the bug behind 849 findings / 10k backup probes).
-    result.findings = _dedupe_and_collapse(result.findings, observer)
+    result.findings = _dedupe_and_collapse(result.findings, observer,
+                                            ci=profile.case_sensitive is False)
 
     # 6. backup/source fold around confirmed files -------------------------
     if opts.backups:
         await _guard(observer, "backups",
                      _backup_fold(engine, profile, result, opts, observer), None)
-        result.findings = _dedupe_and_collapse(result.findings, observer)
+        result.findings = _dedupe_and_collapse(result.findings, observer,
+                                            ci=profile.case_sensitive is False)
 
     # 6.5 association fold — corpus rules ("found /backup/ → test /.git/")
     if memory is not None:
         await _guard(observer, "associations",
                      _association_fold(engine, profile, result, opts, observer, memory), None)
-        result.findings = _dedupe_and_collapse(result.findings, observer)
+        result.findings = _dedupe_and_collapse(result.findings, observer,
+                                            ci=profile.case_sensitive is False)
 
     observer.pushback(engine.pushback_events)
     result.requests_made = engine.total_requests
@@ -674,7 +677,15 @@ async def _is_soft(engine, profile, prefix, probe) -> bool:
 
 
 async def _confirm(engine, profile, prefix, probe, origin):
-    """classify + soft-404 sibling verification. Returns a real Finding or None."""
+    """classify + soft-404 sibling verification. Returns a real Finding or None.
+
+    Folds fire speculative guesses (shortscan 8.3 expansions, backup twins,
+    corpus associations); a guess that returns a 5xx is the server erroring on a
+    bad path, not a discovered resource — so it's never a fold finding. (The main
+    wordlist scan still reports a 5xx, where a single erroring endpoint matters.)
+    """
+    if probe.ok and probe.status >= 500:
+        return None
     finding = classify(profile, probe, origin, prefix)
     if finding is None:
         return None
@@ -683,7 +694,7 @@ async def _confirm(engine, profile, prefix, probe, origin):
     return finding
 
 
-def _dedup_by_url(findings):
+def _dedup_by_url(findings, ci=False):
     """Collapse repeats of the same URL to the highest-confidence one.
 
     Cheap and safe to run mid-scan — a resumed/re-fired prefix re-discovers URLs
@@ -692,13 +703,14 @@ def _dedup_by_url(findings):
     """
     best: dict[str, Finding] = {}
     for f in findings:
-        cur = best.get(f.url)
+        key = f.url.lower() if ci else f.url   # ci: a case-insensitive host (IIS)
+        cur = best.get(key)                    # serves /Admin == /admin — one finding
         if cur is None or f.confidence > cur.confidence:
-            best[f.url] = f
+            best[key] = f
     return list(best.values())
 
 
-def _dedupe_and_collapse(findings, observer):
+def _dedupe_and_collapse(findings, observer, ci=False):
     """URL-dedup (keep best confidence) + collapse same-template collisions.
 
     Groups by (status, body length): a generic page reflected for many paths —
@@ -708,7 +720,7 @@ def _dedupe_and_collapse(findings, observer):
     representative + a count. The real content found by recursion (distinct
     lengths) is untouched.
     """
-    deduped = _dedup_by_url(findings)
+    deduped = _dedup_by_url(findings, ci=ci)
 
     clusters: dict[tuple, list] = defaultdict(list)
     for f in deduped:
@@ -1013,7 +1025,12 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     for url, prefix in urls:
         if opts.max_requests and engine.total_requests >= opts.max_requests:
             break
-        if _excluded(urlparse(url).path, opts):
+        pth = urlparse(url).path
+        # drop malformed expansions: empty-filename segments (control/.ashx),
+        # query/fragment junk — never a valid 8.3-derived path.
+        if "?" in url or "#" in url or "/." in ("/" + pth.lstrip("/"))[1:]:
+            continue
+        if _excluded(pth, opts):
             continue
         probe = await engine.fetch(url)
         finding = await _confirm(engine, profile, prefix, probe, "shortscan")
