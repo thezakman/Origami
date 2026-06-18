@@ -150,6 +150,7 @@ See [`origami.md`](origami.md) for the full design.
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'   # unit tests
 python tests/fakeserver/server.py --profile iis-soft404         # test target
 python tests/benchmark/bench_folds.py                           # fold-budget benchmark
+python tests/benchmark/bench_adaptive.py                        # adaptive vs blind (hits/request)
 ```
 
 ## Status & roadmap
