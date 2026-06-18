@@ -267,8 +267,18 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # wordlist — methods, memory, JS, service worker + manifest, response
     # headers, robots/sitemap, API specs, .well-known, GraphQL.
     observer.phase("recon")
+    # sub-step counter shown in the status bar: "recon: apidocs  4/7"
+    recon_total = (3 + (1 if memory is not None else 0)
+                   + (1 if (opts.js and root.body) else 0)
+                   + (2 if opts.apidocs else 0))
+    _recon_k = [0]
+
+    def _recon(name):
+        _recon_k[0] += 1
+        observer.substep(name, _recon_k[0], recon_total)
 
     # HTTP methods (OPTIONS) — flag dangerous verbs (PUT/DELETE/TRACE/WebDAV).
+    _recon("methods")
     m_status, m_methods, m_danger = await _guard(observer, "methods",
                                                  methods.probe(engine, base_url), (0, [], []))
     if m_methods:
@@ -286,6 +296,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     root_seeds: list[tuple[str, str]] = []
 
     if memory is not None:
+        _recon("memory")
         # k-NN over the fingerprint vector (nearest past hosts), falling back to
         # shared-tech recall when there aren't enough fingerprinted hosts yet.
         primed = memory.recall_knn(profile) or memory.recall(profile.confirmed_techs(),
@@ -299,9 +310,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     robots_paths: set[str] = set()
 
     if opts.js and root.body:
+        _recon("js-scrape")
         js_paths, js_params, js_edges = await _guard(observer, "js-harvest",
-                                           js_parser.harvest(engine, base_url, root.body,
-                                                             on_progress=observer.progress),
+                                           js_parser.harvest(engine, base_url, root.body),
                                            (set(), set(), []))
         # service worker (precache manifest) + web app manifest — more app paths
         ca_paths, ca_edges = await _guard(observer, "clientapp",
@@ -335,6 +346,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                 result.edges += [(src, p) for p in sorted(hdr_paths)]
 
     # robots.txt + sitemap.xml — free passive intel
+    _recon("robots")
     robots_raw = await _guard(observer, "robots", robots.harvest(engine, base_url), set())
     robots_paths = _scope_paths(robots_raw, profile.host, opts.scope)
     if robots_paths:
@@ -346,9 +358,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # OpenAPI/Swagger spec → fold the whole declared API surface in as seeds.
     api_paths: set[str] = set()
     if opts.apidocs:
+        _recon("api-docs")
         spec_url, api_paths = await _guard(observer, "api-docs",
-                                           apidocs.harvest(engine, base_url,
-                                                           on_progress=observer.progress),
+                                           apidocs.harvest(engine, base_url),
                                            (None, set()))
         api_paths = _scope_paths(api_paths, profile.host, opts.scope)
         if spec_url:
@@ -360,6 +372,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                 result.edges += [(spec_path, p) for p in sorted(api_paths) if p != spec_path]
 
     # .well-known/ — OIDC/OAuth index (auth endpoints), security.txt, etc.
+    _recon("well-known")
     wk_paths, wk_edges = await _guard(observer, "well-known",
                                       wellknown.harvest(engine, base_url), (set(), []))
     wk_paths = _scope_paths(wk_paths, profile.host, opts.scope)
@@ -372,6 +385,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # GraphQL introspection — confirm the endpoint + harvest schema field names.
     if opts.apidocs:
+        _recon("graphql")
         gql_url, gql_fields = await _guard(observer, "graphql",
                                            graphql.harvest(engine, base_url), (None, set()))
         if gql_url:

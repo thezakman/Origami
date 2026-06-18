@@ -370,6 +370,17 @@ class TestLiveProgress(unittest.TestCase):
         ui.progress(40, 40)
         self.assertEqual(ui._progress.tasks[0].completed, 40)
 
+    def test_substep_sets_label_and_step_bar(self):
+        ui = self._ui()
+        ui.phase("recon")
+        ui.substep("apidocs", 4, 7)
+        self.assertEqual(ui.substep_name, "apidocs")        # status-bar sub-label
+        task = ui._progress.tasks[0]
+        self.assertEqual(task.completed, 4)                  # bar = step k/total
+        self.assertEqual(task.total, 7)
+        ui.phase("scan")
+        self.assertEqual(ui.substep_name, "")                # cleared on new phase
+
     def test_count_column_blank_when_indeterminate(self):
         from origami.output.ui import _CountColumn
         ui = self._ui()
