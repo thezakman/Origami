@@ -852,6 +852,7 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
     for f in file_hits:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
+        observer.substep(path.rsplit("/", 1)[-1] or path)   # backups: <file>
         for var in backups.variations(path):
             if opts.max_requests and engine.total_requests >= opts.max_requests:
                 break
@@ -889,6 +890,7 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     for f in blocked:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
+        observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
         for label, method, rpath, headers in bypass403.variants(path):
             if opts.max_requests and engine.total_requests >= opts.max_requests:
                 return
@@ -928,6 +930,7 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
         if _excluded(p, opts):
             continue
         prefix = p.rsplit("/", 1)[0] + "/"
+        observer.substep(p.rstrip("/").rsplit("/", 1)[-1] or p)   # associations: <path>
         await bl.calibrate(engine, profile, [(prefix, _ext_of(p))])
         probe = await engine.fetch(urljoin(root, p.lstrip("/")))
         finding = await _confirm(engine, profile, prefix, probe, "assoc")

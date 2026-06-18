@@ -60,7 +60,7 @@ class NullObserver:
         self.skippable = value
 
     def phase(self, name: str) -> None: ...
-    def substep(self, name: str, done: int, total: int) -> None: ...
+    def substep(self, name: str, done: int | None = None, total: int | None = None) -> None: ...
     def start_prefix(self, prefix: str, total: int) -> None: ...
     def progress(self, done: int, total: int) -> None: ...
     def tick(self, hit: bool = False) -> None: ...
@@ -207,14 +207,20 @@ class RichUI(NullObserver):
         task.total = None                          # → animated pulse
         self._progress.update(self._task, description=f"status [bold cyan]{name}[/]")
 
-    def substep(self, name: str, done: int, total: int) -> None:
-        # within a phase (recon), name the current sub-step + fill the bar by
-        # step count: `recon: apidocs  4/7`.
+    def substep(self, name: str, done: int | None = None, total: int | None = None) -> None:
+        # name the current sub-step within a phase: `recon: apidocs`, `backups:
+        # default.aspx`. With done/total it also fills the bar by step count
+        # (recon); without, the bar stays owned by start_prefix+tick (the folds
+        # that count requests).
         self.substep_name = name
-        self._ptotal = max(total, 1)
-        self._pcompleted = min(done, self._ptotal)
-        self._progress.update(self._task, completed=self._pcompleted, total=self._ptotal,
-                              description=f"status [bold cyan]{self.phase_name}: {name}[/]")
+        desc = f"status [bold cyan]{self.phase_name}: {name}[/]"
+        if total is not None:
+            self._ptotal = max(total, 1)
+            self._pcompleted = min(done or 0, self._ptotal)
+            self._progress.update(self._task, completed=self._pcompleted,
+                                  total=self._ptotal, description=desc)
+        else:
+            self._progress.update(self._task, description=desc)
 
     def start_prefix(self, prefix: str, total: int) -> None:
         self.prefix = prefix
