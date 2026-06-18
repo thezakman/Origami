@@ -526,6 +526,33 @@ class TestShortname(unittest.TestCase):
         self.assertNotIn("admin.asp", paths)              # too short for ADMINI prefix
         self.assertNotIn("other.config", paths)           # doesn't match CONFIG prefix
 
+    def test_expand_resolved_names_fire_before_wordlist_guesses(self):
+        # A late entry's *resolved* fullname must outrank an early entry's
+        # speculative wordlist expansions — under a WAF the tail gets cut, so the
+        # sure things have to go first. Here DEFAULT.ASPX (2nd entry, resolved)
+        # must precede ADMINI's wordlist guess "administrators.aspx".
+        sample = (
+            '{"type":"status","url":"http://t/","vulnerable":true}\n'
+            '{"type":"file","baseurl":"http://t/","shorttilde":"ADMINI~1",'
+            '"shortfile":"ADMINI","shortext":"ASP"}\n'
+            '{"type":"file","baseurl":"http://t/","shorttilde":"DEFAUL~1",'
+            '"shortfile":"DEFAUL","shortext":"ASP","fullname":"default.aspx"}\n'
+        )
+        r = shortname.parse_ndjson(sample)
+        order = [p for _, p in shortname.expand(r.entries, ["administrators"])]
+        self.assertLess(order.index("default.aspx"), order.index("administrators.aspx"))
+
+    def test_expand_raw_83_name_not_prefix_doubled(self):
+        # The raw 8.3 candidate is the tilde name itself ("WEBREF~1.CON"), not
+        # prefix+tilde ("WEBREFWEBREF~1.CON") — the latter is a guaranteed 404.
+        r = shortname.parse_ndjson(
+            '{"type":"status","vulnerable":true}\n'
+            '{"type":"file","baseurl":"http://t/","shorttilde":"WEBREF~1",'
+            '"shortfile":"WEBREF","shortext":"CON"}\n')
+        paths = {p for _, p in shortname.expand(r.entries, [])}
+        self.assertIn("WEBREF~1.CON", paths)
+        self.assertNotIn("WEBREFWEBREF~1.CON", paths)
+
 
 class TestRobots(unittest.TestCase):
     def test_robots(self):
