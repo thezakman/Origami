@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import time
+from collections import Counter
 from urllib.parse import urlparse
 
 _CSS = """
@@ -33,7 +34,8 @@ h1{font-size:20px;margin:0;color:#e3b341}
 input{background:var(--card);border:1px solid var(--bd);color:var(--fg);padding:8px 12px;border-radius:6px;width:340px;margin-bottom:12px}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd);white-space:nowrap}
-th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--bg)}
+th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--bg);cursor:pointer;user-select:none}
+th[data-sort]::after{content:attr(data-dir);color:#79c0ff;margin-left:4px}
 td.path{white-space:normal;word-break:break-all}
 td.path a{color:#79c0ff;text-decoration:none}
 .s2{color:#3fb950}.s3{color:#39c5cf}.s4{color:#e3b341}.s5{color:#f85149}
@@ -45,6 +47,17 @@ _JS = """
 const q=document.getElementById('q'),rows=[...document.querySelectorAll('tbody tr')];
 q.addEventListener('input',()=>{const v=q.value.toLowerCase();
  rows.forEach(r=>r.style.display=r.textContent.toLowerCase().includes(v)?'':'none')});
+// click a column header to sort (numeric for code/size/conf, text otherwise)
+const tb=document.querySelector('tbody');
+document.querySelectorAll('th[data-sort]').forEach((th,i)=>{let asc=true;
+ th.addEventListener('click',()=>{const num=th.dataset.sort==='num';
+  const trs=[...tb.querySelectorAll('tr')];
+  trs.sort((a,b)=>{let x=a.children[i].textContent.trim(),y=b.children[i].textContent.trim();
+   if(num){return (asc?1:-1)*((parseFloat(x)||0)-(parseFloat(y)||0));}
+   return (asc?1:-1)*x.localeCompare(y);});
+  asc=!asc;trs.forEach(r=>tb.appendChild(r));
+  document.querySelectorAll('th[data-sort]').forEach(h=>h.dataset.dir='');
+  th.dataset.dir=asc?'▼':'▲';});});
 """
 
 
@@ -71,6 +84,10 @@ def render(result, n_hidden: int | None = None) -> str:
         cards.append(f'<div class="card"><b>topology</b>'
                      f'<a href="graph.html">endpoint graph →</a> '
                      f'<span class="hidden">{n_hidden} hidden</span></div>')
+    codes = Counter(f.status for f in result.findings)
+    if codes:
+        summary = "  ".join(f"{c}×{n}" for c, n in sorted(codes.items()))
+        cards.append(f'<div class="card"><b>status</b>{e(summary)}</div>')
 
     rows = []
     for f in result.findings:
@@ -95,7 +112,9 @@ def render(result, n_hidden: int | None = None) -> str:
 {params_block}
 <h2>Findings ({len(result.findings)})</h2>
 <input id="q" placeholder="filter findings…" autofocus>
-<table><thead><tr><th>code</th><th>size</th><th>src</th><th>conf</th><th>tags</th><th>path</th></tr></thead>
+<table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
+<th data-sort="str">src</th><th data-sort="num">conf</th><th data-sort="str">tags</th>
+<th data-sort="str">path</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
 <script>{_JS}</script></body></html>"""
 
