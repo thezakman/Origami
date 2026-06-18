@@ -33,7 +33,7 @@ from origami.core.response_classifier import Filters, Finding, classify, resolve
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import waf
+from origami.modules import bypass403, waf
 from origami.modules.discovery import (apidocs, backups, graphql, js_parser, methods,
                                         robots, shortname, wellknown)
 from origami.output.ui import NullObserver
@@ -155,6 +155,7 @@ class ScanOptions:
     economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
     exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
+    bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
     filters: Filters = field(default_factory=Filters)
 
 
@@ -428,7 +429,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     return await _scan_loop(engine, profile, opts, observer, memory, control, result,
                             base_prefix=base_prefix, words=words, exts=exts,
                             priority_paths=priority_paths, root_seeds=root_seeds,
-                            queue=queue, scanned=set(), resume_path=resume_path)
+                            queue=queue, scanned=set(), resume_path=resume_path,
+                            root_simhash=root.body_simhash)
 
 
 async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=None,
@@ -456,12 +458,14 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
                             root_seeds=state["root_seeds"], queue=list(state["queue"]),
                             scanned=set(state["scanned"]), resume_path=resume_path,
                             start_offset=state.get("start_offset", 0),
-                            front_cands=state.get("front_cands") or None)
+                            front_cands=state.get("front_cands") or None,
+                            root_simhash=state.get("root_simhash", 0))
 
 
 async def _scan_loop(engine, profile, opts, observer, memory, control, result, *,
                      base_prefix, words, exts, priority_paths, root_seeds,
-                     queue, scanned, resume_path, start_offset=0, front_cands=None):
+                     queue, scanned, resume_path, start_offset=0, front_cands=None,
+                     root_simhash=0):
     """The recursive directory walk + post-scan folds, checkpointed per prefix.
 
     A prefix is added to `scanned` only after every candidate fired. If the scan
@@ -499,7 +503,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                             root_seeds=root_seeds, base_prefix=base_prefix,
                             queue=queue, scanned=scanned, start_offset=offset,
                             front_cands=[(c.path, c.origin) for c in cands] if cands else [],
-                            edges=result.edges)
+                            edges=result.edges, root_simhash=root_simhash)
 
     observer.phase("scan")
     interrupted = False
@@ -581,6 +585,13 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         observer.log(f"scan: stopped — {reason}. {len(result.findings)} findings so far; "
                      f"checkpoint saved → continue with --resume", 0, style="yellow")
         return result
+
+    # 4.5 403/401 bypass — try to walk around denials BEFORE the collapse merges
+    # the 403 wall, so each blocked resource gets its own attempt.
+    if opts.bypass403:
+        await _guard(observer, "403-bypass",
+                     _bypass_fold(engine, profile, result, opts, observer, root_simhash),
+                     None)
 
     # 5. dedupe + collapse same-content collisions BEFORE expanding ---------
     # (do this first so the backup fold doesn't explode over hundreds of
@@ -832,6 +843,50 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
                 observer.request(url, probe.status, False)
                 continue
             _report(observer, result, opts, finding, url)
+
+
+MAX_BYPASS_TARGETS = 20   # cap blocked resources we attempt to bypass
+
+
+async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) -> None:
+    """For each 403/401, fire curated bypass variants; report a surviving 2xx.
+
+    A variant counts as a real bypass only when it passes the soft-404
+    sibling check (_confirm) AND its body isn't the homepage (the X-Original-URL
+    trick otherwise just returns `/`)."""
+    blocked = _dedup_by_url([f for f in result.findings if f.status in (401, 403)])
+    if not blocked:
+        return
+    blocked.sort(key=lambda f: (not f.tags, f.url))   # tagged (interesting) first
+    blocked = blocked[:MAX_BYPASS_TARGETS]
+    observer.phase("403-bypass")
+    observer.log(f"403-bypass: probing {len(blocked)} blocked resources", 0, style="cyan")
+    total = sum(len(bypass403.variants(urlparse(f.url).path)) for f in blocked)
+    observer.start_prefix("403-bypass", total)
+    root = _host_root(profile.base_url)
+    for f in blocked:
+        path = urlparse(f.url).path
+        prefix = path.rsplit("/", 1)[0] + "/"
+        for label, method, rpath, headers in bypass403.variants(path):
+            if opts.max_requests and engine.total_requests >= opts.max_requests:
+                return
+            url = urljoin(root, rpath.lstrip("/"))
+            probe = await engine.fetch(url, method=method, headers=headers or None)
+            observer.tick(hit=False)
+            observer.request(url, probe.status, False)
+            if not (probe.ok and 200 <= probe.status < 300 and probe.length > 0):
+                continue                                  # 2xx with actual content only
+            if hamming(probe.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
+                continue                                  # just the homepage — not a bypass
+            if await _confirm(engine, profile, prefix, probe, "bypass403") is None:
+                continue                                  # soft-404 / catch-all
+            bf = Finding(f.url, probe.status, probe.length, probe.content_type, 0.9,
+                         "bypass403", note=f"403→{probe.status} bypass: {label}",
+                         tags=list(f.tags), simhash=probe.body_simhash)
+            _report(observer, result, opts, bf, f.url)
+            observer.log(f"403-bypass: {observer.disp(f.url)} → {probe.status} via {label}",
+                         0, style="bold green")
+            break                                         # one confirmed bypass per resource
 
 
 async def _association_fold(engine, profile, result, opts, observer, memory) -> None:

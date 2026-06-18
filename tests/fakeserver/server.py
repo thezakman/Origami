@@ -32,7 +32,12 @@ EXISTING = {
     "/robots.txt": ("text/plain",
                     b"User-agent: *\nDisallow: /admin/\n"
                     b"Disallow: /private/dashboard.aspx\n"
+                    b"Disallow: /admin-secret\n"
                     b"Sitemap: /sitemap.xml\n"),
+    # /admin-secret is 403 (in PROTECTED) but /admin-secret/ slips through →
+    # exercises the 403-bypass fold (trailing-slash bypass).
+    "/admin-secret/": ("application/json",
+                       b'{"secret":"real admin content reached via trailing-slash bypass"}'),
     "/sitemap.xml": ("application/xml",
                      b"<?xml version='1.0'?><urlset>"
                      b"<url><loc>/reports/q3.pdf</loc></url>"
@@ -79,7 +84,7 @@ EXISTING = {
                  b'"user--user":{"href":"/jsonapi/user/user"}}}'),
     "/jsonapi/node/secretdoc": ("application/vnd.api+json", b'{"data":[{"id":"leak"}]}'),
 }
-PROTECTED = {"/web.config", "/bin/", "/admin/"}  # answer 403
+PROTECTED = {"/web.config", "/bin/", "/admin/", "/admin-secret"}  # answer 403
 
 
 def _nonce() -> bytes:

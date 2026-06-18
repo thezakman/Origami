@@ -140,7 +140,7 @@ async def run(args: argparse.Namespace) -> int:
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         exclude=args.exclude or [], extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
-        filters=_build_filters(args),
+        bypass403=args.bypass_403, filters=_build_filters(args),
     )
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
@@ -311,6 +311,9 @@ def main() -> None:
                     help="disable OpenAPI/Swagger spec discovery + endpoint folding")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
+    ap.add_argument("--bypass-403", action="store_true",
+                    help="on each 403/401, try path/header/method bypass tricks "
+                         "(nomore403-style); a surviving 2xx is reported as a bypass")
     ap.add_argument("-x", "--exclude", action="append", metavar="PATTERN",
                     help="never request or recurse a path containing PATTERN "
                          "(case-insensitive, repeatable) — safety rail for "
