@@ -72,6 +72,28 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestBypass403(unittest.TestCase):
+    def test_variants_cover_families(self):
+        from origami.modules.bypass403 import variants
+        v = variants("/admin")
+        labels = [lbl for lbl, *_ in v]
+        kinds = {lbl.split()[0] for lbl in labels}
+        self.assertEqual(kinds, {"path", "header", "method"})
+        # representative techniques present
+        self.assertTrue(any(m == "/admin/" for _, _, m, _ in v))           # trailing slash
+        self.assertTrue(any(h.get("X-Forwarded-For") for _, _, _, h in v))  # IP header
+        self.assertTrue(any(meth == "POST" for _, meth, _, _ in v))         # method swap
+        # X-Original-URL targets root with the header pointing at the path
+        self.assertTrue(any(rp == "/" and h.get("X-Original-URL") == "/admin"
+                            for _, _, rp, h in v))
+
+    def test_variants_no_self_or_dupes(self):
+        from origami.modules.bypass403 import variants
+        v = variants("/x")
+        paths = [(m, meth, frozenset(h.items())) for lbl, meth, m, h in v]
+        self.assertEqual(len(paths), len(set(paths)))    # no duplicate variants
+
+
 class TestSitemapIndex(unittest.TestCase):
     def test_follows_nested_sitemapindex(self):
         import asyncio
