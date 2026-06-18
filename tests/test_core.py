@@ -72,6 +72,22 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestWellKnown(unittest.TestCase):
+    def test_extract_oidc_endpoints_same_host(self):
+        from origami.modules.discovery import wellknown
+        doc = {"issuer": "https://h",
+               "authorization_endpoint": "https://h/oauth2/authorize",
+               "token_endpoint": "/oauth2/token",
+               "jwks_uri": "https://h/oauth2/jwks.json?v=1",
+               "userinfo_endpoint": "https://idp.OTHER/userinfo",   # cross-host → dropped
+               "grant_types_supported": ["code"]}                   # not an endpoint key
+        eps = wellknown.extract_oidc_endpoints(doc, "h")
+        self.assertIn("/oauth2/authorize", eps)
+        self.assertIn("/oauth2/token", eps)
+        self.assertIn("/oauth2/jwks.json", eps)            # query stripped
+        self.assertNotIn("/userinfo", eps)                 # cross-host excluded
+
+
 class TestErrorPageFingerprint(unittest.TestCase):
     def _fp(self, body):
         from origami.core.fingerprint import apply_error_signals

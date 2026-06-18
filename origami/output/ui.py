@@ -94,7 +94,7 @@ ORIGIN_STYLE = {
     "memory": "magenta", "js": "blue", "shortscan": "bright_magenta",
     "backup": "red", "robots": "green", "priority": "cyan",
     "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
-    "apidocs": "bright_blue",
+    "apidocs": "bright_blue", "wellknown": "bright_cyan",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
