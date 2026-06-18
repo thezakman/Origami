@@ -109,6 +109,24 @@ class TestEndpointGraph(unittest.TestCase):
         self.assertNotIn('src="http', h)                           # no external assets
         self.assertNotIn("cdn", h.lower())
 
+    def test_cross_host_edge_dropped(self):
+        from origami.output import graph
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        r.edges = [("/app.js", "https://evil.cdn/x"), ("/app.js", "/local")]
+        m = graph.build(r)
+        self.assertNotIn("/x", m.nodes)        # external target not collapsed in
+        self.assertIn("/local", m.nodes)
+
+    def test_empty_result_renders(self):
+        from origami.output import graph
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        m = graph.build(ScanResult(profile=TargetProfile(host="h", base_url="https://h/")))
+        self.assertIn("<svg", graph.to_html(m, "h"))   # no crash on empty graph
+        self.assertIn("digraph", graph.to_dot(m))
+
 
 class TestUrlRobustness(unittest.TestCase):
     """A wordlist/payload candidate whose path contains `://` (a Struts2 OGNL
@@ -687,8 +705,11 @@ class TestResume(unittest.TestCase):
             R.save(path, profile=TargetProfile(host="h", base_url="http://h/"),
                    findings=[], requests_made=0, folds=set(), words=[], exts=set(),
                    priority_paths=[], root_seeds=[], base_prefix="/",
-                   queue=[("/a/", 1)], scanned=set(), start_offset=137)
-            self.assertEqual(R.load(path)["start_offset"], 137)
+                   queue=[("/a/", 1)], scanned=set(), start_offset=137,
+                   edges=[("/app.js", "/api/x")])
+            st = R.load(path)
+            self.assertEqual(st["start_offset"], 137)
+            self.assertEqual(st["edges"], [("/app.js", "/api/x")])   # graph survives resume
 
     def test_bad_version_rejected(self):
         import json

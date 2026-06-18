@@ -390,7 +390,8 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
     control = control or ScanControl()
     profile = state["profile"]
     result = ScanResult(profile=profile, findings=list(state["findings"]),
-                        folds=set(state.get("folds", [])))
+                        folds=set(state.get("folds", [])),
+                        edges=[tuple(e) for e in state.get("edges", [])])
     observer.log(f"resume: restored {len(result.findings)} findings · "
                  f"{len(state['queue'])} dirs queued · {len(state['scanned'])} done "
                  f"· {state.get('requests_made', 0)} prior requests",
@@ -444,7 +445,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                             words=words, exts=exts, priority_paths=priority_paths,
                             root_seeds=root_seeds, base_prefix=base_prefix,
                             queue=queue, scanned=scanned, start_offset=offset,
-                            front_cands=[(c.path, c.origin) for c in cands] if cands else [])
+                            front_cands=[(c.path, c.origin) for c in cands] if cands else [],
+                            edges=result.edges)
 
     observer.phase("scan")
     interrupted = False
