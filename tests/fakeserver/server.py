@@ -154,6 +154,19 @@ class Handler(BaseHTTPRequestHandler):
 
     do_HEAD = do_GET
 
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length:
+            self.rfile.read(length)
+        if self.path.split("?")[0] == "/graphql":   # introspection enabled
+            self._send(200, "application/json",
+                       b'{"data":{"__schema":{"queryType":{"name":"Query"},'
+                       b'"mutationType":null,"types":['
+                       b'{"name":"Query","fields":[{"name":"secretUser"},{"name":"allInvoices"}]},'
+                       b'{"name":"__Type","fields":[{"name":"name"}]}]}}}')
+            return
+        self._send(404, "text/html", b"<h1>404 Not Found</h1>")
+
     def _miss(self, path: str):
         body = b"<html><body><h1>Not Found</h1><p>The resource was not found.</p>" + _nonce() + b"</body></html>"
         if self.profile == "wildcard":
