@@ -89,4 +89,25 @@
     - {type: cookie, match: "csrftoken", weight: 50}
     - {type: body, match: "csrfmiddlewaretoken", weight: 60}
   on_confirm:
-    priority_paths: ["admin/", "static/", "__debug__/"]
+    priority_paths: ["admin/", "static/", "media/", "api/", "__debug__/"]
+
+# The techs below are confirmed mainly by the default-error-page catalogue
+# (core/fingerprint.py _ERROR_PAGE_SIGNS) — header-independent. The overlay here
+# just carries their high-value folds.
+
+- tech: springboot
+  signals:
+    - {type: header, name: x-application-context, match: "", weight: 50}
+  on_confirm:
+    priority_paths: ["actuator/", "actuator/health", "actuator/env",
+                     "actuator/mappings", "actuator/heapdump", "actuator/loggers",
+                     "v3/api-docs", "swagger-ui/", "error"]
+
+- tech: flask
+  on_confirm:
+    extensions: [".py"]
+    priority_paths: ["console", "static/", "api/", "debug"]
+
+- tech: jetty
+  on_confirm:
+    priority_paths: ["WEB-INF/web.xml", "WEB-INF/", "jolokia/"]
