@@ -62,6 +62,7 @@ Common flags:
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
 | `-d N` | recursion depth (default 1) |
 | `-c N` / `-t S` | concurrency / timeout |
+| `--rate RPS` | cap the **aggregate** request rate (req/s across all workers) — the knob for a WAF's req/s threshold; unlike `--delay` it doesn't scale with concurrency |
 | `--delay S` | fixed delay before every request (stealth / rate-sensitive targets) |
 | `-k` | skip TLS verification |
 | `-H 'Name: Value'` | extra request header, repeatable (auth/cookies — see below) |

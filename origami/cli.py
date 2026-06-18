@@ -166,6 +166,8 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  exclude  : {', '.join(args.exclude)}")
     if args.graph:
         print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
+    if args.rate:
+        print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
     if args.delay:
         print(f"  delay    : {args.delay}s per request (stealth)")
     if sys.stdin.isatty() and not args.no_ui:
@@ -187,7 +189,7 @@ async def run(args: argparse.Namespace) -> int:
                 observer = ui.make_observer(target, enabled=not args.no_ui,
                                             verbosity=args.verbose, full_url=args.full_url)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
-                                   delay=args.delay,
+                                   delay=args.delay, rate=args.rate,
                                    verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
                                    proxy=args.proxy or "", headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent)
@@ -259,6 +261,10 @@ def main() -> None:
                     help="file with target URLs, one per line (# comments allowed)")
     ap.add_argument("-c", "--concurrency", type=int, default=20)
     ap.add_argument("-t", "--timeout", type=float, default=10.0)
+    ap.add_argument("--rate", type=float, default=0.0, metavar="RPS",
+                    help="cap the aggregate request rate (requests/sec across all "
+                         "workers) — the knob for a WAF's req/s threshold; unlike "
+                         "--delay it doesn't scale with concurrency")
     ap.add_argument("--delay", type=float, default=0.0, metavar="SECONDS",
                     help="fixed delay before every request (stealth / rate-sensitive "
                          "targets); on top of the adaptive backoff")

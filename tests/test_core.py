@@ -359,6 +359,30 @@ class TestUrlRobustness(unittest.TestCase):
         self.assertFalse(p.ok)
         self.assertEqual(p.status, 0)
 
+    def test_rate_limiter_spaces_request_starts(self):
+        import asyncio
+        import time
+        from origami.core.httpclient import Engine, EngineConfig
+
+        async def go():
+            e = Engine(EngineConfig(rate=50.0))     # 50 req/s → 20ms slots
+            t0 = time.monotonic()
+            await asyncio.gather(*(e._pace() for _ in range(6)))  # 6 slots = 5 gaps
+            return time.monotonic() - t0
+
+        elapsed = asyncio.run(go())
+        self.assertGreaterEqual(elapsed, 5 * (1 / 50.0) * 0.8)   # ~0.1s, allow slack
+        self.assertLess(elapsed, 1.0)                            # but not serialized-slow
+
+    def test_rate_zero_is_noop(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig
+        async def go():
+            e = Engine(EngineConfig(rate=0.0))
+            await e._pace()                          # returns immediately
+            return e._next_slot
+        self.assertEqual(asyncio.run(go()), 0.0)
+
 
 class TestLiveProgress(unittest.TestCase):
     def _ui(self):

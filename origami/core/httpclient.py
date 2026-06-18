@@ -61,6 +61,7 @@ class Probe:
 class EngineConfig:
     concurrency: int = 20
     timeout: float = 10.0
+    rate: float = 0.0                           # max AGGREGATE requests/sec across all workers (0 = unlimited)
     delay: float = 0.0                          # fixed per-request floor (stealth / rate control)
     jitter: tuple[float, float] = (0.0, 0.05)   # seconds, uniform
     max_retries: int = 2
@@ -99,6 +100,13 @@ class Engine:
         # Cooperative backoff: when the target pushes back we raise a floor on
         # the per-request delay that every worker observes.
         self._delay_floor = 0.0
+        # Aggregate rate cap (token-bucket style): a monotonic "next slot" time
+        # every worker reserves under a lock, so request STARTS leave at most
+        # cfg.rate per second no matter how many workers are in flight. This is
+        # the knob that respects a WAF's req/s threshold (unlike --delay, which
+        # is per-worker and so scales with concurrency).
+        self._rate_lock = asyncio.Lock()
+        self._next_slot = 0.0
         self.pushback_events = 0
         self.total_requests = 0      # every logical fetch (calibration, harvests, scan)
         self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
@@ -128,6 +136,23 @@ class Engine:
     async def _sleep_before(self) -> None:
         lo, hi = self.cfg.jitter
         await asyncio.sleep(self.cfg.delay + self._delay_floor + random.uniform(lo, hi))
+
+    async def _pace(self) -> None:
+        """Block until this worker's aggregate-rate slot opens (no-op if rate=0).
+
+        Reserving the slot under the lock spaces request *starts* by 1/rate; the
+        HTTP round-trips still overlap up to the concurrency limit, so throughput
+        is capped at the rate without forcing serial requests."""
+        if not self.cfg.rate:
+            return
+        interval = 1.0 / self.cfg.rate
+        async with self._rate_lock:
+            now = time.monotonic()
+            wait = self._next_slot - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = self._next_slot
+            self._next_slot = now + interval
 
     async def _acquire(self) -> None:
         async with self._cond:
@@ -163,6 +188,7 @@ class Engine:
             self.on_request()
         await self._acquire()
         try:
+            await self._pace()
             for attempt in range(self.cfg.max_retries + 1):
                 await self._sleep_before()
                 try:
