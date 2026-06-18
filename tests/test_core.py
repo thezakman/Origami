@@ -152,6 +152,23 @@ class TestBypass403(unittest.TestCase):
                   "Forwarded", "X-HTTP-DestinationURL"):
             self.assertIn(h, hdrs)
 
+    def test_select_bypass_targets_caps_per_wall(self):
+        from origami.core.scanner import _select_bypass_targets, BYPASS_PER_WALL
+        from origami.core.response_classifier import Finding
+        # 10 .env* paths = one wall (same status+simhash); plus two distinct 403s
+        wall = [Finding(f"https://h/.env.{i}", 403, 199, "", 0.85, "wordlist",
+                        tags=["disclosure"], simhash=111) for i in range(10)]
+        distinct = [Finding("https://h/admin", 403, 50, "", 0.85, "wordlist", simhash=222),
+                    Finding("https://h/web.config", 403, 60, "", 0.85, "wordlist", simhash=333)]
+        targets, skipped = _select_bypass_targets(wall + distinct)
+        # at most BYPASS_PER_WALL from the wall, but both distinct 403s kept
+        wall_kept = [t for t in targets if t.simhash == 111]
+        self.assertLessEqual(len(wall_kept), BYPASS_PER_WALL)
+        self.assertEqual(skipped, 10 - len(wall_kept))
+        urls = {t.url for t in targets}
+        self.assertIn("https://h/admin", urls)
+        self.assertIn("https://h/web.config", urls)
+
 
 class TestSitemapIndex(unittest.TestCase):
     def test_follows_nested_sitemapindex(self):
@@ -764,6 +781,17 @@ class TestReportDedup(unittest.TestCase):
         for u in ("https://h/A", "https://h/a"):
             _report(obs, r, opts, make_finding(u), u)
         self.assertEqual(len(r.findings), 2)
+
+    def test_dedup_survives_case_sensitivity_flip_mid_scan(self):
+        # case-sensitivity is undetermined (None) when the first variant is
+        # reported, then flips to insensitive (IIS detected on the first hit).
+        # The earlier variant must still be deduped against later case variants.
+        r, _report, obs, opts = self._setup(case_sensitive=None)
+        _report(obs, r, opts, make_finding("https://h/WebServices"), "https://h/WebServices")
+        r.profile.case_sensitive = False                  # IIS detected mid-scan
+        for u in ("https://h/webservices", "https://h/WEBSERVICES"):
+            _report(obs, r, opts, make_finding(u), u)
+        self.assertEqual(len(r.findings), 1)              # all one resource
 
     def test_block_wall_flood_muted_live_but_kept_for_report(self):
         # A 403 wall (same status+length for many .env*/.git* paths): the live
