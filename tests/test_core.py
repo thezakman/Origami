@@ -72,6 +72,25 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestHeaderHarvest(unittest.TestCase):
+    def test_extract_from_csp_and_link(self):
+        from origami.modules.discovery.js_parser import extract_header_paths
+        headers = {
+            "content-security-policy":
+                "default-src 'self'; connect-src 'self' https://h/api/graphql "
+                "https://evil.cdn/x; form-action /auth/submit",
+            "link": "</assets/app.js>; rel=preload, </style.css>; rel=preload, "
+                    "<https://h/api/config>; rel=preconnect",
+        }
+        out = extract_header_paths(headers, "https://h/")
+        self.assertIn("/api/graphql", out)        # CSP connect-src, same host
+        self.assertIn("/auth/submit", out)        # CSP form-action, root-absolute
+        self.assertIn("/api/config", out)         # Link same-host absolute
+        self.assertIn("/assets/app.js", out)      # Link preload (js kept)
+        self.assertNotIn("/x", out)               # cross-host origin dropped
+        self.assertNotIn("/style.css", out)       # pure asset dropped
+
+
 class TestGraphQL(unittest.TestCase):
     def test_extract_fields_skips_meta(self):
         from origami.modules.discovery import graphql
