@@ -74,6 +74,15 @@ credentials
 verify
 activate
 confirm
+callback
+oauth2
+otp
+mfa
+2fa
+validate
+changepassword
+resetpassword
+forgotpassword
 
 # --- api surface ---
 api
@@ -95,8 +104,12 @@ wsdl
 v1
 v2
 v3
+v4
 endpoint
 endpoints
+swagger-ui
+playground
+external
 
 # --- config / setup / disclosure ---
 config
@@ -122,6 +135,19 @@ metrics
 actuator
 server-status
 server-info
+heapdump
+threaddump
+loggers
+mappings
+beans
+configprops
+readme
+changelog
+license
+todo
+error
+errors
+maintenance
 
 # --- dev / test / staging ---
 test
@@ -192,6 +218,13 @@ temp
 cache
 logs
 log
+sql
+www
+web
+webroot
+wwwroot
+htdocs
+public_html
 
 # --- backup / source / archive ---
 backup
@@ -207,6 +240,25 @@ src
 release
 releases
 dist
+bak
+
+# --- devops / source-leak (bare names; the empty-ext probe catches Dockerfile etc) ---
+dockerfile
+makefile
+jenkinsfile
+gulpfile
+gruntfile
+webpack
+composer
+gemfile
+requirements
+package
+node_modules
+bundle
+cgi-bin
+bin
+conf
+inc
 
 # --- common app sections ---
 about
@@ -310,3 +362,15 @@ pesquisa
 sobre
 contato
 ajuda
+perfil
+financeiro
+pagamento
+pagamentos
+boleto
+boletos
+nota
+notas
+documento
+documentos
+configuracoes
+servicos
