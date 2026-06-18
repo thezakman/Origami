@@ -18,10 +18,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from origami.core.scope import same_host
+
 # A source ending in one of these (or whose name looks like an API spec) is a
 # "machine" reference — a target reached ONLY through these is hidden/orphan.
 _MACHINE_EXT = (".js", ".mjs", ".map")
 _SPEC_HINT = ("swagger", "openapi", "api-docs", "jsonapi")
+
+# Cap edges so a chatty SPA can't produce a multi-MB graph; findings are always
+# kept, only the reference fan-out is bounded.
+MAX_EDGES = 4000
 
 
 @dataclass
@@ -52,8 +58,18 @@ def _is_machine(src: str) -> bool:
     return low.endswith(_MACHINE_EXT) or any(h in low for h in _SPEC_HINT)
 
 
+def _in_scope(ref: str, host: str) -> bool:
+    """Keep relative/root-absolute refs and same-host absolute URLs; drop a
+    cross-host reference (else _pathkey would collapse cdn1/x and cdn2/x into
+    one wrong node)."""
+    if ref.startswith(("http://", "https://")):
+        return same_host(urlparse(ref).netloc, host)
+    return True
+
+
 def build(result) -> GraphModel:
     """Assemble the graph from a ScanResult's findings + provenance edges."""
+    host = result.profile.host
     nodes: dict[str, Node] = {}
     for f in result.findings:
         k = _pathkey(f.url)
@@ -64,6 +80,10 @@ def build(result) -> GraphModel:
     seen: set[tuple[str, str]] = set()
     incoming: dict[str, list[str]] = defaultdict(list)
     for s, d in getattr(result, "edges", []):
+        if len(edges) >= MAX_EDGES:
+            break
+        if not (_in_scope(s, host) and _in_scope(d, host)):
+            continue
         sk, dk = _pathkey(s), _pathkey(d)
         if sk == dk:
             continue
@@ -99,16 +119,21 @@ def _dot_color(status: int | None) -> str:
     return "#8b1a1a"
 
 
+def _dq(s: str) -> str:
+    """Escape a string for a DOT double-quoted id/label."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def to_dot(m: GraphModel) -> str:
     out = ['digraph endpoints {', '  rankdir=LR;',
            '  node [style=filled, fontname="monospace", fontcolor="#ffffff"];']
     for k in sorted(m.nodes):
         n = m.nodes[k]
-        label = (k.rstrip("/").rsplit("/", 1)[-1] or "/").replace('"', '')
+        label = k.rstrip("/").rsplit("/", 1)[-1] or "/"
         ring = ', penwidth=2, color="#f85149"' if n.hidden else ''
-        out.append(f'  "{k}" [label="{label}", fillcolor="{_dot_color(n.status)}"{ring}];')
+        out.append(f'  "{_dq(k)}" [label="{_dq(label)}", fillcolor="{_dot_color(n.status)}"{ring}];')
     for s, d in m.edges:
-        out.append(f'  "{s}" -> "{d}";')
+        out.append(f'  "{_dq(s)}" -> "{_dq(d)}";')
     out.append('}')
     return "\n".join(out)
 
@@ -266,8 +291,8 @@ vp.addEventListener('wheel',e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefaul
 """
 
 
-def write(result, path: str) -> tuple[str, str]:
-    """Write FILE.html (graph) + FILE.dot. Returns (html_path, dot_path)."""
+def write(result, path: str) -> tuple[str, str, int]:
+    """Write FILE.html (graph) + FILE.dot. Returns (html_path, dot_path, n_hidden)."""
     from pathlib import Path
     m = build(result)
     p = Path(path)
@@ -275,4 +300,4 @@ def write(result, path: str) -> tuple[str, str]:
     dot_path = html_path.with_suffix(".dot")
     html_path.write_text(to_html(m, result.profile.host), encoding="utf-8")
     dot_path.write_text(to_dot(m), encoding="utf-8")
-    return str(html_path), str(dot_path)
+    return str(html_path), str(dot_path), len(orphans(m))

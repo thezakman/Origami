@@ -120,9 +120,9 @@ def _write_outputs(args, result, target, multi: bool) -> None:
               f"(report.html, findings.json, params.txt={info['params']}, urls.txt={info['urls']})")
     if args.graph:
         path = _suffix(args.graph, _slug(target)) if multi else args.graph
-        hp, dp = graph.write(result, path)
+        hp, dp, n_hidden = graph.write(result, path)
         print(f"[+] endpoint graph written to {hp} (+ {Path(dp).name}) · "
-              f"{len(graph.orphans(graph.build(result)))} hidden endpoints")
+              f"{n_hidden} hidden endpoints")
 
 
 async def run(args: argparse.Namespace) -> int:
