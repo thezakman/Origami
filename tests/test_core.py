@@ -1086,6 +1086,26 @@ class TestDirRedirect(unittest.TestCase):
         self.assertFalse(_is_self_redirect_dir("http://h/auth?next=/login", "/login"))
 
 
+class TestFoldHygiene(unittest.TestCase):
+    def test_confirm_rejects_5xx(self):
+        # a speculative fold guess that 500s is the server erroring, not a find
+        import asyncio
+        from origami.core.scanner import _confirm
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="h", base_url="http://h/")
+        probe = make_probe(status=500, url="http://h/PRINCI~1")
+        self.assertIsNone(asyncio.run(_confirm(None, p, "/", probe, "shortscan")))
+
+    def test_dedup_case_insensitive(self):
+        from origami.core.scanner import _dedup_by_url
+        from origami.core.response_classifier import Finding
+        fs = [Finding("http://h/PRINCIPAL", 301, 1, "", 0.85, "shortscan"),
+              Finding("http://h/principal", 301, 1, "", 0.85, "shortscan"),
+              Finding("http://h/Principal", 301, 1, "", 0.85, "shortscan")]
+        self.assertEqual(len(_dedup_by_url(fs, ci=True)), 1)    # IIS: one resource
+        self.assertEqual(len(_dedup_by_url(fs, ci=False)), 3)   # case-sensitive: distinct
+
+
 class TestDedup(unittest.TestCase):
     def test_dedup_by_url_keeps_best_confidence(self):
         from origami.core.response_classifier import Finding
