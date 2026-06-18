@@ -363,6 +363,26 @@ class RichUI(NullObserver):
     def _refresh(self) -> None:
         self._live.update(self._render())
 
+    def _highlights(self) -> str:
+        """A one-line tally of the findings that matter for triage."""
+        from collections import Counter
+        tags = Counter(t for f in self.findings for t in getattr(f, "tags", []))
+        origins = Counter(f.origin for f in self.findings)
+        parts: list[str] = []
+        if tags.get("disclosure"):
+            parts.append(f"[bold white on red] {tags['disclosure']} disclosure [/]")
+        if origins.get("bypass403"):
+            parts.append(f"[bold green]{origins['bypass403']} 403-bypass[/]")
+        if origins.get("methods"):
+            parts.append(f"[bold red]{origins['methods']} dangerous-methods[/]")
+        if origins.get("graphql"):
+            parts.append(f"[magenta]{origins['graphql']} graphql[/]")
+        compact = [f"{tags[t]} {t}" for t in ("config", "admin", "auth", "source",
+                                              "upload", "debug", "api") if tags.get(t)]
+        if compact:
+            parts.append("[dim]" + " · ".join(compact) + "[/]")
+        return "  ".join(parts)
+
     def _print_final(self) -> None:
         started = time.strftime("%H:%M:%S", time.localtime(self.start_wall))
         ended = time.strftime("%H:%M:%S")
@@ -370,6 +390,9 @@ class RichUI(NullObserver):
                       f"[bold]{len(self.findings)}[/] findings in "
                       f"[bold]{self.requests}[/] requests "
                       f"([bold]{self._rate():.0f}[/] req/s)")
+        hi = self._highlights()
+        if hi:
+            console.print(f"  ⚑ {hi}")
         console.print(f"[dim]  started {started} · ended {ended} · "
                       f"duration {self._elapsed()}[/]\n")
 
