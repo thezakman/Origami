@@ -213,7 +213,7 @@ tests/
 - additive fingerprint + folds (headers/cookies + **favicon mmh3**, **WAF detection**, and a **default-error-page → stack catalogue** that fingerprints nginx/Apache/IIS/Tomcat/Jetty/Express/Spring-Boot/Django/Flask/Laravel/ASP.NET/PHP header-independently — the hard CDN/WAF case);
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
 - scoped recursion + parent-directory recursion from deep hits;
-- **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**);
+- **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**, primed by **cross-target name memory** so 8.3 prefixes reverse into names seen on past targets — the §4 learning loop; 5xx guesses and case-dupes filtered);
 - **recon phase** (single pass feeding the dynamic wordlist): **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **service worker** (precache) + **web app manifest** + **CSP/Link header** endpoints + **parameter** intel; **backups/VCS**; **robots/sitemap** (follows nested `<sitemapindex>` files); **OpenAPI/Swagger + JSON:API** spec discovery; **`.well-known/`** (OIDC/OAuth auth-endpoint folding + security.txt); **GraphQL introspection** (confirms the endpoint + harvests schema fields); **HTTP method discovery** (OPTIONS → flags PUT/DELETE/TRACE/PATCH/WebDAV); **403/401 bypass** (`--bypass-403`: path/header/method tricks, surviving 2xx-with-content reported);
 - **vocabulary folding** (names+extensions from references + host/subdomain/path);
 - **SQLite memory**: **k-NN over fingerprint vectors** + **association mining** + cross-target priming + `--history`;

@@ -605,6 +605,27 @@ def make_finding(url, status=200):
     return Finding(url, status, 100, "text/html", 0.9, "wordlist")
 
 
+class TestRecallNames(unittest.TestCase):
+    def test_recall_names_cross_target(self):
+        import tempfile
+        from pathlib import Path
+        from origami.brain.memory import Memory
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        with tempfile.TemporaryDirectory() as d:
+            m = Memory(Path(d) / "m.sqlite")
+            p = TargetProfile(host="a", base_url="http://a/")
+            r = ScanResult(profile=p, findings=[
+                Finding("http://a/Administration.aspx", 200, 1, "", 0.9, "x"),
+                Finding("http://a/painel_novo/", 301, 1, "", 0.85, "x")])
+            m.record_run(p, r)
+            names = m.recall_names()
+            self.assertIn("administration", names)   # stem, lowercased
+            self.assertIn("painel_novo", names)       # dir basename
+            m.close()
+
+
 class TestAssociation(unittest.TestCase):
     def test_corpus_rule(self):
         import os
