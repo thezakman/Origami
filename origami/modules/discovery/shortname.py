@@ -130,8 +130,15 @@ def ext_family(shortext: str) -> list[str]:
 
 
 def expand(entries: list[ShortEntry], words: list[str],
-           exts: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+           exts: tuple[str, ...] = (), case_insensitive: bool = False) -> list[tuple[str, str]]:
     """Turn 8.3 entries into concrete (baseurl, path) candidates.
+
+    On a case-insensitive host (`case_insensitive=True` — always the case for the
+    IIS/Windows targets 8.3 enumeration applies to) candidates that differ only in
+    case (WEBSERVICES / webservices / WebServices — one from the resolved fullname,
+    one from the lowercased prefix, one from a wordlist match) collapse to the
+    first, highest-confidence form, so the WAF-throttled budget isn't spent thrice
+    on one resource.
 
     Candidates are emitted in **global confidence tiers** (across ALL entries),
     not per-entry — so that on a throttled target (a WAF cutting the run short,
@@ -152,7 +159,7 @@ def expand(entries: list[ShortEntry], words: list[str],
     tiers: list[list[tuple[str, str]]] = [[], [], [], []]
 
     def add(tier: int, baseurl: str, path: str) -> None:
-        key = (baseurl, path)
+        key = (baseurl, path.lower() if case_insensitive else path)
         if path and key not in seen:
             seen.add(key)
             tiers[tier].append((baseurl, path))
