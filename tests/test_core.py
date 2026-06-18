@@ -139,9 +139,18 @@ class TestBypass403(unittest.TestCase):
         from origami.modules.bypass403 import variants
         v = variants("/admin")
         paths = {m for _, _, m, _ in v}
-        for expected in ("/./admin", "/admin;/", "/admin/..;/", "/%2e/admin"):
+        for expected in ("/./admin", "/admin;/", "/admin/..;/", "/%2e/admin",
+                         "/admin%252f", "/admin%5c"):
             self.assertIn(expected, paths)
         self.assertTrue(any(h.get("Referer") for _, _, _, h in v))
+
+    def test_variants_cover_edge_trust_headers(self):
+        # targets behind Cloudflare/AWS WAF trust the edge IP headers
+        from origami.modules.bypass403 import variants
+        hdrs = {k for _, _, _, h in variants("/admin") for k in h}
+        for h in ("CF-Connecting-IP", "Cluster-Client-IP", "True-Client-IP",
+                  "Forwarded", "X-HTTP-DestinationURL"):
+            self.assertIn(h, hdrs)
 
 
 class TestSitemapIndex(unittest.TestCase):
