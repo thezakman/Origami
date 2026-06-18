@@ -76,6 +76,16 @@ EXISTING = {
         b'"token_endpoint":"/oauth2/token","jwks_uri":"/oauth2/jwks.json"}'),
     "/oauth2/authorize": ("text/html", b"<html><body>OAuth Authorize</body></html>"),
     "/oauth2/jwks.json": ("application/json", b'{"keys":[]}'),
+    # PWA: manifest + service worker → exercise the clientapp recon fold.
+    "/manifest.json": ("application/json",
+                       b'{"name":"App","start_url":"/app/home",'
+                       b'"icons":[{"src":"/icons/app.png"}],'
+                       b'"shortcuts":[{"url":"/pwa/orders"}]}'),
+    "/sw.js": ("application/javascript",
+               b'self.__precacheManifest=[{"url":"/pwa/offline-secret","revision":"1"}];'),
+    "/app/home": ("text/html", b"<html><body>PWA home</body></html>"),
+    "/pwa/orders": ("application/json", b'{"orders":[]}'),
+    "/pwa/offline-secret": ("application/json", b'{"secret":"precached route"}'),
     # JSON:API index (Drupal-style) → exercises the apidocs JSON:API fold.
     "/jsonapi": ("application/vnd.api+json",
                  b'{"jsonapi":{"version":"1.0"},"data":[],"links":{'

@@ -72,6 +72,20 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestClientApp(unittest.TestCase):
+    def test_manifest_paths(self):
+        from origami.modules.discovery.clientapp import manifest_paths
+        doc = {"name": "x", "start_url": "/app/home?utm=1", "scope": "/app/",
+               "icons": [{"src": "/icons/app.png"}, {"src": "https://cdn.OTHER/i.png"}],
+               "shortcuts": [{"url": "/pwa/orders"}]}
+        p = manifest_paths(doc, "https://h/")
+        self.assertIn("/app/home", p)          # start_url, query stripped
+        self.assertIn("/app/", p)              # scope
+        self.assertIn("/icons/app.png", p)     # icon src
+        self.assertIn("/pwa/orders", p)        # shortcut url
+        self.assertTrue(all("OTHER" not in x for x in p))   # cross-host icon dropped
+
+
 class TestBypass403(unittest.TestCase):
     def test_variants_cover_families(self):
         from origami.modules.bypass403 import variants

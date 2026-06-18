@@ -34,8 +34,8 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import bypass403, waf
-from origami.modules.discovery import (apidocs, backups, graphql, js_parser, methods,
-                                        robots, shortname, wellknown)
+from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
+                                        methods, robots, shortname, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -263,6 +263,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # Missing a class (e.g. .json) would drop those candidates to the coarse
     # no-baseline rule, which a soft-404 host defeats. calibrate() de-dupes by
     # ext class, so passing many concrete extensions is cheap.
+    # ---- recon: every passive source that yields paths for the dynamic
+    # wordlist — methods, memory, JS, service worker + manifest, response
+    # headers, robots/sitemap, API specs, .well-known, GraphQL.
+    observer.phase("recon")
+
     # HTTP methods (OPTIONS) — flag dangerous verbs (PUT/DELETE/TRACE/WebDAV).
     m_status, m_methods, m_danger = await _guard(observer, "methods",
                                                  methods.probe(engine, base_url), (0, [], []))
@@ -294,11 +299,15 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     robots_paths: set[str] = set()
 
     if opts.js and root.body:
-        observer.phase("js-harvest")
         js_paths, js_params, js_edges = await _guard(observer, "js-harvest",
                                            js_parser.harvest(engine, base_url, root.body,
                                                              on_progress=observer.progress),
                                            (set(), set(), []))
+        # service worker (precache manifest) + web app manifest — more app paths
+        ca_paths, ca_edges = await _guard(observer, "clientapp",
+                                          clientapp.harvest(engine, base_url), (set(), []))
+        js_paths |= ca_paths
+        js_edges += ca_edges
         js_paths = _scope_paths(js_paths, profile.host, opts.scope)   # scope discipline
         js_paths = set(sorted(js_paths)[:MAX_HARVEST_SEEDS])          # cap the blast radius
         root_seeds += [(p, "js") for p in sorted(js_paths)]
@@ -337,7 +346,6 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # OpenAPI/Swagger spec → fold the whole declared API surface in as seeds.
     api_paths: set[str] = set()
     if opts.apidocs:
-        observer.phase("api-docs")
         spec_url, api_paths = await _guard(observer, "api-docs",
                                            apidocs.harvest(engine, base_url,
                                                            on_progress=observer.progress),

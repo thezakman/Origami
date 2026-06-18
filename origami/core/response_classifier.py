@@ -173,7 +173,9 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
 
     cb = resolve_baseline(profile, probe.url, scan_prefix)
 
-    tags = tag_finding(probe.url, probe.status)
+    # Semantic tags only on accessible content (2xx). A 403 .htpasswd is blocked,
+    # not leaked — tagging it "disclosure" reads like a finding when it isn't.
+    tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
     if cb is None:
         if probe.status in (200, 204, 301, 302, 401, 403, 405):
             return Finding(probe.url, probe.status, probe.length, probe.content_type,

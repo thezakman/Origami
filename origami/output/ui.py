@@ -282,8 +282,8 @@ class RichUI(NullObserver):
         dt = time.perf_counter() - self.start
         return self.requests / dt if dt > 0 else 0.0
 
-    _PHASES = ["calibrate", "fingerprint", "js-harvest", "api-docs", "shortscan",
-               "scan", "backups", "associations"]
+    _PHASES = ["calibrate", "fingerprint", "recon", "shortscan", "scan",
+               "403-bypass", "backups", "associations"]
 
     def _phase_text(self) -> "Text":
         # header shows only the position (the name lives in the status-bar chip)
