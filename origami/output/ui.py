@@ -65,7 +65,7 @@ class NullObserver:
     def progress(self, done: int, total: int) -> None: ...
     def tick(self, hit: bool = False) -> None: ...
     def on_request(self) -> None: ...
-    def finding(self, f) -> None: ...
+    def finding(self, f, stream: bool = True) -> None: ...
     def fingerprint(self, profile, exts, folds) -> None: ...
     def pushback(self, n: int) -> None: ...
     def done(self) -> None: ...
@@ -249,10 +249,15 @@ class RichUI(NullObserver):
             self._pcompleted = min(self._ptotal, self._pcompleted + 1)
             self._progress.update(self._task, completed=self._pcompleted)
 
-    def finding(self, f) -> None:
+    def finding(self, f, stream: bool = True) -> None:
         # Print a PERMANENT line that scrolls above the live region — findings
         # are never truncated or lost, unlike a fixed-height table.
+        # stream=False: still counted (kept in self.findings for the summary),
+        # but not printed — used to mute a block-wall flood in the live view.
         self.findings.append(f)
+        if not stream:
+            self._refresh()
+            return
         style = _status_style(f.status)
         # 2xx = accessible content (a real hit) → bright origin. 401/403/3xx =
         # "exists but blocked / redirect" → dim the origin so the eye doesn't
@@ -477,7 +482,9 @@ class PlainLiveObserver(NullObserver):
             self.hits += 1
         self._draw()
 
-    def finding(self, f) -> None:
+    def finding(self, f, stream: bool = True) -> None:
+        if not stream:                  # block-wall flood — muted in the live view
+            return
         tags = f" \x1b[1;31m[{','.join(f.tags)}]\x1b[0m" if getattr(f, "tags", None) else ""
         accessible = 200 <= f.status < 300
         marker = "\x1b[32m+\x1b[0m" if accessible else "\x1b[33m·\x1b[0m"   # + accessible / · blocked
