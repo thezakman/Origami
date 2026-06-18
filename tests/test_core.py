@@ -664,6 +664,36 @@ class TestRecallNames(unittest.TestCase):
             m.close()
 
 
+class TestReportDedup(unittest.TestCase):
+    def _setup(self, case_sensitive=None):
+        from origami.core.scanner import ScanResult, _report
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+        from origami.core.scanner import ScanOptions
+        p = TargetProfile(host="h", base_url="https://h/")
+        p.case_sensitive = case_sensitive
+        return ScanResult(profile=p), _report, NullObserver(), ScanOptions()
+
+    def test_same_url_from_two_sources_listed_once(self):
+        # memory primes /trace.axd, then the priority list re-finds the same URL.
+        r, _report, obs, opts = self._setup()
+        _report(obs, r, opts, make_finding("https://h/trace.axd"), "https://h/trace.axd")
+        _report(obs, r, opts, make_finding("https://h/trace.axd"), "https://h/trace.axd")
+        self.assertEqual([f.url for f in r.findings], ["https://h/trace.axd"])
+
+    def test_case_variants_collapse_on_iis(self):
+        r, _report, obs, opts = self._setup(case_sensitive=False)
+        for u in ("https://h/WEBSERVICES", "https://h/webservices", "https://h/WebServices"):
+            _report(obs, r, opts, make_finding(u), u)
+        self.assertEqual(len(r.findings), 1)
+
+    def test_case_variants_kept_when_case_sensitive(self):
+        r, _report, obs, opts = self._setup(case_sensitive=True)
+        for u in ("https://h/A", "https://h/a"):
+            _report(obs, r, opts, make_finding(u), u)
+        self.assertEqual(len(r.findings), 2)
+
+
 class TestAssociation(unittest.TestCase):
     def test_corpus_rule(self):
         import os

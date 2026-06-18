@@ -178,6 +178,7 @@ class ScanResult:
     pushbacks: int = 0            # 429/reset events — target throttled us
     completed: bool = False       # False if interrupted (quit/cap) → resumable
     edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
+    seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)  # reported URLs (case-normalized on IIS) — kills cross-source/case live dupes
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -744,11 +745,26 @@ def _dedupe_and_collapse(findings, observer, ci=False):
 
 def _report(observer, result, opts, finding, url) -> None:
     """Report a finding if it passes presentation filters (recursion already
-    decided upstream, filter-independent)."""
+    decided upstream, filter-independent).
+
+    A URL already reported (by any earlier source — memory primes /trace.axd, then
+    the priority list re-finds it; or an IIS host serves /WebServices == /webservices)
+    is suppressed live, so the stream never shows the same resource twice. The key
+    is case-normalized on a case-insensitive host. The set is primed from restored
+    findings on resume."""
+    ci = result.profile.case_sensitive is False
+    if result.seen_urls is not None and not result.seen_urls and result.findings:
+        result.seen_urls.update((f.url.lower() if ci else f.url) for f in result.findings)
+    key = url.lower() if ci else url
+    if key in result.seen_urls:
+        observer.tick(hit=False)            # not a new resource — count the probe, don't re-list
+        observer.request(url, finding.status, False)
+        return
     shown = opts.filters.accept(finding.status, finding.length)
     observer.tick(hit=shown)
     observer.request(url, finding.status, shown)
     if shown:
+        result.seen_urls.add(key)
         result.findings.append(finding)
         observer.finding(finding)
         observer.log(f"+ {finding.status} {observer.disp(url)} · "
@@ -767,6 +783,12 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     confirmed_dirs: list[str] = []
     ancestor_dirs: list[str] = []
     first_hit_path: str | None = None
+    # URLs already fired this prefix. Distinct candidate strings can resolve to
+    # the SAME url — a memory seed "trace.axd" (app-relative) and a priority
+    # "/trace.axd" (root-absolute) collide at the root prefix; on IIS case
+    # variants collide too. Skip the repeat so we don't re-probe it.
+    ci = profile.case_sensitive is False
+    fired: set[str] = set()
 
     consumed = len(cands)
     hit_cap = False
@@ -792,6 +814,11 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         if _excluded(urlparse(url).path, opts):     # safety rail — never fire it
             observer.tick(hit=False)
             continue
+        ukey = url.lower() if ci else url
+        if ukey in fired:                           # same URL as an earlier candidate
+            observer.tick(hit=False)
+            continue
+        fired.add(ukey)
         probe = await engine.fetch(url)
         path = urlparse(url).path
 
@@ -1020,10 +1047,20 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
                  f"({n_gen} from n-gram completion)", 1, style="cyan")
 
     # calibrate every (prefix, ext class) the seeds touch, then fire them.
+    # On a case-insensitive host (IIS) collapse case variants BEFORE firing —
+    # WEBSERVICES / webservices / WebServices are one resource, so probing all
+    # three just burns the (often WAF-throttled) request budget. Keep the first,
+    # which is the highest-confidence form thanks to expand()'s tier ordering.
+    ci = profile.case_sensitive is False
     by_prefix: dict[str, set[str]] = {}
     urls: list[tuple[str, str]] = []
+    seen_u: set[str] = set()
     for baseurl, path in cands:
         url = urljoin(baseurl, path)
+        ukey = url.lower() if ci else url
+        if ukey in seen_u:
+            continue
+        seen_u.add(ukey)
         prefix = urlparse(url).path.rsplit("/", 1)[0] + "/"
         by_prefix.setdefault(prefix, set()).add(_ext_of(path))
         urls.append((url, prefix))
