@@ -203,6 +203,13 @@ class TestEndpointGraph(unittest.TestCase):
         self.assertIn("3 hidden", h)
         self.assertNotIn('href="graph.html"', html_report.render(r))   # no card without count
 
+    def test_report_sortable_and_summary(self):
+        from origami.output import html_report
+        h = html_report.render(self._result())
+        self.assertIn('data-sort="num"', h)        # clickable sortable headers
+        self.assertIn(">status<", h)               # status-code summary card
+        self.assertIn("200×2", h)                  # both findings are 200
+
 
 class TestUrlRobustness(unittest.TestCase):
     """A wordlist/payload candidate whose path contains `://` (a Struts2 OGNL
