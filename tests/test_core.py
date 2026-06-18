@@ -72,6 +72,44 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestEndpointGraph(unittest.TestCase):
+    def _result(self):
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        r.findings = [Finding("https://h/api/v2/admin/secret", 200, 10, "", 0.9, "js"),
+                      Finding("https://h/login", 200, 10, "", 0.9, "wordlist")]
+        r.edges = [("/app.js", "/api/v2/admin/secret"),   # machine-only → hidden
+                   ("/", "/login"),                        # page link → not hidden
+                   ("/robots.txt", "/sitemap-page")]       # published index → not hidden
+        return r
+
+    def test_build_and_orphans(self):
+        from origami.output import graph
+        m = graph.build(self._result())
+        self.assertTrue(m.nodes["/api/v2/admin/secret"].hidden)     # only-JS referenced
+        self.assertFalse(m.nodes["/login"].hidden)
+        self.assertIsNone(m.nodes["/sitemap-page"].status)          # referenced, not confirmed
+        self.assertEqual(m.nodes["/login"].status, 200)
+        self.assertIn("/api/v2/admin/secret", graph.orphans(m))
+        self.assertNotIn("/login", graph.orphans(m))
+
+    def test_to_dot(self):
+        from origami.output import graph
+        dot = graph.to_dot(graph.build(self._result()))
+        self.assertIn("digraph", dot)
+        self.assertIn('"/app.js" -> "/api/v2/admin/secret"', dot)
+
+    def test_to_html_self_contained(self):
+        from origami.output import graph
+        h = graph.to_html(graph.build(self._result()), "h")
+        self.assertIn("<svg", h)
+        self.assertIn("secret", h)                                  # node label present
+        self.assertNotIn('src="http', h)                           # no external assets
+        self.assertNotIn("cdn", h.lower())
+
+
 class TestUrlRobustness(unittest.TestCase):
     """A wordlist/payload candidate whose path contains `://` (a Struts2 OGNL
     `${...http://x...}`) must not be mistaken for an absolute URL and must never
