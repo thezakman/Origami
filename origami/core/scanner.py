@@ -753,7 +753,7 @@ def _report(observer, result, opts, finding, url) -> None:
     is case-normalized on a case-insensitive host. The set is primed from restored
     findings on resume."""
     ci = result.profile.case_sensitive is False
-    if result.seen_urls is not None and not result.seen_urls and result.findings:
+    if not result.seen_urls and result.findings:          # prime once (e.g. from findings restored on resume)
         result.seen_urls.update((f.url.lower() if ci else f.url) for f in result.findings)
     key = url.lower() if ci else url
     if key in result.seen_urls:
