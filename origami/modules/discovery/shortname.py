@@ -28,9 +28,11 @@ from urllib.parse import urljoin
 EXT_FAMILY = {
     "ASP": [".asp", ".aspx"], "ASA": [".asa", ".asax"], "ASM": [".asmx"],
     "ASH": [".ashx"], "ASC": [".ascx"], "CON": [".config"], "CS": [".cs", ".cshtml"],
+    "CSH": [".cshtml"], "VB": [".vb"], "MAS": [".master"], "SVC": [".svc"],
+    "AXD": [".axd"], "RES": [".resx", ".res"], "SOA": [".soap"], "REM": [".rem"],
     "HTM": [".htm", ".html"], "PHP": [".php", ".php3", ".php5"], "JS": [".js"],
-    "JSO": [".json"], "TXT": [".txt"], "XML": [".xml"], "DLL": [".dll"],
-    "BAK": [".bak"], "ZIP": [".zip"], "RAR": [".rar"], "MDB": [".mdb"],
+    "MAP": [".map"], "JSO": [".json"], "TXT": [".txt"], "XML": [".xml"], "DLL": [".dll"],
+    "BAK": [".bak"], "ZIP": [".zip"], "RAR": [".rar"], "MDB": [".mdb", ".mdf"],
     "XLS": [".xls", ".xlsx"], "DOC": [".doc", ".docx"], "PDF": [".pdf"],
     "INC": [".inc"], "OLD": [".old"], "SQL": [".sql"], "CSV": [".csv"],
 }
@@ -131,22 +133,29 @@ def expand(entries: list[ShortEntry], words: list[str],
            exts: tuple[str, ...] = ()) -> list[tuple[str, str]]:
     """Turn 8.3 entries into concrete (baseurl, path) candidates.
 
-    For each leaked short name we try, in priority order:
-      1. shortscan's autocomplete `fullname` (if any);
-      2. the raw 8.3 name itself — `APF785~1[.ext]` — directly requestable on IIS;
-      3. the 6-char prefix as a file (with the leaked ext family, or all enabled
-         tech extensions when no ext leaked) AND as a directory — the prefix is
-         very often the real start/whole name (e.g. APIINT~1 → /apiint, /apiint/);
-      4. the wordlist constrained to entries starting with the prefix.
-    """
-    out: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    Candidates are emitted in **global confidence tiers** (across ALL entries),
+    not per-entry — so that on a throttled target (a WAF cutting the run short,
+    economy mode), the names shortscan already *resolved* fire before any
+    speculative wordlist guess. Per-entry ordering used to bury a late entry's
+    resolved fullname (e.g. DEFAULT.ASPX, the last leak) behind hundreds of
+    earlier entries' wordlist expansions, so it never got requested under load.
 
-    def add(baseurl: str, path: str) -> None:
+    Tiers, highest first:
+      1. shortscan's autocomplete `fullname` — a name it already reconstructed;
+      2. the raw 8.3 name itself — `APF785~1[.ext]` — directly requestable on IIS;
+      3. the 6-char prefix as a file (leaked ext family, else enabled tech exts)
+         AND as a directory — the prefix is very often the real start/whole name
+         (e.g. APIINT~1 → /apiint, /apiint/);
+      4. the wordlist constrained to entries starting with the prefix (speculative).
+    """
+    seen: set[tuple[str, str]] = set()
+    tiers: list[list[tuple[str, str]]] = [[], [], [], []]
+
+    def add(tier: int, baseurl: str, path: str) -> None:
         key = (baseurl, path)
         if path and key not in seen:
             seen.add(key)
-            out.append((baseurl, path))
+            tiers[tier].append((baseurl, path))
 
     tech_exts = list(exts)
     for e in entries:
@@ -155,17 +164,18 @@ def expand(entries: list[ShortEntry], words: list[str],
         fams = ext_family(e.ext) if e.ext else (tech_exts + [""])
 
         if e.fullname:
-            add(e.baseurl, e.fullname)
-        # raw 8.3 short name (shortfile + tilde [+ ext])
-        if e.prefix and e.tilde:
-            raw = f"{e.prefix}{e.tilde}"
-            add(e.baseurl, f"{raw}.{e.ext}" if e.ext else raw)
+            add(0, e.baseurl, e.fullname)
+        # raw 8.3 short name — `tilde` IS the complete 8.3 name (e.g. "WEBREF~1");
+        # it already embeds the prefix, so request it as-is (+ leaked ext). Joining
+        # prefix+tilde used to double it ("WEBREFWEBREF~1") → a guaranteed 404.
+        if e.tilde:
+            add(1, e.baseurl, f"{e.tilde}.{e.ext}" if e.ext else e.tilde)
         if prefix:
             for ext in fams:                 # prefix as file
-                add(e.baseurl, prefix + ext)
-            add(e.baseurl, prefix + "/")      # prefix as directory
+                add(2, e.baseurl, prefix + ext)
+            add(2, e.baseurl, prefix + "/")   # prefix as directory
             for w in words:                   # constraint-filtered wordlist
                 if w.lower().startswith(prefix):
                     for ext in fams:
-                        add(e.baseurl, w + ext)
-    return out
+                        add(3, e.baseurl, w + ext)
+    return [c for tier in tiers for c in tier]
