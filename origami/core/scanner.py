@@ -34,7 +34,8 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import waf
-from origami.modules.discovery import apidocs, backups, js_parser, robots, shortname, wellknown
+from origami.modules.discovery import (apidocs, backups, graphql, js_parser, robots,
+                                        shortname, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -332,6 +333,19 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                      f"(OIDC/OAuth + security.txt)", 1, style="cyan")
         if opts.graph:
             result.edges += wk_edges
+
+    # GraphQL introspection — confirm the endpoint + harvest schema field names.
+    if opts.apidocs:
+        gql_url, gql_fields = await _guard(observer, "graphql",
+                                           graphql.harvest(engine, base_url), (None, set()))
+        if gql_url:
+            profile.parameters |= gql_fields
+            gf = Finding(gql_url, 200, 0, "application/json", 0.9, "graphql",
+                         note="introspection enabled", tags=["api"])
+            result.findings.append(gf)
+            observer.finding(gf)
+            observer.log(f"graphql: introspection enabled at {urlparse(gql_url).path} "
+                         f"→ {len(gql_fields)} schema fields harvested", 0, style="cyan")
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]

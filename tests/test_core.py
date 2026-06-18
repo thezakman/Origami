@@ -72,6 +72,19 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestGraphQL(unittest.TestCase):
+    def test_extract_fields_skips_meta(self):
+        from origami.modules.discovery import graphql
+        doc = {"data": {"__schema": {"types": [
+            {"name": "Query", "fields": [{"name": "secretUser"}, {"name": "allInvoices"}]},
+            {"name": "__Type", "fields": [{"name": "name"}, {"name": "kind"}]},
+        ]}}}
+        fields = graphql.extract_fields(doc)
+        self.assertEqual(fields, {"secretUser", "allInvoices"})   # meta type/fields skipped
+        self.assertTrue(graphql._is_schema(doc))
+        self.assertFalse(graphql._is_schema({"data": {}}))
+
+
 class TestWellKnown(unittest.TestCase):
     def test_extract_oidc_endpoints_same_host(self):
         from origami.modules.discovery import wellknown
