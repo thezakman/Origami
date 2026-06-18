@@ -208,7 +208,7 @@ tests/
 
 ## 7. Status & roadmap
 
-**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 42 unit tests):
+**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 100 unit tests):
 - per-context calibration (simhash soft-404, wildcard, case-sensitivity, redirect-kind);
 - additive fingerprint + folds (headers/cookies + **favicon mmh3**, **WAF detection**, and a **default-error-page → stack catalogue** that fingerprints nginx/Apache/IIS/Tomcat/Jetty/Express/Spring-Boot/Django/Flask/Laravel/ASP.NET/PHP header-independently — the hard CDN/WAF case);
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
