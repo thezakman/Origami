@@ -61,6 +61,7 @@ class Probe:
 class EngineConfig:
     concurrency: int = 20
     timeout: float = 10.0
+    delay: float = 0.0                          # fixed per-request floor (stealth / rate control)
     jitter: tuple[float, float] = (0.0, 0.05)   # seconds, uniform
     max_retries: int = 2
     user_agent: str = DEFAULT_UA
@@ -126,7 +127,7 @@ class Engine:
 
     async def _sleep_before(self) -> None:
         lo, hi = self.cfg.jitter
-        await asyncio.sleep(self._delay_floor + random.uniform(lo, hi))
+        await asyncio.sleep(self.cfg.delay + self._delay_floor + random.uniform(lo, hi))
 
     async def _acquire(self) -> None:
         async with self._cond:

@@ -62,6 +62,7 @@ Common flags:
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
 | `-d N` | recursion depth (default 1) |
 | `-c N` / `-t S` | concurrency / timeout |
+| `--delay S` | fixed delay before every request (stealth / rate-sensitive targets) |
 | `-k` | skip TLS verification |
 | `-H 'Name: Value'` | extra request header, repeatable (auth/cookies — see below) |
 | `-A UA` | override the User-Agent |
