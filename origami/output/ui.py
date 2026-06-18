@@ -60,6 +60,7 @@ class NullObserver:
         self.skippable = value
 
     def phase(self, name: str) -> None: ...
+    def substep(self, name: str, done: int, total: int) -> None: ...
     def start_prefix(self, prefix: str, total: int) -> None: ...
     def progress(self, done: int, total: int) -> None: ...
     def tick(self, hit: bool = False) -> None: ...
@@ -154,6 +155,7 @@ class RichUI(NullObserver):
         self.engine = None
         self.target = target
         self.phase_name = "starting"
+        self.substep_name = ""
         self.prefix = "/"
         self.requests = 0
         self.hits = 0
@@ -193,17 +195,26 @@ class RichUI(NullObserver):
 
     def phase(self, name: str) -> None:
         self.phase_name = name
+        self.substep_name = ""
         # Setup/harvest phases have no candidate count → an INDETERMINATE bar
         # that pulses (animated by auto-refresh). reset(total=None) keeps the old
-        # total in rich, so set it on the task directly. A request-heavy fold
-        # (js-harvest, api-docs) then calls progress() to switch it to a real,
-        # filling bar; scan/shortscan/backups use start_prefix.
+        # total in rich, so set it on the task directly. substep()/start_prefix()
+        # switch it to a real, filling bar.
         self._ptotal = 0
         self._pcompleted = 0
         task = self._progress.tasks[0]
         task.completed = 0
         task.total = None                          # → animated pulse
         self._progress.update(self._task, description=f"status [bold cyan]{name}[/]")
+
+    def substep(self, name: str, done: int, total: int) -> None:
+        # within a phase (recon), name the current sub-step + fill the bar by
+        # step count: `recon: apidocs  4/7`.
+        self.substep_name = name
+        self._ptotal = max(total, 1)
+        self._pcompleted = min(done, self._ptotal)
+        self._progress.update(self._task, completed=self._pcompleted, total=self._ptotal,
+                              description=f"status [bold cyan]{self.phase_name}: {name}[/]")
 
     def start_prefix(self, prefix: str, total: int) -> None:
         self.prefix = prefix
@@ -325,7 +336,8 @@ class RichUI(NullObserver):
 
     def _statusbar(self) -> Text:
         t = Text()
-        t.append(f" {self.phase_name} ", style="bold white on blue")
+        chip = self.phase_name + (f": {self.substep_name}" if self.substep_name else "")
+        t.append(f" {chip} ", style="bold white on blue")
         t.append("  reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
         t.append(" · ", style="dim"); t.append(f"{self._rate():.0f}/s", style="bold")
         t.append(" · hits ", style="dim"); t.append(f"{self.hits}", style="bold green")
@@ -371,6 +383,7 @@ class PlainLiveObserver(NullObserver):
         self.full_url = full_url
         self.target = target
         self.phase_name = "starting"
+        self.substep_name = ""
         self.prefix = "/"
         self.requests = self.hits = self.pushbacks = 0
         self.start = time.perf_counter()
