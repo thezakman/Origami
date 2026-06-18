@@ -304,6 +304,9 @@ def write(result, path: str) -> tuple[str, str, int]:
     p = Path(path)
     html_path = p if p.suffix.lower() in (".html", ".htm") else p.with_suffix(".html")
     dot_path = html_path.with_suffix(".dot")
+    # Render the .dot BEFORE to_html — to_html's layout injects a synthetic "/"
+    # root into the model, which shouldn't leak into the .dot export.
+    dot = to_dot(m)
     html_path.write_text(to_html(m, result.profile.host), encoding="utf-8")
-    dot_path.write_text(to_dot(m), encoding="utf-8")
+    dot_path.write_text(dot, encoding="utf-8")
     return str(html_path), str(dot_path), len(orphans(m))

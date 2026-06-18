@@ -182,7 +182,8 @@ class ScanResult:
     pushbacks: int = 0            # 429/reset events — target throttled us
     completed: bool = False       # False if interrupted (quit/cap) → resumable
     edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
-    seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)  # reported URLs (case-normalized on IIS) — kills cross-source/case live dupes
+    seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
+    seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
 
 
@@ -488,13 +489,14 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
                             scanned=set(state["scanned"]), resume_path=resume_path,
                             start_offset=state.get("start_offset", 0),
                             front_cands=state.get("front_cands") or None,
-                            root_simhash=state.get("root_simhash", 0))
+                            root_simhash=state.get("root_simhash", 0),
+                            prior_requests=state.get("requests_made", 0))
 
 
 async def _scan_loop(engine, profile, opts, observer, memory, control, result, *,
                      base_prefix, words, exts, priority_paths, root_seeds,
                      queue, scanned, resume_path, start_offset=0, front_cands=None,
-                     root_simhash=0):
+                     root_simhash=0, prior_requests=0):
     """The recursive directory walk + post-scan folds, checkpointed per prefix.
 
     A prefix is added to `scanned` only after every candidate fired. If the scan
@@ -527,7 +529,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         if resume_path is not None:
             result.findings = _dedup_by_url(result.findings)
             resume_mod.save(resume_path, profile=profile, findings=result.findings,
-                            requests_made=engine.total_requests, folds=result.folds,
+                            requests_made=prior_requests + engine.total_requests, folds=result.folds,
                             words=words, exts=exts, priority_paths=priority_paths,
                             root_seeds=root_seeds, base_prefix=base_prefix,
                             queue=queue, scanned=scanned, start_offset=offset,
@@ -588,6 +590,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
             for d in dirs:
                 if d in scanned or d in queued or _excluded(d, opts):
                     continue
+                if not d.startswith(base_prefix):
+                    continue                       # stay in scope — don't recurse a dir
+                    # outside the requested base (e.g. an ancestor of a root-absolute
+                    # seed like /admin/ when scanning /lms/); the seed itself is still
+                    # probed once, we just don't brute-force-recurse out of scope.
                 if _rel_depth(d, base_prefix) <= opts.max_depth:
                     queued.add(d)
                     item = (d, _rel_depth(d, base_prefix))
@@ -597,7 +604,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         _enqueue(confirmed, front=True)
         _checkpoint(0)
 
-    result.requests_made = engine.total_requests
+    result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
     if memory is not None and ranker is not None:
         memory.record_word_stats(ranker.deltas(), techs)   # learn even if interrupted
@@ -643,7 +650,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                                             ci=profile.case_sensitive is False)
 
     observer.pushback(engine.pushback_events)
-    result.requests_made = engine.total_requests
+    result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
     result.completed = True
     result.findings.sort(key=lambda f: (-f.confidence, f.url))
@@ -759,9 +766,12 @@ def _report(observer, result, opts, finding, url) -> None:
     findings on resume."""
     ci = result.profile.case_sensitive is False
     if not result.seen_urls and result.findings:          # prime once (e.g. from findings restored on resume)
-        result.seen_urls.update((f.url.lower() if ci else f.url) for f in result.findings)
-    key = url.lower() if ci else url
-    if key in result.seen_urls:
+        for prev in result.findings:
+            result.seen_urls.add(prev.url)
+            result.seen_urls_lc.add(prev.url.lower())
+    # consult the lower-cased set on a case-insensitive host, the raw one otherwise;
+    # both are kept current so a case flip mid-scan stays consistent.
+    if (url.lower() in result.seen_urls_lc) if ci else (url in result.seen_urls):
         observer.tick(hit=False)            # not a new resource — count the probe, don't re-list
         observer.request(url, finding.status, False)
         return
@@ -769,7 +779,8 @@ def _report(observer, result, opts, finding, url) -> None:
     observer.tick(hit=shown)
     observer.request(url, finding.status, shown)
     if shown:
-        result.seen_urls.add(key)
+        result.seen_urls.add(url)
+        result.seen_urls_lc.add(url.lower())
         result.findings.append(finding)
         # Block-wall flood control (live only): a server that forbids every
         # .env*/.git* path returns the SAME blocked-status body for each — a
@@ -934,6 +945,29 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
 
 
 MAX_BYPASS_TARGETS = 20   # cap blocked resources we attempt to bypass
+BYPASS_PER_WALL = 3       # …and at most this many per identical 403/401 wall
+
+
+def _select_bypass_targets(findings, per_wall=BYPASS_PER_WALL, cap=MAX_BYPASS_TARGETS):
+    """Pick the 403/401 resources worth bypassing → (targets, n_skipped).
+
+    Tagged (interesting) first, then at most `per_wall` per distinct (status,
+    body-simhash) wall — a server that 403s every .env*/.git* serves the SAME
+    page for all, so 20 attempts at identical walls is 20× waste. Capping per
+    wall covers each one while freeing the budget for genuinely distinct 403s
+    (/admin, /web.config…)."""
+    blocked = _dedup_by_url([f for f in findings if f.status in (401, 403)])
+    blocked.sort(key=lambda f: (not f.tags, f.url))   # tagged (interesting) first
+    seen: dict[tuple, int] = {}
+    diverse, skipped = [], 0
+    for f in blocked:
+        sig = (f.status, f.simhash)
+        if seen.get(sig, 0) >= per_wall:
+            skipped += 1
+            continue
+        seen[sig] = seen.get(sig, 0) + 1
+        diverse.append(f)
+    return diverse[:cap], skipped + max(0, len(diverse) - cap)
 
 
 async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) -> None:
@@ -942,13 +976,14 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     A variant counts as a real bypass only when it passes the soft-404
     sibling check (_confirm) AND its body isn't the homepage (the X-Original-URL
     trick otherwise just returns `/`)."""
-    blocked = _dedup_by_url([f for f in result.findings if f.status in (401, 403)])
+    blocked, skipped = _select_bypass_targets(result.findings)
     if not blocked:
         return
-    blocked.sort(key=lambda f: (not f.tags, f.url))   # tagged (interesting) first
-    blocked = blocked[:MAX_BYPASS_TARGETS]
     observer.phase("403-bypass")
-    observer.log(f"403-bypass: probing {len(blocked)} blocked resources", 0, style="cyan")
+    msg = f"403-bypass: probing {len(blocked)} blocked resources"
+    if skipped:
+        msg += f" ({skipped} same-wall/over-cap 403s skipped)"
+    observer.log(msg, 0, style="cyan")
     total = sum(len(bypass403.variants(urlparse(f.url).path)) for f in blocked)
     observer.start_prefix("403-bypass", total)
     root = _host_root(profile.base_url)

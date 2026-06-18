@@ -146,13 +146,16 @@ class Engine:
         if not self.cfg.rate:
             return
         interval = 1.0 / self.cfg.rate
+        # Reserve this worker's slot under the lock, then release BEFORE sleeping
+        # so other workers can grab their own slots concurrently — request starts
+        # end up spaced by 1/rate while the actual round-trips still overlap.
         async with self._rate_lock:
             now = time.monotonic()
-            wait = self._next_slot - now
-            if wait > 0:
-                await asyncio.sleep(wait)
-                now = self._next_slot
-            self._next_slot = now + interval
+            slot = self._next_slot if self._next_slot > now else now
+            self._next_slot = slot + interval
+        wait = slot - now
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     async def _acquire(self) -> None:
         async with self._cond:
@@ -206,9 +209,11 @@ class Engine:
                     return Probe(url, method, 0, 0, 0, 0, "", "", 0, 0.0,
                                  error=f"bad-url: {type(e).__name__}: {e}")
 
-                if probe.status in _PUSHBACK and attempt < self.cfg.max_retries:
+                if probe.status in _PUSHBACK:
                     self._note_pushback()
-                    continue
+                    if attempt < self.cfg.max_retries:
+                        continue
+                    return probe          # out of retries — return the throttle, but DON'T relax
 
                 self._relax()
                 return probe
