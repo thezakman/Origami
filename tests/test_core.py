@@ -72,6 +72,33 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestSitemapIndex(unittest.TestCase):
+    def test_follows_nested_sitemapindex(self):
+        import asyncio
+        from origami.core.httpclient import Probe
+        from origami.modules.discovery import robots
+        routes = {
+            "/robots.txt": (200, b"User-agent: *\nDisallow: /admin/\n"
+                                 b"Sitemap: http://h/sitemap.xml\n"),
+            "/sitemap.xml": (200, b"<sitemapindex><sitemap><loc>http://h/sm-1.xml"
+                                  b"</loc></sitemap></sitemapindex>"),
+            "/sm-1.xml": (200, b"<urlset><url><loc>http://h/products/item-42</loc></url>"
+                               b"<url><loc>/secret-page</loc></url></urlset>"),
+        }
+
+        class E:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                from urllib.parse import urlparse
+                st, body = routes.get(urlparse(url).path, (404, b""))
+                return Probe(url, method, st, len(body), 0, 0, "", "", 0, 0.0,
+                             body_head=body[:2048], body=body)
+
+        paths = asyncio.run(robots.harvest(E(), "http://h/"))
+        self.assertIn("/products/item-42", paths)   # content from the CHILD sitemap
+        self.assertIn("/secret-page", paths)         # (the index was followed)
+        self.assertIn("/admin/", paths)              # robots Disallow
+
+
 class TestMethods(unittest.TestCase):
     def test_parse_allow_flags_dangerous(self):
         from origami.modules.discovery.methods import parse_allow
