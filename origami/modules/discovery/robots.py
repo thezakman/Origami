@@ -11,9 +11,14 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlparse
 
+from origami.core.scope import same_host
+
 _RULE = re.compile(r"(?:dis)?allow\s*:\s*(\S+)", re.I)
 _SITEMAP_REF = re.compile(r"sitemap\s*:\s*(\S+)", re.I)
 _LOC = re.compile(rb"<loc>\s*([^<]+?)\s*</loc>", re.I)
+
+MAX_SITEMAPS = 12        # cap fetched sitemaps (sitemapindex fan-out)
+MAX_PATHS = 2000         # cap content paths harvested from sitemaps
 
 
 def _same_host_path(raw: str, host: str) -> str | None:
@@ -55,11 +60,55 @@ def parse_sitemap(body: bytes, base_url: str) -> set[str]:
     return out
 
 
+def _sitemap_refs(body: bytes, base_url: str) -> list[str]:
+    """`Sitemap:` lines from robots.txt → absolute URLs to fetch."""
+    out = []
+    for line in body.decode("latin-1").splitlines():
+        m = _SITEMAP_REF.match(line.strip())
+        if m:
+            out.append(urljoin(base_url, m.group(1).strip()))
+    return out
+
+
 async def harvest(engine, base_url: str) -> set[str]:
-    """Fetch robots.txt + sitemap.xml; return same-host candidate paths."""
+    """robots.txt rules + sitemap content, following nested sitemapindex files.
+
+    A `<sitemapindex>` lists child sitemaps (not content); we fetch them (capped)
+    and parse their `<urlset>` <loc>s — big sites hide their real URL list behind
+    one index. Same-host only; paths capped so a 50k-URL sitemap can't flood.
+    """
+    host = urlparse(base_url).netloc
     paths: set[str] = set()
-    for fname, parser in (("robots.txt", parse_robots), ("sitemap.xml", parse_sitemap)):
-        p = await engine.fetch(urljoin(base_url, fname), keep_body=True)
-        if p.ok and p.status == 200 and p.body:
-            paths |= parser(p.body, base_url)
+    queue: list[str] = []
+
+    rp = await engine.fetch(urljoin(base_url, "robots.txt"), keep_body=True)
+    if rp.ok and rp.status == 200 and rp.body:
+        paths |= parse_robots(rp.body, base_url)            # Disallow/Allow paths
+        queue += _sitemap_refs(rp.body, base_url)           # follow declared sitemaps
+    queue.append(urljoin(base_url, "sitemap.xml"))
+
+    seen: set[str] = set()
+    fetched = 0
+    while queue and fetched < MAX_SITEMAPS and len(paths) < MAX_PATHS:
+        url = queue.pop(0)
+        if url in seen or not same_host(urlparse(url).netloc or host, host):
+            continue
+        seen.add(url)
+        sp = await engine.fetch(url, keep_body=True)
+        fetched += 1
+        if not (sp.ok and sp.status == 200 and sp.body):
+            continue
+        is_index = b"<sitemapindex" in sp.body[:4096].lower()
+        for loc in _LOC.findall(sp.body):
+            raw = loc.decode("latin-1").strip()
+            if is_index:                                    # child sitemap → fetch it
+                nxt = urljoin(url, raw)
+                if nxt not in seen and same_host(urlparse(nxt).netloc or host, host):
+                    queue.append(nxt)
+            else:
+                p = _same_host_path(raw, host)
+                if p:
+                    paths.add(p)
+                    if len(paths) >= MAX_PATHS:
+                        break
     return paths
