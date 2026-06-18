@@ -17,6 +17,10 @@ from urllib.parse import urljoin, urlparse
 # More than this many byte-identical results (same status+simhash) = a catch-all
 # or generic page; collapse to one representative + a count.
 COLLISION_MAX = 4
+# Blocked statuses whose identical-body flood is a generic block wall (forbids
+# every .env*/.git*…) — muted in the live stream past COLLISION_MAX. 2xx/3xx are
+# left to the end-of-scan collapse, which keys on length without this gate.
+_WALL_STATUS = frozenset({401, 403, 405})
 MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 
 from origami.brain.bandit import Ranker as Bandit
@@ -179,6 +183,7 @@ class ScanResult:
     completed: bool = False       # False if interrupted (quit/cap) → resumable
     edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)  # reported URLs (case-normalized on IIS) — kills cross-source/case live dupes
+    wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -766,9 +771,29 @@ def _report(observer, result, opts, finding, url) -> None:
     if shown:
         result.seen_urls.add(key)
         result.findings.append(finding)
-        observer.finding(finding)
-        observer.log(f"+ {finding.status} {observer.disp(url)} · "
-                     f"conf {finding.confidence:.2f} · {finding.origin}", 1, style="green")
+        # Block-wall flood control (live only): a server that forbids every
+        # .env*/.git* path returns the SAME blocked-status body for each — a
+        # generic block keyed on the sensitive substring, which the per-path
+        # soft-403 sibling check can't catch (the random sibling lacks the
+        # substring). Show the first COLLISION_MAX, then stop STREAMING the rest
+        # (they're still kept and folded to one line in the report by
+        # _dedupe_and_collapse). 2xx/3xx are left to that end collapse.
+        wall = finding.status in _WALL_STATUS
+        n = 0
+        if wall:
+            sig = (finding.status, finding.length)
+            n = result.wall_seen.get(sig, 0) + 1
+            result.wall_seen[sig] = n
+        if wall and n > COLLISION_MAX:
+            if n == COLLISION_MAX + 1:
+                observer.log(f"{finding.status} block-wall: identical {finding.length}B "
+                             f"response repeating across paths — muting the live stream "
+                             f"(folded into one in the report)", 0, style="yellow")
+            observer.finding(finding, stream=False)     # counted, not printed
+        else:
+            observer.finding(finding)
+            observer.log(f"+ {finding.status} {observer.disp(url)} · "
+                         f"conf {finding.confidence:.2f} · {finding.origin}", 1, style="green")
 
 
 async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control,

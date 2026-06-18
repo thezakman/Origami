@@ -731,6 +731,45 @@ class TestReportDedup(unittest.TestCase):
             _report(obs, r, opts, make_finding(u), u)
         self.assertEqual(len(r.findings), 2)
 
+    def test_block_wall_flood_muted_live_but_kept_for_report(self):
+        # A 403 wall (same status+length for many .env*/.git* paths): the live
+        # stream is muted past COLLISION_MAX, but every finding is still kept so
+        # the end-of-scan collapse folds them to one line in the report.
+        from origami.core.scanner import _report, ScanResult, ScanOptions, COLLISION_MAX
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        class CountObs(NullObserver):
+            def __init__(self): super().__init__(); self.streamed = 0
+            def finding(self, f, stream=True):
+                if stream: self.streamed += 1
+
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        obs = CountObs()
+        opts = ScanOptions()
+        for i in range(20):
+            u = f"https://h/.env.{i}"
+            _report(obs, r, opts, make_finding(u, status=403), u)
+        self.assertEqual(len(r.findings), 20)              # all kept for the collapse
+        self.assertEqual(obs.streamed, COLLISION_MAX)      # only the first few streamed
+
+    def test_non_wall_status_not_muted(self):
+        from origami.core.scanner import _report, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        class CountObs(NullObserver):
+            def __init__(self): super().__init__(); self.streamed = 0
+            def finding(self, f, stream=True):
+                if stream: self.streamed += 1
+
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        obs = CountObs()
+        for i in range(20):
+            u = f"https://h/page{i}"                        # distinct 200 URLs
+            _report(obs, r, ScanOptions(), make_finding(u, status=200), u)
+        self.assertEqual(obs.streamed, 20)                 # 2xx never muted live
+
 
 class TestAssociation(unittest.TestCase):
     def test_corpus_rule(self):
