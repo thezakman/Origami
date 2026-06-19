@@ -622,6 +622,14 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                      f"checkpoint saved → continue with --resume", 0, style="yellow")
         return result
 
+    # 4.4 deep harvest — read the target's OWN discovered code (JS/JSON/spec/HTML
+    # the scan turned up, not just the homepage) for more endpoints, then probe
+    # them. Runs first so harvested findings also get bypass/backup treatment.
+    if opts.js:
+        await _guard(observer, "harvest",
+                     _harvest_fold(engine, profile, result, opts, observer, base_prefix),
+                     None)
+
     # 4.5 403/401 bypass — try to walk around denials BEFORE the collapse merges
     # the 403 wall, so each blocked resource gets its own attempt.
     if opts.bypass403:
@@ -913,6 +921,96 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
 def _wordlist_path(opts: ScanOptions):
     from pathlib import Path
     return Path(opts.wordlist_path) if opts.wordlist_path else None
+
+
+_HARVEST_EXT = (".js", ".mjs", ".map", ".json", ".xml", ".html", ".htm", ".txt", ".csv")
+_HARVEST_CODE = (".js", ".mjs", ".map", ".json")
+MAX_HARVEST_FILES = 30    # discovered files we re-read for endpoints
+MAX_HARVEST_NEW = 400     # new candidate paths a harvest pass may add
+
+
+def _harvestable(f) -> bool:
+    """A confirmed 2xx text file whose body likely holds more endpoints."""
+    if not (200 <= f.status < 300):
+        return False
+    if js_parser._is_vendor(f.url):           # jquery/bootstrap/etc. — not the app's own code
+        return False
+    path = urlparse(f.url).path.lower()
+    ct = (f.content_type or "").lower()
+    return (path.endswith(_HARVEST_EXT)
+            or any(t in ct for t in ("javascript", "ecmascript", "json", "xml", "html")))
+
+
+async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) -> None:
+    """Read the target's OWN discovered code for more endpoints — the core fold.
+
+    The root recon reads the homepage and its scripts; this extends that to every
+    JS/JSON/spec/HTML file the SCAN itself turned up (a wordlist-found
+    `/app/bundle.js` reveals `/app/api/v2/users` no wordlist would guess), then
+    probes the new in-scope paths. Discovery that compounds: the more it finds,
+    the more it reads, the more it finds."""
+    files = [f for f in result.findings if _harvestable(f)]
+    if not files:
+        return
+    # code/specs (js/json/map) before markup; most confident first; cap the radius
+    files.sort(key=lambda f: (not urlparse(f.url).path.lower().endswith(_HARVEST_CODE),
+                              -f.confidence))
+    files = files[:MAX_HARVEST_FILES]
+    observer.phase("harvest")
+    observer.log(f"harvest: re-reading {len(files)} discovered files for endpoints",
+                 0, style="cyan")
+    root = _host_root(profile.base_url)
+
+    # 1. read each file's body, extract referenced paths
+    new_paths: dict[str, str] = {}            # path -> source file path (for graph edges)
+    for f in files:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
+            break
+        observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
+        pr = await engine.fetch(f.url, keep_body=True)
+        if not (pr.ok and pr.body):
+            continue
+        for p in js_parser.extract_paths(pr.body, f.url):
+            new_paths.setdefault(p, urlparse(f.url).path)
+
+    # 2. scope + drop what we already probed/found, then cap
+    scoped = _scope_paths(set(new_paths), profile.host, opts.scope)
+    fresh = [(p, new_paths[p]) for p in sorted(scoped)
+             if urljoin(root, p.lstrip("/")).lower() not in result.seen_urls_lc]
+    fresh = fresh[:MAX_HARVEST_NEW]
+    if not fresh:
+        observer.log("harvest: no endpoints beyond what's already found", 1)
+        return
+    observer.log(f"harvest: {len(fresh)} new candidate endpoints from discovered code",
+                 0, style="cyan")
+
+    # 3. calibrate the contexts they touch, then confirm-probe each
+    by_prefix: dict[str, set[str]] = {}
+    for p, _ in fresh:
+        pth = "/" + p.lstrip("/")
+        by_prefix.setdefault(pth.rsplit("/", 1)[0] + "/", set()).add(_ext_of(pth))
+    for prefix, pexts in by_prefix.items():
+        await bl.calibrate(engine, profile,
+                           [(prefix, e) for e in (set(_BASE_CALIB_EXTS) | pexts)])
+
+    observer.start_prefix("harvest", len(fresh))
+    for p, src in fresh:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
+            break
+        pth = "/" + p.lstrip("/")
+        if _excluded(pth, opts):
+            continue
+        url = urljoin(root, p.lstrip("/"))
+        prefix = urlparse(url).path.rsplit("/", 1)[0] + "/"
+        probe = await engine.fetch(url)
+        finding = await _confirm(engine, profile, prefix, probe, "harvest")
+        if finding is None:
+            observer.tick(hit=False)
+            observer.request(url, probe.status, False)
+            continue
+        if opts.graph:
+            result.edges.append((src, pth))
+        _report(observer, result, opts, finding, url)
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:
