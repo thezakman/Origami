@@ -42,9 +42,10 @@ class NullObserver:
 
     streamed = False               # did this observer print findings live?
 
-    def __init__(self, verbosity: int = 0, full_url: bool = False) -> None:
+    def __init__(self, verbosity: int = 0, full_url: bool = False, stream=None) -> None:
         self.verbosity = verbosity
         self.full_url = full_url
+        self.stream = stream or sys.stdout    # logs go here — stderr when stdout is a JSONL pipe
         self.skippable = False     # [n] skip only meaningful once a dir exists
         self.engine = None         # set via attach_engine for live throttle readout
 
@@ -75,11 +76,11 @@ class NullObserver:
 
     def log(self, msg: str, level: int = 1, style: str = "") -> None:
         if self.verbosity >= level:
-            print(msg)
+            print(msg, file=self.stream)
 
     def request(self, url: str, status: int, hit: bool) -> None:
         if self.verbosity >= 2:
-            print(f"  {status:>3} {'HIT' if hit else '   '}  {url}")
+            print(f"  {status:>3} {'HIT' if hit else '   '}  {url}", file=self.stream)
 
     def __enter__(self): return self
     def __exit__(self, *a): ...
@@ -511,15 +512,17 @@ class PlainLiveObserver(NullObserver):
             self._emit(f"  {status:>3} {'HIT' if hit else '   '}  {url}")
 
 
-def make_observer(target: str, enabled: bool, verbosity: int = 0, full_url: bool = False):
+def make_observer(target: str, enabled: bool, verbosity: int = 0, full_url: bool = False,
+                  log_stream=None):
     """Pick the best observer for the environment.
 
     rich + TTY  → RichUI (full dashboard)
     TTY only    → PlainLiveObserver (dependency-free status bar)
-    otherwise   → NullObserver (quiet; verbose logs only)
+    otherwise   → NullObserver (quiet; verbose logs only). `log_stream` routes its
+                  logs off stdout (e.g. to stderr when stdout carries JSONL).
     """
     if not enabled:
-        return NullObserver(verbosity, full_url)
+        return NullObserver(verbosity, full_url, log_stream)
     if HAS_RICH and console and console.is_terminal:
         return RichUI(target, verbosity, full_url)
     if sys.stdout.isatty():

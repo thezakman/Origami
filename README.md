@@ -32,7 +32,7 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
 - **Smart noise control** — 404/400 are never hits; redirects that leave the path (auth walls) are dropped; identical-content collisions collapse; deep hits reveal their parent directories for recursion. The same resource is never listed twice — distinct candidates that resolve to one URL (a memory seed `trace.axd` vs an evidence `/trace.axd`) and, on a case-insensitive IIS host, case variants (`/WebServices` == `/webservices`) collapse to a single probe and a single finding.
 - **Cross-target memory** — SQLite corpus primes new scans from past ones; the n-gram completer improves as it grows.
 - **Endpoint graph** (`--graph`) — turns the harvested references into a self-contained HTML graph (who references whom) that highlights **orphan/hidden endpoints**: paths reachable only from JavaScript or an API spec, never linked from a page — often the interesting ones.
-- **Pentest-ready output** — live `rich` dashboard (streaming, never loses findings), JSON, self-contained HTML report, and a `--out` directory with `params.txt` / `urls.txt` for the next tool.
+- **Pentest-ready output** — live `rich` dashboard (streaming, never loses findings), JSON, self-contained HTML report, a `--out` directory with `params.txt` / `urls.txt`, and **`--jsonl -`** to stream findings as JSON Lines straight into the next tool (`origami https://t --jsonl - | nuclei`); progress goes to stderr so stdout stays pure.
 
 ## Install
 
@@ -80,6 +80,7 @@ Common flags:
 | `-v` / `-vv` | verbose: phases & hits / every request |
 | `-F` | show full URLs instead of paths |
 | `--json FILE` / `--html FILE` / `--out DIR` | reports & artifacts |
+| `--jsonl FILE` | stream findings as JSON Lines, live (use `-` for stdout → pipe into `nuclei`/`httpx`/…) |
 | `--graph FILE` | endpoint graph (provenance + orphan/hidden endpoints) → FILE.html + FILE.dot |
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |

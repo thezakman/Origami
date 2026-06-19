@@ -161,6 +161,7 @@ class ScanOptions:
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
     filters: Filters = field(default_factory=Filters)
+    finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
 
 
 @dataclass
@@ -795,6 +796,8 @@ def _report(observer, result, opts, finding, url) -> None:
         result.seen_urls.add(url)
         result.seen_urls_lc.add(url.lower())
         result.findings.append(finding)
+        if opts.finding_sink is not None:
+            opts.finding_sink(finding)            # stream this confirmed finding (e.g. JSONL)
         # Block-wall flood control (live only): a server that forbids every
         # .env*/.git* path returns the SAME blocked-status body for each — a
         # generic block keyed on the sensitive substring, which the per-path
@@ -975,7 +978,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
         pr = await engine.fetch(f.url, keep_body=True)
         if not (pr.ok and pr.body):
             continue
-        _note_secrets(f, pr.body, observer)        # the body's already here — scan it for creds too
+        _note_secrets(f, pr.body, observer, opts.finding_sink)   # body's here — scan for creds too
         for p in js_parser.extract_paths(pr.body, f.url):
             new_paths.setdefault(p, urlparse(f.url).path)
 
@@ -1019,8 +1022,11 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
         _report(observer, result, opts, finding, url)
 
 
-def _note_secrets(finding, body, observer) -> int:
-    """Scan one body for secrets; tag + annotate the finding. Returns count."""
+def _note_secrets(finding, body, observer, sink=None) -> int:
+    """Scan one body for secrets; tag + annotate the finding. Returns count.
+
+    `sink` (opts.finding_sink) re-emits the now-enriched finding so a JSONL
+    consumer sees the `secret` tag even though detection happens post-confirm."""
     hits = secrets.scan(body)
     if not hits:
         return 0
@@ -1029,6 +1035,8 @@ def _note_secrets(finding, body, observer) -> int:
         finding.tags = list(finding.tags) + ["secret"]
     finding.note = (finding.note + " · " if finding.note else "") + f"secrets: {preview}"
     observer.log(f"secret: {observer.disp(finding.url)} → {preview}", 0, style="bold red")
+    if sink is not None:
+        sink(finding)
     return len(hits)
 
 
@@ -1071,7 +1079,7 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
-            total += _note_secrets(f, pr.body, observer)
+            total += _note_secrets(f, pr.body, observer, opts.finding_sink)
     if total:
         observer.log(f"secrets: {total} potential credential(s) flagged — see the 'secret' tag",
                      0, style="bold red")

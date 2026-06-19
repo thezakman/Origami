@@ -131,6 +131,31 @@ class TestHarvestFold(unittest.TestCase):
         self.assertEqual(harvested, hidden)   # both hidden endpoints found & reported
 
 
+class TestJsonlStream(unittest.TestCase):
+    def test_finding_record_shape(self):
+        from origami.output.json_report import finding_record
+        from origami.core.response_classifier import Finding
+        r = finding_record(Finding("https://h/a", 200, 12, "application/json",
+                                   0.953, "js", tags=["api"]), host="h")
+        self.assertEqual(r["url"], "https://h/a")
+        self.assertEqual(r["status"], 200)
+        self.assertEqual(r["confidence"], 0.95)        # rounded
+        self.assertEqual(r["tags"], ["api"])
+        self.assertEqual(r["host"], "h")
+
+    def test_finding_sink_called_per_reported_finding(self):
+        from origami.core.scanner import _report, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+        streamed = []
+        opts = ScanOptions(finding_sink=streamed.append)
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        _report(NullObserver(), r, opts, make_finding("https://h/a"), "https://h/a")
+        _report(NullObserver(), r, opts, make_finding("https://h/a"), "https://h/a")  # dup
+        _report(NullObserver(), r, opts, make_finding("https://h/b"), "https://h/b")
+        self.assertEqual([f.url for f in streamed], ["https://h/a", "https://h/b"])  # dup not streamed
+
+
 class TestSecrets(unittest.TestCase):
     def test_scan_detects_provider_keys(self):
         from origami.modules.secrets import scan
