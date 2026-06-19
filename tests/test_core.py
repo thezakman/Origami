@@ -1125,6 +1125,42 @@ class TestAssociation(unittest.TestCase):
             m.close()
             os.unlink(db)
 
+    def test_associate_skips_ambient_paths(self):
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            # every backup host also has /favicon.ico — ambient, must not be suggested
+            for h in ("h1", "h2", "h3"):
+                for p in ("/backup/", "/.git/HEAD", "/favicon.ico"):
+                    m.db.execute("INSERT OR REPLACE INTO corpus VALUES (?,?,?)", (h, p, 200))
+            m.db.commit()
+            assoc = m.associate(["/backup/"], min_support=2, min_conf=0.5)
+            self.assertIn("/.git/HEAD", assoc)
+            self.assertNotIn("/favicon.ico", assoc)   # ambient filtered out
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_associate_no_variable_limit_on_common_path(self):
+        # a path on >999 hosts must not blow SQLite's bound-variable limit
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            for i in range(1100):
+                m.db.execute("INSERT OR REPLACE INTO corpus VALUES (?,?,?)", (f"h{i}", "/common", 200))
+                if i % 2 == 0:
+                    m.db.execute("INSERT OR REPLACE INTO corpus VALUES (?,?,?)", (f"h{i}", "/admin/", 200))
+            m.db.commit()
+            assoc = m.associate(["/common"], min_support=2, min_conf=0.4)   # no OperationalError
+            self.assertIn("/admin/", assoc)           # ~50% co-occurrence
+        finally:
+            m.close()
+            os.unlink(db)
+
 
 class TestWappalyzerIngest(unittest.TestCase):
     def test_literalize(self):
