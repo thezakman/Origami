@@ -61,7 +61,9 @@ EXISTING = {
     # backup/source disclosure — exercises the backups fold.
     "/default.aspx.bak": ("text/plain", b"<%-- backup of default.aspx with secrets --%>"),
     "/.git/HEAD": ("text/plain", b"ref: refs/heads/main\n"),
-    "/.env": ("text/plain", b"DB_PASSWORD=hunter2\nAPI_KEY=sk-test\n"),
+    "/.env": ("text/plain", b"APP_ENV=production\nAWS_ACCESS_KEY_ID=AKIAZ7QF3X9PLMNB2WQT\n"
+                            b"DATABASE_URL=postgres://app:s3cr3tP4ssw0rd@db.internal:5432/prod\n"
+                            b"JWT_SECRET=9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c\n"),
     # OpenAPI spec → exercises the apidocs fold. Declares endpoints reachable
     # nowhere else (not in the wordlist, JS, or robots).
     "/swagger.json": ("application/json",

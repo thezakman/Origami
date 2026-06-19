@@ -131,6 +131,56 @@ class TestHarvestFold(unittest.TestCase):
         self.assertEqual(harvested, hidden)   # both hidden endpoints found & reported
 
 
+class TestSecrets(unittest.TestCase):
+    def test_scan_detects_provider_keys(self):
+        from origami.modules.secrets import scan
+        def kinds(b): return {k for k, _ in scan(b)}
+        self.assertIn("aws-access-key", kinds(b'k=AKIAZ7QF3X9PLMNB2WQT'))
+        self.assertIn("github-token", kinds(b'ghp_Qw7Er9Ty2Ui4Op6As8Df1Gh3Jk5Lz7Xc9Vb'))
+        self.assertIn("jwt", kinds(b'tok=eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeKK'))
+        self.assertIn("private-key", kinds(b'-----BEGIN RSA PRIVATE KEY-----\nMII'))
+        self.assertIn("db-uri-creds", kinds(b'postgres://admin:s3cr3tpass@db.host:5432/app'))
+        self.assertIn("generic-secret", kinds(b'api_key: "9f8a7b6c5d4e3f2a1b0c"'))
+
+    def test_scan_rejects_placeholders_and_examples(self):
+        from origami.modules.secrets import scan
+        self.assertEqual(scan(b'password = "changeme"'), [])
+        self.assertEqual(scan(b'api_key="your_api_key_here"'), [])
+        self.assertEqual(scan(b'password="12"'), [])                      # too short
+        self.assertEqual(scan(b'AWS_KEY=AKIAIOSFODNN7EXAMPLE'), [])        # AWS doc example
+        self.assertEqual(scan(b''), [])
+
+    def test_scan_redacts(self):
+        from origami.modules.secrets import scan
+        (kind, red), = scan(b'k=AKIAZ7QF3X9PLMNB2WQT')
+        self.assertNotIn("AKIAZ7QF3X9PLMNB2WQT", red)                     # not the full secret
+        self.assertTrue(red.startswith("AKIAZ7"))                          # but identifiable
+
+    def test_secrets_fold_flags_config_finding(self):
+        import asyncio
+        from origami.core.scanner import _secrets_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        env_url = "https://h/.env"
+        class FakeEngine:
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                body = b'SECRET_KEY=AKIAZ7QF3X9PLMNB2WQT\nDB=postgres://u:p4ssword@h/db' if url == env_url else b""
+                return make_probe(200, body, url=url, ctype="text/plain")
+            async def gather(self, urls, method="GET"):
+                return [await self.fetch(u) for u in urls]
+
+        profile = TargetProfile(host="h", base_url="https://h/")
+        f = Finding(env_url, 200, 40, "text/plain", 0.95, "wordlist", tags=["config"])
+        result = ScanResult(profile=profile, findings=[f])
+        asyncio.run(_secrets_fold(FakeEngine(), profile, result, ScanOptions(), NullObserver()))
+        self.assertIn("secret", f.tags)
+        self.assertIn("secrets:", f.note)
+
+
 class TestClientApp(unittest.TestCase):
     def test_manifest_paths(self):
         from origami.modules.discovery.clientapp import manifest_paths

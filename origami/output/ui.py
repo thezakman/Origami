@@ -102,7 +102,8 @@ ORIGIN_STYLE = {
 
 # Semantic tag colour — `disclosure` deliberately loud.
 TAG_STYLE = {
-    "disclosure": "bold white on red", "config": "yellow", "api": "blue",
+    "secret": "bold white on red", "disclosure": "bold white on red",
+    "config": "yellow", "api": "blue",
     "admin": "cyan", "auth": "magenta", "source": "green",
     "upload": "bright_yellow", "debug": "bright_red",
 }
@@ -375,6 +376,8 @@ class RichUI(NullObserver):
         tags = Counter(t for f in self.findings for t in getattr(f, "tags", []))
         origins = Counter(f.origin for f in self.findings)
         parts: list[str] = []
+        if tags.get("secret"):
+            parts.append(f"[bold white on red] {tags['secret']} SECRET [/]")
         if tags.get("disclosure"):
             parts.append(f"[bold white on red] {tags['disclosure']} disclosure [/]")
         if origins.get("bypass403"):
