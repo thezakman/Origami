@@ -34,7 +34,7 @@ from origami.core.evidence import Evidence, TargetProfile
 from origami.core.httpclient import Engine
 from origami.core.normalize import hamming
 from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding,
-                                               classify, resolve_baseline)
+                                               classify, is_dir_listing, resolve_baseline)
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
@@ -1006,7 +1006,10 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
         if not (pr.ok and pr.body):
             continue
         _note_secrets(f, pr.body, observer, opts.finding_sink)   # body's here — scan for creds too
-        for p in js_parser.extract_paths(pr.body, f.url):
+        extracted = js_parser.extract_paths(pr.body, f.url)
+        if is_dir_listing(pr.body):               # autoindex → read its TRUE contents, don't guess
+            extracted |= js_parser.parse_listing(pr.body, f.url)
+        for p in extracted:
             new_paths.setdefault(p, urlparse(f.url).path)
 
     # 2. scope + drop what we already probed/found, then cap

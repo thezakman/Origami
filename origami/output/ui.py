@@ -107,6 +107,7 @@ TAG_STYLE = {
     "config": "yellow", "api": "blue",
     "admin": "cyan", "auth": "magenta", "source": "green",
     "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
+    "listing": "bold yellow",
 }
 
 
@@ -387,6 +388,8 @@ class RichUI(NullObserver):
             parts.append(f"[bold red]{origins['methods']} dangerous-methods[/]")
         if origins.get("graphql"):
             parts.append(f"[magenta]{origins['graphql']} graphql[/]")
+        if tags.get("listing"):
+            parts.append(f"[bold yellow]{tags['listing']} dir-listing[/]")
         compact = [f"{tags[t]} {t}" for t in ("config", "admin", "auth", "source",
                                               "upload", "debug", "api") if tags.get(t)]
         if compact:

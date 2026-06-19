@@ -8,6 +8,7 @@ these same features is a v3 upgrade, once v1/v2 have labelled data.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -89,6 +90,24 @@ def tag_finding(url: str, status: int) -> list[str]:
 # classify (rather than in Filters) keeps soft-404 hosts from flagging a 404
 # as a hit just because their baseline is a 200.
 NOT_FOUND_STATUS = frozenset({400, 404})
+
+
+# Directory-listing (autoindex) signatures — Apache/nginx mod_autoindex, IIS,
+# Tomcat. Matched against the first bytes of the body (always captured), so no
+# extra fetch is needed. High-signal anchors only, to keep false positives ~0.
+_DIR_LISTING = re.compile(
+    rb"(?i)<title[^>]*>\s*index of /"               # apache / nginx / litespeed
+    rb"|<h1>\s*index of /"
+    rb"|\[to parent directory\]"                    # IIS
+    rb"|directory listing for /"                    # tomcat
+    rb"|<a href=\"\?C=[NMSD];O=[AD]\""              # apache column-sort links
+    rb"|>\s*parent directory\s*</a>"
+)
+
+
+def is_dir_listing(body: bytes) -> bool:
+    """True if `body` looks like a server directory-index page (autoindex on)."""
+    return bool(_DIR_LISTING.search(body or b""))
 
 
 @dataclass
@@ -176,6 +195,8 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     # Semantic tags only on accessible content (2xx). A 403 .htpasswd is blocked,
     # not leaked — tagging it "disclosure" reads like a finding when it isn't.
     tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
+    if 200 <= probe.status < 300 and is_dir_listing(probe.body_head):
+        tags.append("listing")          # autoindex enabled — exposes the dir's files
     if cb is None:
         if probe.status in (200, 204, 301, 302, 401, 403, 405):
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
