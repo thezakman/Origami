@@ -78,6 +78,7 @@ Common flags:
 | `--shortscan` / `--no-shortscan` | force / disable the IIS 8.3 fold (auto when IIS detected) |
 | `--no-js` / `--no-apidocs` / `--no-backups` | disable those discovery folds |
 | `-x PATTERN` | never request/recurse a path containing PATTERN (safety; repeatable) |
+| `--exclude-ext LIST` | drop paths with these extensions from scraping/probing (glob: `jpg,png,css` or `jpg*`) — cuts static-asset noise from listings/JS |
 | `--max-folds N` | cap learned-vocabulary names folded in (default 40) |
 | `--economy auto\|on\|off` | rank candidates by learned hit-rate (auto: on under a WAF) |
 | `-v` / `-vv` | verbose: phases & hits / every request |

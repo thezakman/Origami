@@ -1491,6 +1491,24 @@ class TestExclude(unittest.TestCase):
         from origami.core.scanner import _excluded
         self.assertFalse(_excluded("/logout", self._opts([])))
 
+    def test_exclude_ext_filters_by_extension_with_glob(self):
+        from origami.core.scanner import _ext_excluded, _excluded, ScanOptions
+        pats = ["jpg", "png", "css"]
+        self.assertTrue(_ext_excluded("/images/balde.png", pats))
+        self.assertTrue(_ext_excluded("/css/index.CSS", pats))     # case-insensitive
+        self.assertFalse(_ext_excluded("/images/Thumbs.db", pats))  # .db not excluded
+        self.assertFalse(_ext_excluded("/css/", pats))             # the dir itself stays
+        self.assertFalse(_ext_excluded("/admin", pats))            # no extension
+        # glob: jpg* matches jpg, jpge, jpg2 (the user's prefix example)
+        g = ["jpg*"]
+        self.assertTrue(_ext_excluded("/a/x.jpg", g))
+        self.assertTrue(_ext_excluded("/a/x.jpge", g))
+        self.assertFalse(_ext_excluded("/a/x.png", g))
+        # wired through _excluded (the universal fire guard)
+        o = ScanOptions(exclude_ext=["png"])
+        self.assertTrue(_excluded("/images/seo.png", o))
+        self.assertFalse(_excluded("/images/data.json", o))
+
 
 class TestApiDocs(unittest.TestCase):
     def test_swagger2_basepath_and_templating(self):
