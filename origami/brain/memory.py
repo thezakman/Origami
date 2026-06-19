@@ -24,6 +24,15 @@ from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".origami" / "memory.sqlite"
 
+# Paths present on nearly every host — they carry no cross-target signal (every
+# scan finds them anyway), so they're dropped from recall/association priming to
+# avoid crowding out the tech-specific paths that actually transfer.
+_AMBIENT_PATHS = frozenset({
+    "/", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/index.html",
+    "/index.php", "/index.htm", "/default.aspx", "/index.asp", "/home",
+    "/.well-known/security.txt", "/apple-touch-icon.png",
+})
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY,
@@ -107,16 +116,18 @@ class Memory:
         if not techs:
             return []
         qmarks = ",".join("?" * len(techs))
+        amarks = ",".join("?" * len(_AMBIENT_PATHS))
         rows = self.db.execute(
             f"""SELECT c.path, COUNT(DISTINCT c.host) AS freq
                   FROM corpus c
                   JOIN host_techs ht ON ht.host = c.host
                  WHERE ht.tech IN ({qmarks})
                    AND c.host != ?
+                   AND c.path NOT IN ({amarks})
                  GROUP BY c.path
                  ORDER BY freq DESC, c.path
                  LIMIT ?""",
-            (*techs, exclude_host, limit),
+            (*techs, exclude_host, *_AMBIENT_PATHS, limit),
         ).fetchall()
         return [r[0] for r in rows]
 
@@ -144,7 +155,8 @@ class Memory:
         scores: dict[str, float] = defaultdict(float)
         for s, host in sims[:k]:
             for path, _ in self.prior_findings(host):
-                scores[path] += s
+                if path not in _AMBIENT_PATHS:        # ambient paths transfer no signal
+                    scores[path] += s
         return sorted(scores, key=lambda p: -scores[p])[:limit]
 
     def associate(self, found_paths, min_support: int = 2, min_conf: float = 0.3,
@@ -159,18 +171,20 @@ class Memory:
             return []
         best: dict[str, float] = {}
         for a in found:
-            hosts_a = [r[0] for r in self.db.execute(
-                "SELECT host FROM corpus WHERE path = ?", (a,))]
-            if len(hosts_a) < min_support:
+            # hosts-with-A as a SUBQUERY (not a bound IN-list): avoids SQLite's
+            # ~999-variable limit when A is a common path on thousands of hosts.
+            n_a = self.db.execute(
+                "SELECT COUNT(DISTINCT host) FROM corpus WHERE path = ?", (a,)).fetchone()[0]
+            if n_a < min_support:
                 continue
-            qm = ",".join("?" * len(hosts_a))
             rows = self.db.execute(
-                f"SELECT path, COUNT(DISTINCT host) FROM corpus "
-                f"WHERE host IN ({qm}) GROUP BY path", hosts_a).fetchall()
+                "SELECT path, COUNT(DISTINCT host) FROM corpus "
+                "WHERE host IN (SELECT host FROM corpus WHERE path = ?) "
+                "GROUP BY path", (a,)).fetchall()
             for b, cnt in rows:
-                if b in found:
+                if b in found or b in _AMBIENT_PATHS:    # skip self + ambient (favicon/robots/…)
                     continue
-                conf = cnt / len(hosts_a)
+                conf = cnt / n_a
                 if conf >= min_conf and conf > best.get(b, 0):
                     best[b] = conf
         return sorted(best, key=lambda b: -best[b])[:limit]
