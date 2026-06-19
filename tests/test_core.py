@@ -183,6 +183,39 @@ class TestJsonlStream(unittest.TestCase):
         self.assertEqual([f.url for f in streamed], ["https://h/a", "https://h/b"])  # dup not streamed
 
 
+class TestDirListing(unittest.TestCase):
+    APACHE = (b'<html><head><title>Index of /images</title></head><body>'
+              b'<h1>Index of /images</h1><pre><a href="?C=N;O=D">Name</a><hr>'
+              b'<a href="../">Parent Directory</a><a href="logo.png">logo.png</a>'
+              b'<a href="backup.zip">backup.zip</a><a href="thumbs/">thumbs/</a></pre></body></html>')
+
+    def test_detects_autoindex_flavours(self):
+        from origami.core.response_classifier import is_dir_listing
+        self.assertTrue(is_dir_listing(self.APACHE))
+        self.assertTrue(is_dir_listing(b'<title>Index of /css/</title>'))
+        self.assertTrue(is_dir_listing(b'<pre>[To Parent Directory]</pre>'))     # IIS
+        self.assertTrue(is_dir_listing(b'<h1>Directory Listing For /scripts/</h1>'))  # tomcat
+        self.assertFalse(is_dir_listing(b'<html><title>Welcome</title><h1>Home</h1></html>'))
+
+    def test_parse_listing_resolves_entries(self):
+        from origami.modules.discovery.js_parser import parse_listing
+        entries = parse_listing(self.APACHE, "https://h/images/")
+        self.assertEqual(entries, {"/images/logo.png", "/images/backup.zip", "/images/thumbs/"})
+        self.assertNotIn("/images/", entries)          # parent/self dropped
+        self.assertFalse(any("?" in e for e in entries))  # sort links dropped
+
+    def test_classify_tags_listing(self):
+        from origami.core.response_classifier import classify
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        probe = make_probe(200, self.APACHE, url="http://h/images/")
+        f = classify(p, probe, "wordlist", "/")
+        self.assertIsNotNone(f)
+        self.assertIn("listing", f.tags)
+
+
 class TestVhost(unittest.TestCase):
     def test_registrable_handles_multi_label_suffixes(self):
         from origami.modules.vhost import registrable

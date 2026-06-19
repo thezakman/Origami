@@ -101,6 +101,29 @@ def extract_header_paths(headers: dict, base_url: str) -> set[str]:
     return out
 
 
+_LISTING_HREF = re.compile(rb'(?i)<a\s+[^>]*href\s*=\s*["\']?([^"\'>\s]+)')
+
+
+def parse_listing(body: bytes, base_url: str) -> set[str]:
+    """Extract the real entries (files + subdirs) from a server autoindex page.
+
+    Resolves each `<a href>` against the listing's URL and keeps same-host paths
+    — so a listing at /images/ with `href="logo.png"` yields `/images/logo.png`
+    and `href="thumbs/"` yields `/images/thumbs/`. Sort links (`?C=N;O=D`), the
+    parent link (`../`) and anything off-host are dropped. When autoindex is on,
+    this gives the directory's TRUE contents — no brute-forcing required."""
+    host = urlparse(base_url).netloc
+    out: set[str] = set()
+    for m in _LISTING_HREF.finditer(body or b""):
+        href = m.group(1).decode("latin-1", "replace").strip()
+        if not href or href[0] in "?#" or href in ("../", "./", "/") or href.startswith(".."):
+            continue
+        u = urlparse(urljoin(base_url, href))
+        if u.netloc == host and u.path and u.path != urlparse(base_url).path:
+            out.add(u.path)
+    return out
+
+
 def extract_paths(body: bytes, base_url: str) -> set[str]:
     """Return same-host candidate paths (relative to base) found in `body`."""
     host = urlparse(base_url).netloc
