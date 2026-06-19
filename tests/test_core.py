@@ -125,10 +125,37 @@ class TestHarvestFold(unittest.TestCase):
         profile = TargetProfile(host="h", base_url="https://h/")
         result = ScanResult(profile=profile, findings=[
             Finding(js_url, 200, len(js_body), "application/javascript", 0.95, "wordlist")])
-        asyncio.run(_harvest_fold(FakeEngine(), profile, result, ScanOptions(),
-                                  NullObserver(), "/"))
+        new_dirs = asyncio.run(_harvest_fold(FakeEngine(), profile, result, ScanOptions(),
+                                             NullObserver(), "/"))
         harvested = {urlparse(f.url).path for f in result.findings if f.origin == "harvest"}
         self.assertEqual(harvested, hidden)   # both hidden endpoints found & reported
+        # returns the dir the new endpoints live in → the scan loop recurses it
+        self.assertEqual(new_dirs, {"/secret/api/v2/"})
+
+    def test_harvest_fold_skips_already_read_files(self):
+        import asyncio
+        from origami.core.scanner import _harvest_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        js_url = "https://h/app.js"
+        class FakeEngine:
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                return make_probe(200, b'x="/a/b"', url=url, ctype="application/javascript")
+            async def gather(self, urls, method="GET"):
+                return [await self.fetch(u) for u in urls]
+        profile = TargetProfile(host="h", base_url="https://h/")
+        result = ScanResult(profile=profile, findings=[
+            Finding(js_url, 200, 8, "application/javascript", 0.95, "wordlist")])
+        already = set()
+        eng = FakeEngine()
+        asyncio.run(_harvest_fold(eng, profile, result, ScanOptions(), NullObserver(), "/", already))
+        self.assertIn(js_url, already)                    # recorded as read
+        before = FakeEngine.total_requests
+        asyncio.run(_harvest_fold(eng, profile, result, ScanOptions(), NullObserver(), "/", already))
+        self.assertEqual(FakeEngine.total_requests, before)   # second round re-reads nothing
 
 
 class TestJsonlStream(unittest.TestCase):

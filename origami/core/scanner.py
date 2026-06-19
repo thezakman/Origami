@@ -539,6 +539,27 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
 
     observer.phase("scan")
     interrupted = False
+    disc_round = 0
+    harvested_files: set[str] = set()       # files already read by a harvest round (skip re-reads)
+
+    # Recurse confirmed directories (real 403/301 dirs) before speculative
+    # ancestor dirs — high-value first, so a deep tree can't starve the budget
+    # before the obvious directories are explored. Depth is relative to the base.
+    # `max_d` lets evidence-based (harvested) dirs recurse past the blind cap.
+    def _enqueue(dirs, front, max_d=opts.max_depth):
+        for d in dirs:
+            if d in scanned or d in queued or _excluded(d, opts):
+                continue
+            if not d.startswith(base_prefix):
+                continue                       # stay in scope — don't recurse a dir
+                # outside the requested base (e.g. an ancestor of a root-absolute
+                # seed like /admin/ when scanning /lms/); the seed itself is still
+                # probed once, we just don't brute-force-recurse out of scope.
+            if _rel_depth(d, base_prefix) <= max_d:
+                queued.add(d)
+                item = (d, _rel_depth(d, base_prefix))
+                queue.insert(0, item) if front else queue.append(item)
+
     while queue:
         if control.quit:
             observer.log("scan: quit requested — stopping", 0, style="yellow")
@@ -582,28 +603,25 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
             _checkpoint(consumed, cands)
             break
         scanned.add(prefix)
-
-        # Confirmed directories (real 403/301 dirs) are recursed before the
-        # speculative ancestor dirs — high-value first, so a deep tree can't
-        # starve the budget before the obvious directories are explored. Depth
-        # is relative to the base, so a deep file recurses each of its parents.
-        def _enqueue(dirs, front):
-            for d in dirs:
-                if d in scanned or d in queued or _excluded(d, opts):
-                    continue
-                if not d.startswith(base_prefix):
-                    continue                       # stay in scope — don't recurse a dir
-                    # outside the requested base (e.g. an ancestor of a root-absolute
-                    # seed like /admin/ when scanning /lms/); the seed itself is still
-                    # probed once, we just don't brute-force-recurse out of scope.
-                if _rel_depth(d, base_prefix) <= opts.max_depth:
-                    queued.add(d)
-                    item = (d, _rel_depth(d, base_prefix))
-                    queue.insert(0, item) if front else queue.append(item)
-
         _enqueue(ancestors, front=False)
         _enqueue(confirmed, front=True)
         _checkpoint(0)
+
+        # Discovery round: when the queue drains, read the code the scan just
+        # turned up (deep harvest) and recurse the directories the new endpoints
+        # live in — a wordlist-found /app/bundle.js → /app/api/v2/users →
+        # brute-force /app/api/v2/. Evidence-based, so allowed past the blind
+        # depth cap; bounded by MAX_DISCOVERY_ROUNDS. Harvested dirs become normal
+        # queue entries (checkpointed), so --resume stays consistent.
+        if not queue and not interrupted and opts.js and disc_round < MAX_DISCOVERY_ROUNDS:
+            disc_round += 1
+            new_dirs = await _guard(observer, "harvest",
+                                    _harvest_fold(engine, profile, result, opts, observer,
+                                                  base_prefix, harvested_files), set()) or set()
+            _enqueue(sorted(new_dirs), front=False, max_d=opts.max_depth + _HARVEST_DEPTH_BONUS)
+            if queue:
+                observer.phase("scan")
+            _checkpoint(0)
 
     result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -623,13 +641,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                      f"checkpoint saved → continue with --resume", 0, style="yellow")
         return result
 
-    # 4.4 deep harvest — read the target's OWN discovered code (JS/JSON/spec/HTML
-    # the scan turned up, not just the homepage) for more endpoints, then probe
-    # them. Runs first so harvested findings also get bypass/backup treatment.
-    if opts.js:
-        await _guard(observer, "harvest",
-                     _harvest_fold(engine, profile, result, opts, observer, base_prefix),
-                     None)
+    # (deep harvest + recursion of its discoveries ran inside the scan loop as
+    # discovery rounds — so harvested findings are in result before the folds.)
 
     # 4.5 403/401 bypass — try to walk around denials BEFORE the collapse merges
     # the 403 wall, so each blocked resource gets its own attempt.
@@ -935,6 +948,8 @@ _HARVEST_EXT = (".js", ".mjs", ".map", ".json", ".xml", ".html", ".htm", ".txt",
 _HARVEST_CODE = (".js", ".mjs", ".map", ".json")
 MAX_HARVEST_FILES = 30    # discovered files we re-read for endpoints
 MAX_HARVEST_NEW = 400     # new candidate paths a harvest pass may add
+MAX_DISCOVERY_ROUNDS = 3  # walk → harvest → recurse new dirs → harvest → … (cap)
+_HARVEST_DEPTH_BONUS = 3  # harvested dirs are evidence-based, so recurse them past the blind depth cap
 
 
 def _harvestable(f) -> bool:
@@ -949,21 +964,26 @@ def _harvestable(f) -> bool:
             or any(t in ct for t in ("javascript", "ecmascript", "json", "xml", "html")))
 
 
-async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) -> None:
+async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
+                        already=None) -> set[str]:
     """Read the target's OWN discovered code for more endpoints — the core fold.
 
     The root recon reads the homepage and its scripts; this extends that to every
     JS/JSON/spec/HTML file the SCAN itself turned up (a wordlist-found
     `/app/bundle.js` reveals `/app/api/v2/users` no wordlist would guess), then
-    probes the new in-scope paths. Discovery that compounds: the more it finds,
-    the more it reads, the more it finds."""
-    files = [f for f in result.findings if _harvestable(f)]
+    probes the new in-scope paths. Returns the set of directories the new findings
+    live in, so the caller can recurse them — discovery that compounds: the more
+    it finds, the more it reads, the more it finds."""
+    files = [f for f in result.findings if _harvestable(f)
+             and (already is None or f.url not in already)]   # skip files read in a prior round
     if not files:
-        return
+        return set()
     # code/specs (js/json/map) before markup; most confident first; cap the radius
     files.sort(key=lambda f: (not urlparse(f.url).path.lower().endswith(_HARVEST_CODE),
                               -f.confidence))
     files = files[:MAX_HARVEST_FILES]
+    if already is not None:
+        already.update(f.url for f in files)
     observer.phase("harvest")
     observer.log(f"harvest: re-reading {len(files)} discovered files for endpoints",
                  0, style="cyan")
@@ -989,7 +1009,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
     fresh = fresh[:MAX_HARVEST_NEW]
     if not fresh:
         observer.log("harvest: no endpoints beyond what's already found", 1)
-        return
+        return set()
     observer.log(f"harvest: {len(fresh)} new candidate endpoints from discovered code",
                  0, style="cyan")
 
@@ -1003,6 +1023,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
                            [(prefix, e) for e in (set(_BASE_CALIB_EXTS) | pexts)])
 
     observer.start_prefix("harvest", len(fresh))
+    new_dirs: set[str] = set()                    # dirs the confirmed endpoints live in
     for p, src in fresh:
         if opts.max_requests and engine.total_requests >= opts.max_requests:
             break
@@ -1020,6 +1041,8 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
         if opts.graph:
             result.edges.append((src, pth))
         _report(observer, result, opts, finding, url)
+        new_dirs.add(prefix)                      # recurse the dir this endpoint lives in
+    return new_dirs
 
 
 def _note_secrets(finding, body, observer, sink=None) -> int:
