@@ -142,52 +142,77 @@ async def run(args: argparse.Namespace) -> int:
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
         bypass403=args.bypass_403, filters=_build_filters(args),
     )
+
+    # JSONL streaming: one record per confirmed finding, written live. `-` streams
+    # to stdout for piping (origami url --jsonl - | nuclei …), which forces --no-ui
+    # and silences the human preamble/report so stdout stays pure JSON Lines.
+    jsonl_fh = None
+    jsonl_stdout = bool(args.jsonl) and args.jsonl == "-"
+    _status_out = sys.stderr if jsonl_stdout else sys.stdout   # keep stdout pure JSONL in pipe mode
+    if args.jsonl:
+        import json as _json
+        from origami.output.json_report import finding_record
+        if jsonl_stdout:
+            jsonl_fh = sys.stdout
+            args.no_ui = True
+        else:
+            jsonl_fh = open(args.jsonl, "w", encoding="utf-8")
+        def _emit_jsonl(f):
+            jsonl_fh.write(_json.dumps(finding_record(f), ensure_ascii=False) + "\n")
+            jsonl_fh.flush()
+        opts.finding_sink = _emit_jsonl
+
     memory = None if args.no_learn else Memory(args.db)
     control = ScanControl()
 
-    filt = opts.filters
-    fdesc = (f"match {sorted(filt.match_codes)}" if filt.match_codes
-             else f"drop {sorted(filt.filter_codes)}" if filt.filter_codes else "none")
-    print(f"  targets  : {len(targets)}" + (f"  (list: {args.list})" if args.list else ""))
-    print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
-    exts = _ext_list(args.ext)
-    if exts:
-        print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
-              + (" (only)" if args.ext_only else " (+ auto)"))
-    print(f"  filters  : codes {fdesc}")
-    if args.header:
-        print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
-    if args.user_agent:
-        print(f"  user-agent: {args.user_agent}")
-    if args.proxy:
-        print(f"  proxy    : {args.proxy} (TLS verification off)")
-    if args.exclude:
-        print(f"  exclude  : {', '.join(args.exclude)}")
-    if args.graph:
-        print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
-    if args.rate:
-        print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
-    if args.delay:
-        print(f"  delay    : {args.delay}s per request (stealth)")
-    if sys.stdin.isatty() and not args.no_ui:
-        print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
+    # Human preamble — suppressed when streaming JSONL to stdout (keep it pure).
+    if not jsonl_stdout:
+        filt = opts.filters
+        fdesc = (f"match {sorted(filt.match_codes)}" if filt.match_codes
+                 else f"drop {sorted(filt.filter_codes)}" if filt.filter_codes else "none")
+        print(f"  targets  : {len(targets)}" + (f"  (list: {args.list})" if args.list else ""))
+        print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
+        exts = _ext_list(args.ext)
+        if exts:
+            print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
+                  + (" (only)" if args.ext_only else " (+ auto)"))
+        print(f"  filters  : codes {fdesc}")
+        if args.header:
+            print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
+        if args.user_agent:
+            print(f"  user-agent: {args.user_agent}")
+        if args.proxy:
+            print(f"  proxy    : {args.proxy} (TLS verification off)")
+        if args.exclude:
+            print(f"  exclude  : {', '.join(args.exclude)}")
+        if args.graph:
+            print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
+        if args.rate:
+            print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
+        if args.delay:
+            print(f"  delay    : {args.delay}s per request (stealth)")
+        if args.jsonl:
+            print(f"  jsonl    : {args.jsonl}")
+        if sys.stdin.isatty() and not args.no_ui:
+            print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
     rc = 0
     try:
         async with keyboard_control(control):
             for i, target in enumerate(targets, 1):
                 if control.quit:
-                    print("[!] quit — skipping remaining targets")
+                    print("[!] quit — skipping remaining targets", file=_status_out)
                     break
                 if len(targets) > 1:
-                    print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━")
+                    print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━", file=_status_out)
                 # Fresh Engine + Observer + TargetProfile per URL → each target
                 # is scanned clean (no learned vocab/extensions/baseline bleed
                 # from the previous one). Cross-target SQLite memory is shared by
                 # design (use --no-learn to isolate fully).
                 observer = ui.make_observer(target, enabled=not args.no_ui,
-                                            verbosity=args.verbose, full_url=args.full_url)
+                                            verbosity=args.verbose, full_url=args.full_url,
+                                            log_stream=sys.stderr if jsonl_stdout else None)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                    delay=args.delay, rate=args.rate,
                                    verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
@@ -196,7 +221,7 @@ async def run(args: argparse.Namespace) -> int:
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
-                    print(f"[!] no checkpoint for {target} — scanning fresh")
+                    print(f"[!] no checkpoint for {target} — scanning fresh", file=_status_out)
                 async with Engine(cfg) as engine:
                     engine.on_request = observer.on_request   # live heartbeat, every phase
                     observer.attach_engine(engine)            # live adaptive-throttle readout
@@ -212,16 +237,19 @@ async def run(args: argparse.Namespace) -> int:
 
                 if (result.requests_made <= 1 and not result.profile.tech_scores
                         and not result.findings):
-                    print(f"[!] {target} unreachable")
+                    print(f"[!] {target} unreachable", file=_status_out)
                     rc = 2
                     continue
-                streamed = getattr(observer, "streamed", False)
-                ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
-                                show_fingerprint=(not streamed) or args.fp)
+                if not jsonl_stdout:           # keep stdout pure JSONL in pipe mode
+                    streamed = getattr(observer, "streamed", False)
+                    ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
+                                    show_fingerprint=(not streamed) or args.fp)
                 _write_outputs(args, result, target, multi=len(targets) > 1)
     finally:
         if memory is not None:
             memory.close()
+        if jsonl_fh is not None and jsonl_fh is not sys.stdout:
+            jsonl_fh.close()
     return rc
 
 
@@ -290,6 +318,9 @@ def main() -> None:
                     help="route all traffic through an intercepting proxy "
                          "(e.g. http://127.0.0.1:8080 for Burp/ZAP); implies -k")
     ap.add_argument("--json", help="write JSON report to this path")
+    ap.add_argument("--jsonl", metavar="FILE",
+                    help="stream findings as JSON Lines to FILE as they're confirmed "
+                         "(use - for stdout, which implies --no-ui; pipe into nuclei/etc.)")
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
                     help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt)")
@@ -372,6 +403,8 @@ def main() -> None:
     if args.list and not Path(args.list).is_file():
         ap.error(f"target list not found: {args.list}")
 
+    if args.jsonl == "-":
+        args.no_ui = True              # pure JSONL on stdout — no banner/UI
     if not args.no_ui:
         banner.show()
     try:

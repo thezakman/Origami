@@ -8,6 +8,24 @@ from dataclasses import asdict
 from origami.core.scanner import ScanResult
 
 
+def finding_record(f, host: str = "") -> dict:
+    """Compact, machine-friendly record for one finding (JSONL streaming)."""
+    rec = {
+        "url": f.url,
+        "status": f.status,
+        "length": f.length,
+        "content_type": f.content_type,
+        "confidence": round(f.confidence, 2),
+        "origin": f.origin,
+        "tags": list(getattr(f, "tags", [])),
+    }
+    if getattr(f, "note", ""):
+        rec["note"] = f.note
+    if host:
+        rec["host"] = host
+    return rec
+
+
 def to_dict(result: ScanResult) -> dict:
     p = result.profile
     return {
