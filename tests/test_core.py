@@ -215,6 +215,37 @@ class TestDirListing(unittest.TestCase):
         self.assertIsNotNone(f)
         self.assertIn("listing", f.tags)
 
+    def test_scan_prefix_marks_autoindex_dir(self):
+        # a confirmed dir whose body is a listing lands in listed_dirs, so the
+        # walk skips the blind wordlist for it.
+        import asyncio
+        from origami.core.scanner import _scan_prefix, ScanResult, ScanOptions, ScanControl
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.scheduler import Candidate
+        from origami.output.ui import NullObserver
+        listing = self.APACHE
+        class FakeEngine:
+            cfg = type("C", (), {"verify_tls": False})()
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                from urllib.parse import urlparse
+                if urlparse(url).path == "/images/":
+                    return make_probe(200, listing, url=url, ctype="text/html")
+                return make_probe(404, b"not found", url=url)
+            async def gather(self, urls, method="GET"):
+                return [await self.fetch(u) for u in urls]
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        result = ScanResult(profile=p)
+        listed = set()
+        asyncio.run(_scan_prefix(FakeEngine(), p, "/", [Candidate("images/", 2, "wordlist")],
+                                 result, ScanOptions(), NullObserver(), ScanControl(),
+                                 listed_dirs=listed))
+        self.assertIn("/images/", listed)
+
 
 class TestVhost(unittest.TestCase):
     def test_registrable_handles_multi_label_suffixes(self):

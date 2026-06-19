@@ -543,6 +543,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     interrupted = False
     disc_round = 0
     harvested_files: set[str] = set()       # files already read by a harvest round (skip re-reads)
+    listed_dirs: set[str] = set()           # dirs with autoindex → harvest, don't blind-brute
 
     # Recurse confirmed directories (real 403/301 dirs) before speculative
     # ancestor dirs — high-value first, so a deep tree can't starve the budget
@@ -579,6 +580,13 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
 
         if pending is not None:                     # resuming this exact prefix order
             cands, pending = pending, None
+        elif prefix in listed_dirs:
+            # autoindex dir: the listing already shows the real contents (the deep
+            # harvest parses them), so skip the blind wordlist — probe only what
+            # the index HIDES (dotfiles/backups/VCS via IndexIgnore).
+            cands = [Candidate(p, 0, "index-hidden") for p in _INDEX_HIDDEN]
+            observer.log(f"scan {prefix} · autoindex — listing parsed, probing "
+                         f"{len(cands)} index-hidden names only", 1)
         else:
             is_base = prefix == base_prefix
             cands = build_candidates(priority_paths if is_base else [], words, exts,
@@ -589,13 +597,14 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                 wl = [c for c in cands if c.origin == "wordlist"]
                 wl.sort(key=lambda c: -ranker.sample(word_of(c.path)))
                 cands = anchored + wl
-        observer.log(f"scan {prefix} · {len(cands)} candidates"
-                     + (f" · depth {depth}" if depth else "")
-                     + (f" · resuming from {offset}" if offset else ""), 1)
+        if prefix not in listed_dirs:
+            observer.log(f"scan {prefix} · {len(cands)} candidates"
+                         + (f" · depth {depth}" if depth else "")
+                         + (f" · resuming from {offset}" if offset else ""), 1)
         observer.start_prefix(prefix, len(cands))
         confirmed, ancestors, consumed, hit_cap = await _scan_prefix(
             engine, profile, prefix, cands, result, opts, observer, control,
-            ranker=ranker, skip=offset)
+            ranker=ranker, skip=offset, listed_dirs=listed_dirs)
 
         # Interrupted mid-prefix → re-queue at the front and checkpoint the exact
         # ordered candidates + offset reached, so resume replays from there.
@@ -844,7 +853,7 @@ def _report(observer, result, opts, finding, url) -> None:
 
 
 async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, control,
-                       ranker=None, skip=0):
+                       ranker=None, skip=0, listed_dirs=None):
     """Fire candidates under `prefix` (already ordered by the caller). Returns
     (confirmed_dirs, ancestor_dirs, consumed, hit_cap): confirmed dirs (a
     403/301/trailing-slash response) are recursed first; ancestor dirs (merely
@@ -916,8 +925,12 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
                   or (probe.status in (301, 302)
                       and _is_self_redirect_dir(probe.location, path)))
         if is_dir:
-            confirmed_dirs.append(path if path.endswith("/") else path + "/")
+            dpath = path if path.endswith("/") else path + "/"
+            confirmed_dirs.append(dpath)
             observer.set_skippable(True)
+            if listed_dirs is not None and 200 <= probe.status < 300 \
+                    and is_dir_listing(probe.body_head):
+                listed_dirs.add(dpath)        # autoindex → harvest it, don't blind-brute
 
         # soft-verify a surprising hit with a same-shape random sibling — a
         # blanket 403/200 wall is recursed (above) but NOT reported.
@@ -957,6 +970,12 @@ MAX_HARVEST_FILES = 30    # discovered files we re-read for endpoints
 MAX_HARVEST_NEW = 400     # new candidate paths a harvest pass may add
 MAX_DISCOVERY_ROUNDS = 3  # walk → harvest → recurse new dirs → harvest → … (cap)
 _HARVEST_DEPTH_BONUS = 3  # harvested dirs are evidence-based, so recurse them past the blind depth cap
+
+# What an autoindex HIDES (Apache IndexIgnore / IIS hidden segments): the only
+# names worth probing in a listed dir, since the listing itself reveals the rest.
+_INDEX_HIDDEN = (".htaccess", ".htpasswd", ".git/", ".git/config", ".svn/", ".env",
+                 ".DS_Store", ".gitignore", "web.config", "backup.zip", "backup.tar.gz",
+                 ".bash_history", ".npmrc", "config.php.bak")
 
 
 def _harvestable(f) -> bool:
