@@ -12,6 +12,7 @@ import random
 import string
 from collections import defaultdict
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from urllib.parse import urljoin, urlparse
 
 # More than this many byte-identical results (same status+simhash) = a catch-all
@@ -52,6 +53,18 @@ def _ext_of(path: str) -> str:
     return ("." + last.rsplit(".", 1)[-1]) if "." in last else ""
 
 
+def _ext_excluded(path: str, patterns) -> bool:
+    """True if `path`'s file extension matches a `--exclude-ext` glob (e.g. `jpg`,
+    `png`, `jpg*`). Directories (no extension) are never excluded by this."""
+    if not patterns:
+        return False
+    last = path.rstrip("/").rsplit("/", 1)[-1]
+    if "." not in last:
+        return False
+    ext = last.rsplit(".", 1)[-1].lower()
+    return any(fnmatch(ext, pat) for pat in patterns)
+
+
 # Sanity ceiling on harvested seeds. These are REAL references the app uses
 # (high value), so the cap is generous — overall volume is bounded by
 # --max-requests, not by starving the best candidates.
@@ -90,6 +103,8 @@ def _excluded(path: str, opts) -> bool:
     """True if `path` matches a user `--exclude` pattern (case-insensitive
     substring) — never fired, never recursed. Safety rail for destructive or
     out-of-scope endpoints (/logout, /delete, /admin/shutdown)."""
+    if _ext_excluded(path, getattr(opts, "exclude_ext", ())):
+        return True                       # --exclude-ext: drop static assets (jpg/png/css…)
     if not opts.exclude:
         return False
     low = path.lower()
@@ -159,6 +174,7 @@ class ScanOptions:
     scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
     economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
     exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
+    exclude_ext: list[str] = field(default_factory=list)  # skip paths with these file extensions (glob: jpg,png,jpg* — static-asset noise)
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
@@ -1034,7 +1050,8 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     # 2. scope + drop what we already probed/found, then cap
     scoped = _scope_paths(set(new_paths), profile.host, opts.scope)
     fresh = [(p, new_paths[p]) for p in sorted(scoped)
-             if urljoin(root, p.lstrip("/")).lower() not in result.seen_urls_lc]
+             if urljoin(root, p.lstrip("/")).lower() not in result.seen_urls_lc
+             and not _excluded("/" + p.lstrip("/"), opts)]   # honor --exclude / --exclude-ext
     fresh = fresh[:MAX_HARVEST_NEW]
     if not fresh:
         observer.log("harvest: no endpoints beyond what's already found", 1)

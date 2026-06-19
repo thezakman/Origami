@@ -45,6 +45,18 @@ def _ext_list(items) -> list[str]:
     return out
 
 
+def _ext_globs(items) -> list[str]:
+    """`--exclude-ext jpg,png -X jpg*` → ['jpg','png','jpg*']: stripped, dot-less,
+    lowercased, glob preserved, de-duplicated."""
+    out: list[str] = []
+    for raw in items or []:
+        for part in raw.split(","):
+            e = part.strip().lstrip(".").lower()
+            if e and e not in out:
+                out.append(e)
+    return out
+
+
 def _parse_headers(items) -> dict[str, str]:
     """`-H "Name: Value"` (repeatable) → header dict. Used for authenticated
     scans (Cookie:, Authorization:, custom headers)."""
@@ -138,7 +150,8 @@ async def run(args: argparse.Namespace) -> int:
         wordlist_path=args.wordlist, shortscan=shortscan,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
-        exclude=args.exclude or [], extensions=_ext_list(args.ext),
+        exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
+        extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
         bypass403=args.bypass_403, vhost=args.vhost, filters=_build_filters(args),
     )
@@ -186,6 +199,8 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  proxy    : {args.proxy} (TLS verification off)")
         if args.exclude:
             print(f"  exclude  : {', '.join(args.exclude)}")
+        if args.exclude_ext:
+            print(f"  excl-ext : {', '.join(_ext_globs(args.exclude_ext))}")
         if args.graph:
             print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
         if args.rate:
@@ -364,6 +379,10 @@ def main() -> None:
                     help="never request or recurse a path containing PATTERN "
                          "(case-insensitive, repeatable) — safety rail for "
                          "destructive/out-of-scope endpoints (/logout, /delete)")
+    ap.add_argument("--exclude-ext", action="append", metavar="LIST",
+                    help="drop paths with these file extensions from scraping/probing "
+                         "(comma-list, repeatable, glob ok: jpg,png,css or jpg*) — cuts "
+                         "the static-asset noise harvested from listings/JS")
     ap.add_argument("--economy", choices=["auto", "on", "off"], default="auto",
                     help="rank candidates by learned hit-rate so the request budget "
                          "buys the most likely names first (auto: on when a WAF is "
