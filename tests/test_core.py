@@ -83,6 +83,54 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
 
+class TestHarvestFold(unittest.TestCase):
+    def test_harvestable_predicate(self):
+        from origami.core.scanner import _harvestable
+        from origami.core.response_classifier import Finding
+        def F(url, status=200, ct="application/javascript"):
+            return Finding(url, status, 10, ct, 0.9, "wordlist")
+        self.assertTrue(_harvestable(F("https://h/app/main.js")))
+        self.assertTrue(_harvestable(F("https://h/api", ct="application/json")))
+        self.assertFalse(_harvestable(F("https://h/img.png", ct="image/png")))
+        self.assertFalse(_harvestable(F("https://h/x.js", status=403)))   # only 2xx
+        self.assertFalse(_harvestable(F("https://h/vendor/jquery.min.js")))  # vendor skipped
+
+    def test_harvest_fold_reads_discovered_js_and_probes_new_endpoint(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _harvest_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        # a discovered JS file whose body references an endpoint no wordlist has
+        js_url = "https://h/static/app.bundle.js"
+        js_body = b'const u="/secret/api/v2/users";fetch(u);import("/secret/api/v2/admin")'
+        hidden = {"/secret/api/v2/users", "/secret/api/v2/admin"}
+
+        class FakeEngine:
+            total_requests = 0
+            def __init__(self): self.cfg = type("C", (), {"verify_tls": False})()
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                path = urlparse(url).path
+                if url == js_url:
+                    return make_probe(200, js_body, url=url, ctype="application/javascript")
+                if path in hidden:
+                    return make_probe(200, b"REAL SENSITIVE DATA HERE", url=url, ctype="application/json")
+                return make_probe(404, b"<html>not found</html>", url=url)  # randoms, siblings
+            async def gather(self, urls, method="GET"):
+                return [await self.fetch(u, method) for u in urls]
+
+        profile = TargetProfile(host="h", base_url="https://h/")
+        result = ScanResult(profile=profile, findings=[
+            Finding(js_url, 200, len(js_body), "application/javascript", 0.95, "wordlist")])
+        asyncio.run(_harvest_fold(FakeEngine(), profile, result, ScanOptions(),
+                                  NullObserver(), "/"))
+        harvested = {urlparse(f.url).path for f in result.findings if f.origin == "harvest"}
+        self.assertEqual(harvested, hidden)   # both hidden endpoints found & reported
+
+
 class TestClientApp(unittest.TestCase):
     def test_manifest_paths(self):
         from origami.modules.discovery.clientapp import manifest_paths
