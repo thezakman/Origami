@@ -37,7 +37,7 @@ from origami.core.response_classifier import Filters, Finding, classify, resolve
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, waf
+from origami.modules import bypass403, secrets, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wellknown)
 from origami.output.ui import NullObserver
@@ -657,6 +657,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         result.findings = _dedupe_and_collapse(result.findings, observer,
                                             ci=profile.case_sensitive is False)
 
+    # 7. secrets — read high-value files (configs/dotfiles/backups/bypassed) and
+    # flag credentials inside; the payoff of finding the file at all.
+    await _guard(observer, "secrets",
+                 _secrets_fold(engine, profile, result, opts, observer), None)
+
     observer.pushback(engine.pushback_events)
     result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -970,6 +975,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
         pr = await engine.fetch(f.url, keep_body=True)
         if not (pr.ok and pr.body):
             continue
+        _note_secrets(f, pr.body, observer)        # the body's already here — scan it for creds too
         for p in js_parser.extract_paths(pr.body, f.url):
             new_paths.setdefault(p, urlparse(f.url).path)
 
@@ -1011,6 +1017,64 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix) ->
         if opts.graph:
             result.edges.append((src, pth))
         _report(observer, result, opts, finding, url)
+
+
+def _note_secrets(finding, body, observer) -> int:
+    """Scan one body for secrets; tag + annotate the finding. Returns count."""
+    hits = secrets.scan(body)
+    if not hits:
+        return 0
+    preview = ", ".join(f"{k}={v}" for k, v in hits[:6])
+    if "secret" not in finding.tags:
+        finding.tags = list(finding.tags) + ["secret"]
+    finding.note = (finding.note + " · " if finding.note else "") + f"secrets: {preview}"
+    observer.log(f"secret: {observer.disp(finding.url)} → {preview}", 0, style="bold red")
+    return len(hits)
+
+
+# Files most likely to carry credentials (scanned by the secrets fold).
+_SECRET_EXT = (".env", ".json", ".yml", ".yaml", ".xml", ".config", ".ini", ".properties",
+               ".toml", ".conf", ".cfg", ".txt", ".bak", ".old", ".pem", ".key", ".log",
+               ".js", ".mjs", ".map", ".php", ".rb", ".py", ".sh")
+_SECRET_HINT = ("/.env", "/.git/", "config", "secret", "credential", "settings",
+                "backup", ".aws", "dump", "wp-config")
+MAX_SECRET_FILES = 40
+
+
+def _secret_candidate(f) -> bool:
+    if not (200 <= f.status < 300):
+        return False
+    path = urlparse(f.url).path.lower()
+    ct = (f.content_type or "").lower()
+    return (path.endswith(_SECRET_EXT)
+            or any(h in path for h in _SECRET_HINT)
+            or bool(set(getattr(f, "tags", [])) & {"config", "disclosure", "source", "debug"})
+            or f.origin in ("bypass403", "backup")
+            or any(t in ct for t in ("javascript", "json", "xml", "yaml", "plain")))
+
+
+async def _secrets_fold(engine, profile, result, opts, observer) -> None:
+    """Read high-value 2xx files (configs/dotfiles/backups/bypassed denials) and
+    flag any credentials inside — the payoff of finding the file in the first
+    place. JS/JSON already read by the harvest fold are skipped (no double-fetch);
+    those bodies are secret-scanned there."""
+    cands = [f for f in result.findings if _secret_candidate(f) and not _harvestable(f)]
+    if not cands:
+        return
+    # configs/dotfiles/bypassed first, then smaller files; cap the radius
+    cands.sort(key=lambda f: (f.origin not in ("bypass403", "backup"), f.length))
+    cands = cands[:MAX_SECRET_FILES]
+    observer.log(f"secrets: scanning {len(cands)} files for credentials", 0, style="cyan")
+    total = 0
+    for f in cands:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
+            break
+        pr = await engine.fetch(f.url, keep_body=True)
+        if pr.ok and pr.body:
+            total += _note_secrets(f, pr.body, observer)
+    if total:
+        observer.log(f"secrets: {total} potential credential(s) flagged — see the 'secret' tag",
+                     0, style="bold red")
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:
