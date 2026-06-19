@@ -33,11 +33,12 @@ from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
 from origami.core.httpclient import Engine
 from origami.core.normalize import hamming
-from origami.core.response_classifier import Filters, Finding, classify, resolve_baseline
+from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding,
+                                               classify, resolve_baseline)
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, secrets, waf
+from origami.modules import bypass403, secrets, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wellknown)
 from origami.output.ui import NullObserver
@@ -160,6 +161,7 @@ class ScanOptions:
     exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
+    vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
 
@@ -676,6 +678,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "secrets",
                  _secrets_fold(engine, profile, result, opts, observer), None)
 
+    # 8. virtual-host discovery — Host-header fuzzing on the target IP (opt-in).
+    if opts.vhost:
+        await _guard(observer, "vhost",
+                     _vhost_fold(engine, profile, result, opts, observer, root_simhash), None)
+
     observer.pushback(engine.pushback_events)
     result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -1106,6 +1113,55 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
     if total:
         observer.log(f"secrets: {total} potential credential(s) flagged — see the 'secret' tag",
                      0, style="bold red")
+
+
+MAX_VHOSTS = 60   # cap Host-header candidates probed
+
+
+async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> None:
+    """Virtual-host discovery: fuzz the Host header on the target's endpoint and
+    report Hosts whose response differs from BOTH a bogus-Host baseline (the
+    catch-all for unknown vhosts) and the default site — distinct vhosts the path
+    scan can't see. Results are de-duped by response signature, so ten aliases of
+    one app collapse to one finding."""
+    observer.phase("vhost")
+    root = _host_root(profile.base_url)
+    scheme = urlparse(profile.base_url).scheme or "https"
+
+    # baseline: a bogus Host = how the server answers an unknown vhost
+    rnd = "".join(random.choices(string.ascii_lowercase, k=12))
+    base = await engine.fetch(root, headers={"Host": f"{rnd}.invalid"})
+    cands = vhost.candidates(profile.host)[:MAX_VHOSTS]
+    observer.log(f"vhost: probing {len(cands)} Host-header candidates", 0, style="cyan")
+    observer.start_prefix("vhost", len(cands))
+    seen_sig: set[tuple] = set()
+    for cand in cands:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
+            break
+        observer.substep(cand)
+        pr = await engine.fetch(root, headers={"Host": cand})
+        observer.tick(hit=False)
+        observer.request(root, pr.status, False)
+        if not pr.ok or pr.status in NOT_FOUND_STATUS:
+            continue
+        # same as the bogus baseline → not a distinct vhost (server ignores Host)
+        if base.ok and pr.status == base.status and \
+                hamming(pr.body_simhash, base.body_simhash) <= bl.SIMHASH_MISS_DISTANCE:
+            continue
+        # same as the default site → it's just the target again
+        if hamming(pr.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
+            continue
+        sig = (pr.status, pr.body_simhash)
+        if sig in seen_sig:                       # collapse aliases of the same app
+            continue
+        seen_sig.add(sig)
+        url = f"{scheme}://{cand}/"
+        vf = Finding(url, pr.status, pr.length, pr.content_type, 0.8, "vhost",
+                     note=f"distinct vhost on this IP (Host: {cand})",
+                     tags=["vhost"], simhash=pr.body_simhash)
+        _report(observer, result, opts, vf, url)
+        observer.log(f"vhost: {cand} → {pr.status} ({pr.length}B) distinct response",
+                     0, style="bold cyan")
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:
