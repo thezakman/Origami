@@ -98,7 +98,7 @@ ORIGIN_STYLE = {
     "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
     "apidocs": "bright_blue", "wellknown": "bright_cyan", "graphql": "bright_magenta",
     "header": "blue", "methods": "bold red", "bypass403": "bold green",
-    "harvest": "bright_blue",
+    "harvest": "bright_blue", "vhost": "bold cyan",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
@@ -106,7 +106,7 @@ TAG_STYLE = {
     "secret": "bold white on red", "disclosure": "bold white on red",
     "config": "yellow", "api": "blue",
     "admin": "cyan", "auth": "magenta", "source": "green",
-    "upload": "bright_yellow", "debug": "bright_red",
+    "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
 }
 
 
@@ -308,7 +308,7 @@ class RichUI(NullObserver):
         return self.requests / dt if dt > 0 else 0.0
 
     _PHASES = ["calibrate", "fingerprint", "recon", "shortscan", "scan",
-               "harvest", "403-bypass", "backups", "associations"]
+               "harvest", "403-bypass", "backups", "associations", "vhost"]
 
     def _phase_text(self) -> "Text":
         # header shows only the position (the name lives in the status-bar chip)

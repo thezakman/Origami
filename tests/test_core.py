@@ -183,6 +183,53 @@ class TestJsonlStream(unittest.TestCase):
         self.assertEqual([f.url for f in streamed], ["https://h/a", "https://h/b"])  # dup not streamed
 
 
+class TestVhost(unittest.TestCase):
+    def test_registrable_handles_multi_label_suffixes(self):
+        from origami.modules.vhost import registrable
+        self.assertEqual(registrable("app.example.com"), "example.com")
+        self.assertEqual(registrable("nfce.newchoice.com.br"), "newchoice.com.br")  # .com.br!
+        self.assertEqual(registrable("a.b.co.uk"), "b.co.uk")
+        self.assertEqual(registrable("example.com"), "example.com")
+
+    def test_candidates_build_from_apex_excluding_target(self):
+        from origami.modules.vhost import candidates
+        c = candidates("nfce.newchoice.com.br")
+        self.assertIn("admin.newchoice.com.br", c)
+        self.assertIn("staging.newchoice.com.br", c)
+        self.assertIn("localhost", c)
+        self.assertNotIn("nfce.newchoice.com.br", c)        # the target itself excluded
+
+    def test_vhost_fold_reports_only_distinct_vhosts(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _vhost_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        default_body = b"DEFAULT SITE HOMEPAGE CONTENT WELCOME"
+        class FakeEngine:
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                host = (headers or {}).get("Host", "")
+                if host.endswith(".invalid"):
+                    body = b"UNKNOWN VHOST CATCH ALL PAGE"          # bogus baseline
+                elif host == "admin.example.com":
+                    body = b"ADMIN PANEL - totally distinct content here"
+                elif host == "www.example.com":
+                    body = default_body                            # == the default site
+                else:
+                    body = b"UNKNOWN VHOST CATCH ALL PAGE"         # everything else = catch-all
+                return make_probe(200, body, url=url)
+
+        profile = TargetProfile(host="app.example.com", base_url="https://app.example.com/")
+        result = ScanResult(profile=profile)
+        asyncio.run(_vhost_fold(FakeEngine(), profile, result, ScanOptions(),
+                                NullObserver(), simhash(default_body)))
+        vhosts = {urlparse(f.url).netloc for f in result.findings if f.origin == "vhost"}
+        self.assertEqual(vhosts, {"admin.example.com"})    # distinct only; bogus-alike & default excluded
+
+
 class TestSecrets(unittest.TestCase):
     def test_scan_detects_provider_keys(self):
         from origami.modules.secrets import scan
