@@ -373,6 +373,50 @@ class TestSecrets(unittest.TestCase):
         self.assertIn("secrets:", f.note)
 
 
+class TestLeaks(unittest.TestCase):
+    def kinds(self, body):
+        from origami.modules.leaks import scan
+        return {k for k, _ in scan(body)}
+
+    def test_stack_traces_detected(self):
+        self.assertIn("python-traceback", self.kinds(b"Traceback (most recent call last):\n  File"))
+        self.assertIn("java-stacktrace", self.kinds(b"... at com.app.Svc.run(Svc.java:88) ..."))
+        self.assertIn("dotnet-stacktrace", self.kinds(rb"at A.Get(Int32 id) in C:\app\C.cs:line 33"))
+        self.assertIn("ruby-stacktrace", self.kinds(b"app/models/user.rb:21:in `find'"))
+        self.assertIn("php-error", self.kinds(
+            b"<b>Fatal error</b>: Uncaught in <b>/app/x.php</b> on line <b>42</b>"))
+
+    def test_framework_debug_pages(self):
+        self.assertIn("django-debug", self.kinds(b"<th>Django Version:</th><td>4.2</td>"))
+        self.assertIn("flask-werkzeug", self.kinds(b"<title>Werkzeug Debugger</title>"))
+        self.assertIn("dotnet-yellowscreen", self.kinds(b"<h1>Server Error in '/Shop' Application</h1>"))
+
+    def test_internal_infra_leaks(self):
+        self.assertIn("internal-ip", self.kinds(b"backend 10.0.5.23 down, retry 192.168.1.1"))
+        self.assertIn("internal-host", self.kinds(b"upstream db01.internal timeout"))
+
+    def test_low_false_positives(self):
+        # ordinary content / public IPs / marketing copy must stay clean
+        self.assertEqual(self.kinds(b"<html><body>Buy our ergonomic puffs</body></html>"), set())
+        self.assertEqual(self.kinds(b"resolver 8.8.8.8 and 1.1.1.1"), set())          # public IPs
+        self.assertEqual(self.kinds(b"Warning: only 3 left in stock, order today"), set())
+        self.assertEqual(self.kinds(b"design-inovador-e-multifuncional"), set())
+
+    def test_scan_body_tags_leak_and_streams_once(self):
+        # the combined body scanner tags 'leak' and emits the finding once
+        from origami.core.scanner import _scan_body
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        streamed = []
+        f = Finding("https://h/boom", 500, 100, "text/html", 0.9, "wordlist")
+        n = _scan_body(f, b"Traceback (most recent call last):\n at db01.internal",
+                       NullObserver(), streamed.append)
+        self.assertGreaterEqual(n, 1)
+        self.assertIn("leak", f.tags)
+        self.assertIn("leak:", f.note)
+        self.assertEqual(len(streamed), 1)              # one sink emit for the finding
+
+
 class TestClientApp(unittest.TestCase):
     def test_manifest_paths(self):
         from origami.modules.discovery.clientapp import manifest_paths
