@@ -31,6 +31,25 @@ DEFAULT_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
+# A pool of realistic, current browser UAs for --rotate-ua: spreading requests
+# across plausible clients makes a per-UA rate-limit / fingerprint heuristic
+# harder to pin on the scan (a crude but real WAF-evasion lever).
+_UA_POOL = [
+    DEFAULT_UA,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Safari/537.36 Edg/124.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+]
+
 
 @dataclass(slots=True)
 class Probe:
@@ -66,6 +85,7 @@ class EngineConfig:
     jitter: tuple[float, float] = (0.0, 0.05)   # seconds, uniform
     max_retries: int = 2
     user_agent: str = DEFAULT_UA
+    rotate_ua: bool = False                     # pick a random UA from _UA_POOL per request (--rotate-ua)
     headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
     proxy: str = ""                             # route through an intercepting proxy (Burp/ZAP), e.g. http://127.0.0.1:8080
     follow_redirects: bool = False              # we want to *see* redirects
@@ -264,6 +284,10 @@ class Engine:
         """Stream the response, reading at most cfg.max_body bytes — so a hostile
         or accidental multi-GB body can't OOM the scan or hang on split()."""
         t0 = time.perf_counter()        # r.elapsed is unset when we break mid-body
+        if self.cfg.rotate_ua:          # per-request UA from the pool (merge, don't clobber kw headers)
+            hdrs = dict(kw.get("headers") or {})
+            hdrs["User-Agent"] = random.choice(_UA_POOL)
+            kw = {**kw, "headers": hdrs}
         async with self._client.stream(method, url, **kw) as r:
             chunks: list[bytes] = []
             total = 0
