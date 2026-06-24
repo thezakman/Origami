@@ -135,13 +135,32 @@ async def from_commoncrawl(host: str, cap: int = _FETCH_ROWS, subs: bool = False
         return parse_cc_json(await _get(c, cc_index_url(api, host, cap, subs)))
 
 
+_GAU_TIMEOUT = 25.0
+
+
+async def _reap(proc) -> None:
+    """Kill + reap a subprocess so it doesn't survive the scan (or warn at GC)."""
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await proc.wait()
+    except BaseException:
+        pass
+
+
 async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
                    subs: bool = False) -> set[str] | None:
-    """Shell out to gau/waybackurls if present. None if no binary is available."""
+    """Shell out to gau/waybackurls if present. None if no binary is available.
+
+    The child is always reaped: on its own timeout, and on cancellation (the
+    scanner cancels the background task at 30s) — never left running detached."""
     for binary in binaries:
         args = [binary]
         if binary == "gau":
-            args += ["--threads", "5", "--timeout", "25"]
+            args += ["--threads", "5", "--timeout", "20"]
             if subs:
                 args += ["--subs"]
         args.append(host)
@@ -152,9 +171,13 @@ async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
         except (FileNotFoundError, OSError):
             continue                             # binary not installed — try the next
         try:
-            out, _ = await proc.communicate()
-        except Exception:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=_GAU_TIMEOUT)
+        except asyncio.TimeoutError:
+            await _reap(proc)
             return set()
+        except BaseException:                    # cancellation / loop teardown
+            await _reap(proc)
+            raise
         return parse_url_lines(out.decode("utf-8", "replace"))
     return None                                  # no binary found → caller falls back
 

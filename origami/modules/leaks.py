@@ -51,7 +51,7 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     # (this.internal, ue.local): in URL/authority context (//host, user@host,
     # host:port) OR the label carries a digit/hyphen (db01.internal, web-prod.corp).
     ("internal-host",      re.compile(rb"(?:(?<=//)|(?<=@))[a-z0-9][\w.-]{1,60}\.(?:local|internal|intranet|corp|lan)\b")),
-    ("internal-host",      re.compile(rb"\b[a-z0-9.-]{0,40}[0-9-][a-z0-9.-]{0,40}\.(?:local|internal|intranet|corp|lan)\b")),
+    ("internal-host",      re.compile(rb"\b(?=[a-z0-9.-]{0,80}[0-9-])[a-z0-9][a-z0-9.-]{0,80}\.(?:local|internal|intranet|corp|lan)\b")),
     ("internal-host",      re.compile(rb"\b[a-z0-9][\w.-]{1,60}\.(?:local|internal|intranet|corp|lan)(?=:\d)")),
 ]
 
