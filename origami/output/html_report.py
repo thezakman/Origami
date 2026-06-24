@@ -93,11 +93,15 @@ def render(result, n_hidden: int | None = None) -> str:
     for f in result.findings:
         tags = "".join(f'<span class="badge tag {e(t)}">{e(t)}</span>' for t in getattr(f, "tags", []))
         path = e(f.url)
+        # link only http(s) URLs — a server-controlled javascript:/data: URL must
+        # never become a clickable link in a shared report (defense-in-depth).
+        cell = (f'<a href="{path}" target="_blank" rel="noreferrer">{path}</a>'
+                if f.url.startswith(("http://", "https://")) else path)
         rows.append(
             f'<tr><td class="{_scls(f.status)}">{f.status}</td>'
             f'<td>{f.length}</td><td class="sub">{e(f.origin)}</td>'
             f'<td>{f.confidence:.2f}</td><td>{tags}</td>'
-            f'<td class="path"><a href="{path}" target="_blank" rel="noreferrer">{path}</a></td></tr>')
+            f'<td class="path">{cell}</td></tr>')
 
     params = "".join(f"<span>{e(x)}</span>" for x in sorted(p.parameters))
     params_block = (f'<h2>Parameters ({len(p.parameters)})</h2><div class="params">{params}</div>'

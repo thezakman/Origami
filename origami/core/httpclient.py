@@ -191,14 +191,19 @@ class Engine:
             self.on_request()
         await self._acquire()
         try:
-            await self._pace()
             for attempt in range(self.cfg.max_retries + 1):
+                await self._pace()            # inside the loop so retries also honor --rate
                 await self._sleep_before()
                 try:
                     probe = await self._stream_probe(url, method, keep_body, kw)
                 except (httpx.TransportError, httpx.HTTPError) as e:
+                    # Transient transport failure (timeout, connection reset/refused,
+                    # DNS). Retry, but do NOT treat it as throttle pushback: a handful
+                    # of slow/dead URLs must not collapse global concurrency (and
+                    # inflate pushback_events) for the whole, otherwise-healthy scan.
+                    # Only an explicit 429/503 status (below) is a reliable overload
+                    # signal. The held in-flight slot already slows us on slow hosts.
                     last_err = f"{type(e).__name__}: {e}"
-                    self._note_pushback()
                     continue
                 except (ValueError, UnicodeError, httpx.InvalidURL) as e:
                     # A malformed candidate URL — e.g. a wordlist/payload whose raw

@@ -96,7 +96,9 @@ def extract_header_paths(headers: dict, base_url: str) -> set[str]:
                 out.add(p)
         for m in _HDR_PATH.findall(val):
             p = _clean(m.split("?")[0].split("#")[0])
-            if p and p.startswith("/") and p != "/":
+            # root-absolute only: reject protocol-relative //host/… (off-host;
+            # full same-site URLs are handled by the _HDR_ABS branch above)
+            if p and p.startswith("/") and not p.startswith("//") and p != "/":
                 out.add(p)
     return out
 
@@ -133,14 +135,15 @@ def extract_paths(body: bytes, base_url: str) -> set[str]:
         s = _clean(s)
         if s is None:
             return
-        if s.startswith(("http://", "https://")):   # absolute URL
-            u = urlparse(s)
+        if s.startswith(("http://", "https://", "//")):   # absolute OR protocol-relative URL
+            u = urlparse(s)                  # urlparse("//evil.com/x") → netloc=evil.com
             if u.netloc and not same_site(u.netloc, host):
-                return                       # third party → drop
+                return                       # third party → drop (incl. //evil.com)
             if not u.netloc or same_host(u.netloc, host):
                 path = "/" + u.path.lstrip("/")      # same host → root-absolute path
             else:                            # same-site CDN → keep FULL URL (scope=site)
-                path = f"{u.scheme}://{u.netloc}/{u.path.lstrip('/')}"
+                scheme = u.scheme or urlparse(base_url).scheme or "https"  # // inherits page scheme
+                path = f"{scheme}://{u.netloc}/{u.path.lstrip('/')}"
         else:
             # KEEP the leading-/ distinction: "/x" is root-absolute, "x/y" is
             # relative to the app base (e.g. an Angular templateUrl under /lms/).

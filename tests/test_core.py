@@ -386,6 +386,12 @@ class TestClientApp(unittest.TestCase):
         self.assertIn("/pwa/orders", p)        # shortcut url
         self.assertTrue(all("OTHER" not in x for x in p))   # cross-host icon dropped
 
+    def test_manifest_protocol_relative_offhost_dropped(self):
+        from origami.modules.discovery.clientapp import manifest_paths
+        doc = {"start_url": "//evil.com/x", "icons": [{"src": "//evil.com/i.png"}]}
+        p = manifest_paths(doc, "https://h/")
+        self.assertFalse(any("evil.com" in x or x.startswith("//") for x in p))
+
 
 class TestBypass403(unittest.TestCase):
     def test_variants_cover_families(self):
@@ -823,6 +829,20 @@ class TestEndpointGraph(unittest.TestCase):
         self.assertIn('data-sort="num"', h)        # clickable sortable headers
         self.assertIn(">status<", h)               # status-code summary card
         self.assertIn("200×2", h)                  # both findings are 200
+
+    def test_report_only_links_http_schemes(self):
+        # defense-in-depth: a server-controlled javascript:/data: finding URL
+        # must never become a clickable link in the shared HTML report
+        from origami.output import html_report
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        r.findings = [Finding("javascript:alert(1)", 200, 1, "text/html", 0.9, "x"),
+                      Finding("https://h/ok", 200, 1, "text/html", 0.9, "x")]
+        h = html_report.render(r)
+        self.assertNotIn('href="javascript:', h)   # not linked
+        self.assertIn('href="https://h/ok"', h)    # real URL still linked
 
 
 class TestUrlRobustness(unittest.TestCase):
@@ -1528,6 +1548,17 @@ class TestJsParser(unittest.TestCase):
         self.assertIn("/js/chunk.2f3a.js", paths)
         self.assertIn("/js/app.js.map", paths)
 
+    def test_protocol_relative_offhost_dropped(self):
+        # regression: //evil.com/x must NOT pass as a same-host root-absolute path
+        # (it would leak an off-host endpoint into the --graph edges)
+        base = "https://target.com/"
+        self.assertEqual(js_parser.extract_paths(b'fetch("//evil.com/api/steal")', base), set())
+        self.assertIn("/api/ok", js_parser.extract_paths(b'fetch("/api/ok")', base))
+        # same applies to header-derived paths (CSP/Link)
+        hp = js_parser.extract_header_paths({"link": "<//evil.com/x>; rel=preload"}, base)
+        self.assertNotIn("//evil.com/x", hp)
+        self.assertFalse(any(p.startswith("//") for p in hp))
+
 
 class TestEngineBackoff(unittest.TestCase):
     def _engine(self, c=20):
@@ -1562,6 +1593,40 @@ class TestEngineBackoff(unittest.TestCase):
         e._note_pushback()
         self.assertGreater(e._delay_floor, 0.0)
         self.assertLessEqual(e._delay_floor, 5.0)
+
+    def test_transport_errors_do_not_collapse_concurrency(self):
+        # regression: a few dead/slow URLs (timeout/reset/DNS) must NOT be treated
+        # as WAF throttle — they must not halve the limit or inflate pushback_events
+        import asyncio, httpx
+        from origami.core.httpclient import Engine, EngineConfig
+        e = Engine(EngineConfig(concurrency=40, max_retries=2))
+        async def run():
+            async with e:
+                async def boom(url, method, keep_body, kw):
+                    raise httpx.ReadTimeout("simulated slow host")
+                e._stream_probe = boom
+                for i in range(3):
+                    pr = await e.fetch(f"http://dead/{i}")
+                    self.assertTrue(pr.error)             # returns an error probe
+        asyncio.run(run())
+        self.assertEqual(e._limit, 40.0)                 # concurrency intact
+        self.assertEqual(e.pushback_events, 0)           # not counted as throttle
+        self.assertEqual(e._delay_floor, 0.0)
+
+    def test_real_429_still_backs_off(self):
+        # the genuine throttle signal must still trigger AIMD backoff
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig, Probe
+        e = Engine(EngineConfig(concurrency=40, max_retries=2))
+        async def run():
+            async with e:
+                async def four29(url, method, keep_body, kw):
+                    return Probe(url, method, 429, 0, 0, 0, "", "", 0, 1.0)
+                e._stream_probe = four29
+                await e.fetch("http://t/x")
+        asyncio.run(run())
+        self.assertLess(e._limit, 40.0)
+        self.assertGreater(e.pushback_events, 0)
 
 
 class TestBandit(unittest.TestCase):

@@ -35,13 +35,13 @@ _MANIFEST_ARRAYS = (("icons", "src"), ("shortcuts", "url"),
 def _same_host_path(url: str, host: str) -> str | None:
     if not isinstance(url, str):
         return None
-    if url.startswith(("http://", "https://")):
-        u = urlparse(url)
+    if url.startswith(("http://", "https://", "//")):   # absolute OR protocol-relative
+        u = urlparse(url)                                # urlparse("//evil/x") → netloc=evil
         if u.netloc and u.netloc != host:
-            return None
+            return None                                  # off-host (incl. //evil.com) → drop
         url = u.path
     url = url.split("?")[0].split("#")[0]
-    return url if url.startswith("/") and url != "/" else None
+    return url if url.startswith("/") and not url.startswith("//") and url != "/" else None
 
 
 def manifest_paths(doc: dict, base_url: str) -> set[str]:
