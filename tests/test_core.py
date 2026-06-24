@@ -313,6 +313,35 @@ class TestSecrets(unittest.TestCase):
         self.assertEqual(scan(b'AWS_KEY=AKIAIOSFODNN7EXAMPLE'), [])        # AWS doc example
         self.assertEqual(scan(b''), [])
 
+    def test_scan_rejects_minified_js_concat(self):
+        # the real-target FP: minified JS string concatenation around a trigger
+        # word — "…secret="+this.foo+"…#]/," — captured a code fragment, not a key
+        from origami.modules.secrets import scan
+        self.assertEqual(scan(b'var x="theme-secret="+this.opts.foo+"#]/,";'), [])
+        self.assertEqual(scan(b'token:"+this.x+"'), [])
+
+    def test_scan_rejects_code_expression_values(self):
+        # a JS member-access / dotted-identifier chain is code, not a credential
+        from origami.modules.secrets import scan
+        self.assertEqual(scan(b'password:"this.config.password"'), [])
+        self.assertEqual(scan(b'client_secret="window.app.clientSecret"'), [])
+        self.assertEqual(scan(b'api_key="cfg.keys.api_key.v2"'), [])
+
+    def test_scan_keeps_real_generic_secret_after_hardening(self):
+        # tightening the charset must not drop genuine token-shaped values
+        from origami.modules.secrets import scan
+        def kinds(b): return {k for k, _ in scan(b)}
+        self.assertIn("generic-secret", kinds(b'api_key="A1b2C3d4E5f6G7h8"'))
+        self.assertIn("generic-secret", kinds(b'"password": "Sup3rS3cretPwdxx"'))
+
+    def test_scan_keeps_dotted_token_secrets(self):
+        # version-prefixed / dotted secrets have a token-shaped segment — the
+        # code-chain guard must NOT drop them (only pure identifier chains)
+        from origami.modules.secrets import scan
+        def kinds(b): return {k for k, _ in scan(b)}
+        self.assertIn("generic-secret", kinds(b'auth_token="v1.abcdef1234567890"'))
+        self.assertIn("generic-secret", kinds(b'api_key="key1234abcd.def5678ghij"'))
+
     def test_scan_redacts(self):
         from origami.modules.secrets import scan
         (kind, red), = scan(b'k=AKIAZ7QF3X9PLMNB2WQT')
@@ -413,6 +442,48 @@ class TestBypass403(unittest.TestCase):
                   "Forwarded", "X-HTTP-DestinationURL"):
             self.assertIn(h, hdrs)
 
+    def test_confirmed_bypass_lands_in_findings(self):
+        # regression: a confirmed 403→200 bypass reuses the blocked URL, which is
+        # already in seen_urls — it must SUPERSEDE the 403, not be deduped away.
+        import asyncio
+        from origami.core import scanner
+        from origami.core.scanner import _bypass_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        url403 = "https://h/admin-secret"
+        class FakeEngine:
+            total_requests = 0
+            async def fetch(self, u, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                if u.endswith("/admin-secret/"):                 # the trailing-slash bypass
+                    return make_probe(200, b"real admin dashboard content here", url=u)
+                return make_probe(404, b"not found", url=u)      # siblings/other variants
+
+        prof = TargetProfile(host="h", base_url="https://h/")
+        f = Finding(url403, 403, 20, "text/html", 0.85, "wordlist", tags=["admin"], simhash=12345)
+        result = ScanResult(profile=prof, findings=[f])
+        result.seen_urls.add(url403); result.seen_urls_lc.add(url403.lower())  # as the live scan would
+
+        streamed = []
+        opts = ScanOptions(bypass403=True, finding_sink=streamed.append)
+        orig = scanner._confirm
+        async def fake_confirm(engine, profile, prefix, probe, origin):
+            return Finding(probe.url, probe.status, probe.length, probe.content_type, 0.9, origin)
+        scanner._confirm = fake_confirm
+        try:
+            asyncio.run(_bypass_fold(FakeEngine(), prof, result, opts, NullObserver(), root_simhash=999))
+        finally:
+            scanner._confirm = orig
+
+        byp = [x for x in result.findings if x.origin == "bypass403"]
+        self.assertEqual(len(byp), 1)                     # the bypass is recorded…
+        self.assertEqual(byp[0].status, 200)
+        self.assertIn("bypass", byp[0].tags)
+        self.assertNotIn(f, result.findings)             # …and supersedes the original 403
+        self.assertTrue(any(s.origin == "bypass403" for s in streamed))  # and is streamed (JSONL)
+
     def test_select_bypass_targets_caps_per_wall(self):
         from origami.core.scanner import _select_bypass_targets, BYPASS_PER_WALL
         from origami.core.response_classifier import Finding
@@ -429,6 +500,125 @@ class TestBypass403(unittest.TestCase):
         urls = {t.url for t in targets}
         self.assertIn("https://h/admin", urls)
         self.assertIn("https://h/web.config", urls)
+
+
+class TestBypassHeaderWordlist(unittest.TestCase):
+    def test_load_header_pairs_parses_both_forms(self):
+        import tempfile, os
+        from origami.modules.bypass403 import load_header_pairs
+        body = ("# comment\n\n"
+                "X-Forwarded-For: 127.0.0.1\n"
+                "Forwarded: for=127.0.0.1;host=localhost\n"   # colon, value has more colons/semis
+                "X-Forwarded-Port 443\n"                       # space form, no colon
+                "Referer /admin\n")
+        fd, p = tempfile.mkstemp(suffix=".txt"); os.write(fd, body.encode()); os.close(fd)
+        try:
+            pairs = load_header_pairs(p)
+        finally:
+            os.unlink(p)
+        self.assertIn(("X-Forwarded-For", "127.0.0.1"), pairs)
+        self.assertIn(("Forwarded", "for=127.0.0.1;host=localhost"), pairs)
+        self.assertIn(("X-Forwarded-Port", "443"), pairs)
+        self.assertIn(("Referer", "/admin"), pairs)
+
+    def test_load_header_pairs_space_form_with_colon_value(self):
+        # a space-form line whose VALUE contains a colon must split on the space,
+        # not the colon — else the header name would carry an (illegal) space
+        import tempfile, os
+        from origami.modules.bypass403 import load_header_pairs
+        fd, p = tempfile.mkstemp(suffix=".txt")
+        os.write(fd, b"X-Forwarded-Host localhost:8080\nBase-Url: 127.0.0.1:443\n"); os.close(fd)
+        try:
+            pairs = load_header_pairs(p)
+        finally:
+            os.unlink(p)
+        self.assertIn(("X-Forwarded-Host", "localhost:8080"), pairs)   # space-split
+        self.assertIn(("Base-Url", "127.0.0.1:443"), pairs)            # colon-split
+        self.assertFalse(any(" " in n for n, _ in pairs))              # no name has a space
+
+    def test_load_header_pairs_dedups_by_lowered_name(self):
+        import tempfile, os
+        from origami.modules.bypass403 import load_header_pairs
+        # case-variant header names with the same value are one request on the wire
+        fd, p = tempfile.mkstemp(suffix=".txt")
+        os.write(fd, b"X-Real-IP: 127.0.0.1\nX-Real-Ip: 127.0.0.1\n"); os.close(fd)
+        try:
+            pairs = load_header_pairs(p)
+        finally:
+            os.unlink(p)
+        self.assertEqual(len(pairs), 1)
+
+    def test_load_header_pairs_missing_file(self):
+        from origami.modules.bypass403 import load_header_pairs
+        self.assertEqual(load_header_pairs("/no/such/wordlist.txt"), [])
+
+    def test_bundled_wordlist_loads(self):
+        from origami.modules.bypass403 import load_header_pairs, DEFAULT_HEADER_WORDLIST
+        self.assertTrue(DEFAULT_HEADER_WORDLIST.exists())
+        pairs = load_header_pairs()
+        self.assertGreater(len(pairs), 100)             # the bundled list is large
+
+    def test_variants_header_pairs_replace_builtin_axis(self):
+        from origami.modules.bypass403 import variants
+        v = variants("/admin", header_pairs=[("Z-Custom", "9.9.9.9")])
+        hdr_keys = {k for _, _, _, h in v for k in h}
+        self.assertIn("Z-Custom", hdr_keys)
+        self.assertNotIn("CF-Connecting-IP", hdr_keys)  # built-in IP axis swapped out
+        # path + method tricks are still present
+        self.assertTrue(any(m == "/admin/" for _, _, m, _ in v))
+        self.assertTrue(any(meth == "POST" for _, meth, _, _ in v))
+
+    def test_variants_no_pairs_keeps_builtins(self):
+        from origami.modules.bypass403 import variants
+        hdr_keys = {k for _, _, _, h in variants("/admin") for k in h}
+        self.assertIn("CF-Connecting-IP", hdr_keys)
+
+
+class TestOpenApiIngest(unittest.TestCase):
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def _spec_file(self, payload):
+        import tempfile, os, json
+        fd, p = tempfile.mkstemp(suffix=".json"); os.write(fd, json.dumps(payload).encode()); os.close(fd)
+        return p
+
+    def test_ingest_openapi_file(self):
+        import os
+        from origami.modules.discovery import apidocs
+        p = self._spec_file({"openapi": "3.0.0", "servers": [{"url": "/api/v1"}],
+                             "paths": {"/users/{id}": {}, "/admin/secret": {}}})
+        try:
+            label, eps = self._run(apidocs.ingest_source(None, p))
+        finally:
+            os.unlink(p)
+        self.assertEqual(label, p)
+        self.assertIn("/api/v1/admin/secret", eps)
+        self.assertIn("/api/v1/users/", eps)            # templated → static dir
+
+    def test_ingest_jsonapi_file(self):
+        import os
+        from origami.modules.discovery import apidocs
+        p = self._spec_file({"jsonapi": {"version": "1.0"},
+                             "links": {"articles": "https://h/jsonapi/node/article",
+                                       "users": {"href": "/jsonapi/user/user"}}})
+        try:
+            _, eps = self._run(apidocs.ingest_source(None, p))
+        finally:
+            os.unlink(p)
+        self.assertIn("/jsonapi/node/article", eps)
+        self.assertIn("/jsonapi/user/user", eps)
+
+    def test_ingest_missing_and_nonspec(self):
+        import os
+        from origami.modules.discovery import apidocs
+        self.assertEqual(self._run(apidocs.ingest_source(None, "/no/such.json")), (None, set()))
+        p = self._spec_file({"hello": "world"})
+        try:
+            self.assertEqual(self._run(apidocs.ingest_source(None, p)), (None, set()))
+        finally:
+            os.unlink(p)
 
 
 class TestSitemapIndex(unittest.TestCase):
@@ -1139,6 +1329,48 @@ class TestAssociation(unittest.TestCase):
             assoc = m.associate(["/backup/"], min_support=2, min_conf=0.5)
             self.assertIn("/.git/HEAD", assoc)
             self.assertNotIn("/favicon.ico", assoc)   # ambient filtered out
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_associate_skips_static_assets(self):
+        # the real-target noise: a host-local image co-occurs with /backup/ but
+        # carries no cross-target signal — it must never be suggested as a rule
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            for h in ("h1", "h2", "h3"):
+                for p in ("/backup/", "/.git/HEAD", "/img/bkg_mobile_02.jpg", "/fonts/x.woff2"):
+                    m.db.execute("INSERT OR REPLACE INTO corpus VALUES (?,?,?)", (h, p, 200))
+            m.db.commit()
+            assoc = m.associate(["/backup/"], min_support=2, min_conf=0.5)
+            self.assertIn("/.git/HEAD", assoc)
+            self.assertNotIn("/img/bkg_mobile_02.jpg", assoc)   # image filtered out
+            self.assertNotIn("/fonts/x.woff2", assoc)            # font filtered out
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_record_run_excludes_assets_from_corpus(self):
+        # static assets must not even enter the corpus (no future pollution)
+        import os, tempfile
+        from origami.brain.memory import Memory
+        from origami.core.evidence import TargetProfile
+        class R:
+            def __init__(self, findings): self.findings = findings; self.requests_made = 5
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            p = TargetProfile(host="h", base_url="http://h/")
+            m.record_run(p, R([make_finding("http://h/admin/", 200),
+                               make_finding("http://h/logo.png", 200),
+                               make_finding("http://h/app.css", 200)]))
+            paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
+            self.assertIn("/admin/", paths)
+            self.assertIn("/app.css", paths)           # css kept (shared names transfer)
+            self.assertNotIn("/logo.png", paths)       # image dropped
         finally:
             m.close()
             os.unlink(db)

@@ -153,7 +153,10 @@ async def run(args: argparse.Namespace) -> int:
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
         extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
-        bypass403=args.bypass_403, vhost=args.vhost, filters=_build_filters(args),
+        bypass403=args.bypass_403 or args.bypass_headers is not None,  # --bypass-headers implies bypass
+        bypass_headers=args.bypass_headers is not None,
+        bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
+        openapi_source=args.openapi, vhost=args.vhost, filters=_build_filters(args),
     )
 
     # JSONL streaming: one record per confirmed finding, written live. `-` streams
@@ -203,6 +206,11 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  excl-ext : {', '.join(_ext_globs(args.exclude_ext))}")
         if args.graph:
             print(f"  graph    : {args.graph} (endpoint provenance + orphans)")
+        if args.openapi:
+            print(f"  openapi  : {args.openapi} (folded as seeds)")
+        if args.bypass_headers is not None:
+            src = args.bypass_headers if isinstance(args.bypass_headers, str) else "bundled 403-headers.txt"
+            print(f"  bypass-hdr: {src}")
         if args.rate:
             print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
         if args.delay:
@@ -367,11 +375,19 @@ def main() -> None:
                     help="disable JS/HTML endpoint harvesting")
     ap.add_argument("--no-apidocs", action="store_true",
                     help="disable OpenAPI/Swagger spec discovery + endpoint folding")
+    ap.add_argument("--openapi", "--swagger", "--spec", metavar="URL|FILE", dest="openapi",
+                    help="feed an OpenAPI/Swagger or JSON:API doc (URL or local file) "
+                         "and fold its declared endpoints onto the target as seeds — "
+                         "works even with --no-apidocs (an off-host docs server, a client file)")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
     ap.add_argument("--bypass-403", action="store_true",
                     help="on each 403/401, try path/header/method bypass tricks "
                          "(nomore403-style); a surviving 2xx is reported as a bypass")
+    ap.add_argument("--bypass-headers", nargs="?", const=True, default=None, metavar="FILE",
+                    help="403/401 header-bypass via a wordlist (implies --bypass-403): "
+                         "bare flag uses the bundled 403-headers.txt, or pass FILE for "
+                         "your own 'Header: value' list (replaces the built-in header axis)")
     ap.add_argument("--vhost", action="store_true",
                     help="virtual-host discovery: fuzz the Host header on the target IP "
                          "and report distinct vhosts (admin/staging/internal/… on the CDN)")

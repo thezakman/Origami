@@ -15,6 +15,53 @@ budget on attempts that actually flip 403→200, not the long tail. Each variant
 
 from __future__ import annotations
 
+from pathlib import Path
+
+# The bundled default header-bypass wordlist (lives beside the scan wordlists).
+DEFAULT_HEADER_WORDLIST = Path(__file__).resolve().parent.parent / "wordlists" / "403-headers.txt"
+
+
+def load_header_pairs(path: Path | str | None = None) -> list[tuple[str, str]]:
+    """Parse a header-bypass wordlist into deduped (name, value) pairs.
+
+    Accepts both `Name: value` and `Name value` (space-separated) lines; blank
+    lines and `#` comments are skipped. Dedup is by (lower-cased name, value) —
+    HTTP header names are case-insensitive, so `X-Real-Ip`/`X-Real-IP` with the
+    same value are the *same* request on the wire and firing both is pure waste.
+    The first-seen casing is preserved. Returns [] if the file can't be read."""
+    p = Path(path) if path else DEFAULT_HEADER_WORDLIST
+    try:
+        lines = p.expanduser().read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Split on whichever separator terminates the (space-free) header NAME
+        # first: a colon for "Name: value", a space for "Name value". Picking the
+        # earlier one keeps colons that belong to the VALUE intact — e.g. the
+        # space-form "X-Forwarded-Host localhost:8080" must not split on the colon.
+        ci, si = line.find(":"), line.find(" ")
+        if ci != -1 and (si == -1 or ci < si):
+            name, value = line[:ci], line[ci + 1:]
+        elif si != -1:
+            name, value = line[:si], line[si + 1:]
+        else:
+            continue                           # a bare token with no value — skip
+        name, value = name.strip(), value.strip()
+        if not name or not value:
+            continue
+        key = (name.lower(), value)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((name, value))
+    return out
+
+
 # IP-trust headers — an ACL/WAF that allowlists an internal/edge address. The
 # Cloudflare/cluster/edge headers come first: targets behind Cloudflare/AWS WAF
 # trust these from the edge, so they're the highest-signal in practice.
@@ -57,12 +104,19 @@ def _swapcase(p: str) -> str:
     return "/" + p.lstrip("/").swapcase()
 
 
-def variants(path: str, case_insensitive: bool = False) -> list[tuple[str, str, str, dict]]:
+def variants(path: str, case_insensitive: bool = False,
+             header_pairs: list[tuple[str, str]] | None = None,
+             ) -> list[tuple[str, str, str, dict]]:
     """Curated 403-bypass attempts for `path` (deduped, order = likelihood).
 
     `case_insensitive=True` (a Windows/IIS host, where the ACL ignores case too)
     drops the upper/swapcase path tricks — they'd hit the same resource and the
     same denial, so firing them just wastes the (WAF-throttled) budget.
+
+    `header_pairs` (from `load_header_pairs`, i.e. `--bypass-headers`) REPLACES
+    the built-in IP-trust header axis with the user's curated list — the path,
+    URL-override and method tricks are kept. The list is a superset of the
+    built-ins, so swapping (not adding) avoids re-firing the same attempts.
     """
     p = "/" + path.lstrip("/")
     body = p.lstrip("/")
@@ -91,12 +145,16 @@ def variants(path: str, case_insensitive: bool = False) -> list[tuple[str, str, 
         add(f"path {_swapcase(p)}", "GET", _swapcase(p), {})
 
     # --- header injection (same path) ---
-    for h in _IP_HEADERS:
-        add(f"header {h}: 127.0.0.1", "GET", p, {h: "127.0.0.1"})
-    for val in _IP_ALT_VALUES:                     # extra loopback spellings on the common header
-        add(f"header X-Forwarded-For: {val}", "GET", p, {"X-Forwarded-For": val})
-    for h, val in _NAMED_HEADERS.items():
-        add(f"header {h}: {val}", "GET", p, {h: val})
+    if header_pairs:                               # user wordlist replaces the built-in axis
+        for h, val in header_pairs:
+            add(f"header {h}: {val}", "GET", p, {h: val})
+    else:
+        for h in _IP_HEADERS:
+            add(f"header {h}: 127.0.0.1", "GET", p, {h: "127.0.0.1"})
+        for val in _IP_ALT_VALUES:                 # extra loopback spellings on the common header
+            add(f"header X-Forwarded-For: {val}", "GET", p, {"X-Forwarded-For": val})
+        for h, val in _NAMED_HEADERS.items():
+            add(f"header {h}: {val}", "GET", p, {h: val})
     add(f"header Referer: {p}", "GET", p, {"Referer": p})
     # URL-override family: request a path we CAN reach (root), point the header at
     # the blocked target — the backend rewrites to it behind the front-end ACL.

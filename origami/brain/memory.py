@@ -33,6 +33,23 @@ _AMBIENT_PATHS = frozenset({
     "/.well-known/security.txt", "/apple-touch-icon.png",
 })
 
+# Static-asset extensions — a specific image/font/media filename (bkg_mobile_02.jpg,
+# theme.woff2) is host-local decoration: it carries no cross-target signal, so
+# storing it in the corpus or surfacing it as a "rule" just pollutes recall and
+# wastes the association budget. Stripped on both write (record_run) and read
+# (recall/associate). CSS/JS are intentionally NOT here — shared framework
+# filenames (app.js, bootstrap.css) do transfer, and JS is harvested for paths.
+_ASSET_EXT = frozenset({
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tif", "tiff",
+    "avif", "heic", "woff", "woff2", "ttf", "eot", "otf", "mp4", "webm", "mp3",
+    "wav", "ogg", "oga", "avi", "mov", "m4a", "m4v", "map",
+})
+
+
+def _is_asset(path: str) -> bool:
+    base = (path or "").rsplit("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    return "." in base and base.rsplit(".", 1)[-1].lower() in _ASSET_EXT
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY,
@@ -129,7 +146,7 @@ class Memory:
                  LIMIT ?""",
             (*techs, exclude_host, *_AMBIENT_PATHS, limit),
         ).fetchall()
-        return [r[0] for r in rows]
+        return [r[0] for r in rows if not _is_asset(r[0])]
 
     def recall_knn(self, profile, k: int = 5, limit: int = 200) -> list[str]:
         """Prime from the k most *similar* past hosts (cosine over fingerprint
@@ -155,7 +172,7 @@ class Memory:
         scores: dict[str, float] = defaultdict(float)
         for s, host in sims[:k]:
             for path, _ in self.prior_findings(host):
-                if path not in _AMBIENT_PATHS:        # ambient paths transfer no signal
+                if path not in _AMBIENT_PATHS and not _is_asset(path):  # ambient/asset paths transfer no signal
                     scores[path] += s
         return sorted(scores, key=lambda p: -scores[p])[:limit]
 
@@ -182,7 +199,7 @@ class Memory:
                 "WHERE host IN (SELECT host FROM corpus WHERE path = ?) "
                 "GROUP BY path", (a,)).fetchall()
             for b, cnt in rows:
-                if b in found or b in _AMBIENT_PATHS:    # skip self + ambient (favicon/robots/…)
+                if b in found or b in _AMBIENT_PATHS or _is_asset(b):  # skip self + ambient + static assets
                     continue
                 conf = cnt / n_a
                 if conf >= min_conf and conf > best.get(b, 0):
@@ -259,12 +276,17 @@ class Memory:
         # store the fingerprint vector for k-NN priming of future scans
         self.db.execute("INSERT OR REPLACE INTO host_fp VALUES (?,?)",
                         (profile.host, json.dumps(fingerprint_vector(profile))))
-        # corpus: only real, low-noise hits (200/3xx/401/403) become memory.
+        # corpus: only real, low-noise hits (200/3xx/401/403) become memory —
+        # and never host-local static assets (images/fonts/media carry no
+        # cross-target signal, so they'd only pollute future recall/association).
         for f in result.findings:
             if f.status in (200, 204, 301, 302, 401, 403):
+                p = _path(f.url)
+                if _is_asset(p):
+                    continue
                 self.db.execute(
                     "INSERT OR REPLACE INTO corpus VALUES (?,?,?)",
-                    (profile.host, _path(f.url), f.status))
+                    (profile.host, p, f.status))
         self.db.commit()
         return run_id
 

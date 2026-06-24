@@ -16,6 +16,7 @@ Two shapes are understood:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 # Common unauthenticated locations, ordered by prevalence (Swagger UI defaults,
@@ -114,6 +115,45 @@ def extract_jsonapi_links(d: dict) -> set[str]:
 
 # ---- driver -------------------------------------------------------------------
 
+def _endpoints_from_doc(doc: dict, ctype: str = "") -> set[str]:
+    """OpenAPI/Swagger or JSON:API doc → declared endpoint paths (empty if neither)."""
+    if _is_spec(doc):
+        return extract_endpoints(doc)
+    if _is_jsonapi(doc, ctype):
+        return extract_jsonapi_links(doc)
+    return set()
+
+
+async def ingest_source(engine, source: str) -> tuple[str | None, set[str]]:
+    """Load an *explicitly-provided* OpenAPI/Swagger or JSON:API document from a
+    URL or local file (`--openapi`) and return (label, declared paths).
+
+    Lets the user feed a spec the scanner can't reach on its own — an off-host
+    docs server, or a file handed over by the client — to seed the scan with the
+    full declared API surface. The returned paths are root-absolute, applied to
+    the target being scanned (a spec's `/users/` is probed on the target host).
+    `label` is the URL/path, for the log line; on any failure returns (None, set()).
+    """
+    body: bytes | None = None
+    ctype = ""
+    if source.startswith(("http://", "https://")):
+        probe = await engine.fetch(source, keep_body=True)
+        if probe.ok and probe.body:
+            body, ctype = probe.body, probe.content_type
+    else:
+        try:
+            body = Path(source).expanduser().read_bytes()
+        except OSError:
+            return None, set()
+    if not body:
+        return None, set()
+    doc = _load(body)
+    if doc is None:
+        return None, set()
+    endpoints = set(sorted(_endpoints_from_doc(doc, ctype))[:MAX_API_PATHS])
+    return (source, endpoints) if endpoints else (None, set())
+
+
 async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, set[str]]:
     """Probe the API-document locations; on the first that parses (OpenAPI or
     JSON:API), return (url, paths). `paths` includes the document's own path so
@@ -128,11 +168,8 @@ async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, 
         doc = _load(probe.body)
         if doc is None:
             continue
-        if _is_spec(doc):
-            endpoints = extract_endpoints(doc)
-        elif _is_jsonapi(doc, probe.content_type):
-            endpoints = extract_jsonapi_links(doc)
-        else:
+        endpoints = _endpoints_from_doc(doc, probe.content_type)
+        if not endpoints:
             continue
         endpoints = set(sorted(endpoints)[:MAX_API_PATHS])
         endpoints.add("/" + cand.lstrip("/"))    # the document itself
