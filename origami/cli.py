@@ -19,7 +19,7 @@ from origami import __version__, banner
 from origami.brain.memory import DEFAULT_DB, Memory
 from origami.control import keyboard_control
 from origami.core import resume as resume_mod
-from origami.core.httpclient import Engine, EngineConfig
+from origami.core.httpclient import _UA_POOL, Engine, EngineConfig
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
 from origami.output import artifacts, graph, html_report, json_report, ui
@@ -199,7 +199,10 @@ async def run(args: argparse.Namespace) -> int:
         if args.header:
             print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
         if args.user_agent:
-            print(f"  user-agent: {args.user_agent}")
+            print(f"  user-agent: {args.user_agent}"
+                  + ("  (--rotate-ua ignored: -A pins it)" if args.rotate_ua else ""))
+        elif args.rotate_ua:
+            print(f"  user-agent: rotating per request (pool of {len(_UA_POOL)} browsers)")
         if args.proxy:
             print(f"  proxy    : {args.proxy} (TLS verification off)")
         if args.exclude:
@@ -246,7 +249,8 @@ async def run(args: argparse.Namespace) -> int:
                                    delay=args.delay, rate=args.rate,
                                    verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
                                    proxy=args.proxy or "", headers=_parse_headers(args.header),
-                                   user_agent=args.user_agent or EngineConfig.user_agent)
+                                   user_agent=args.user_agent or EngineConfig.user_agent,
+                                   rotate_ua=args.rotate_ua and not args.user_agent)
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
@@ -343,6 +347,9 @@ def main() -> None:
                          "for authenticated scans")
     ap.add_argument("-A", "--user-agent", metavar="UA",
                     help="override the User-Agent header")
+    ap.add_argument("--rotate-ua", action="store_true",
+                    help="rotate the User-Agent per request from a pool of real browsers "
+                         "(WAF-evasion; ignored if -A pins a specific UA)")
     ap.add_argument("--proxy", metavar="URL",
                     help="route all traffic through an intercepting proxy "
                          "(e.g. http://127.0.0.1:8080 for Burp/ZAP); implies -k")

@@ -1837,6 +1837,66 @@ class TestEngineBackoff(unittest.TestCase):
         future = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(now + 90))
         self.assertAlmostEqual(P(future, now), 90, delta=2)          # HTTP-date
 
+    def test_rotate_ua_picks_pool_and_keeps_headers(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig, _UA_POOL
+
+        class _Hdrs(dict):
+            def get_list(self, k): return []
+        class _Resp:
+            status_code = 200
+            headers = _Hdrs({"content-type": "text/html"})
+            async def aiter_bytes(self):
+                if False:
+                    yield b""
+        class _Stream:
+            async def __aenter__(self): return _Resp()
+            async def __aexit__(self, *a): return False
+
+        async def run():
+            e = Engine(EngineConfig(rotate_ua=True))
+            async with e:
+                seen, captured = set(), {}
+                def fake_stream(method, url, **kw):
+                    h = kw.get("headers", {})
+                    seen.add(h.get("User-Agent"))
+                    captured.update(h)
+                    return _Stream()
+                e._client.stream = fake_stream
+                for _ in range(60):
+                    await e._stream_probe("http://t/x", "GET", False, {"headers": {"X-Custom": "keep"}})
+                return seen, captured
+        seen, captured = asyncio.run(run())
+        self.assertGreater(len(seen), 1)                 # actually rotates
+        self.assertTrue(seen <= set(_UA_POOL))           # only real pool UAs
+        self.assertEqual(captured.get("X-Custom"), "keep")  # caller headers preserved
+
+    def test_no_rotation_when_disabled(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig
+        class _Hdrs(dict):
+            def get_list(self, k): return []
+        class _Resp:
+            status_code = 200; headers = _Hdrs({"content-type": "text/html"})
+            async def aiter_bytes(self):
+                if False:
+                    yield b""
+        class _Stream:
+            async def __aenter__(self): return _Resp()
+            async def __aexit__(self, *a): return False
+        async def run():
+            e = Engine(EngineConfig(rotate_ua=False))
+            async with e:
+                sent = []
+                def fake_stream(method, url, **kw):
+                    sent.append(kw.get("headers"))
+                    return _Stream()
+                e._client.stream = fake_stream
+                await e._stream_probe("http://t/x", "GET", False, {})
+                return sent
+        sent = asyncio.run(run())
+        self.assertEqual(sent, [None])                   # no per-request UA header injected
+
     def test_retry_after_sets_and_caps_floor(self):
         from origami.core.httpclient import _RETRY_AFTER_CAP
         e = self._engine(40)
