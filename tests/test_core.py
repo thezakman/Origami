@@ -373,6 +373,66 @@ class TestSecrets(unittest.TestCase):
         self.assertIn("secrets:", f.note)
 
 
+class TestParamFuzz(unittest.TestCase):
+    def test_safe_names_and_batches(self):
+        from origami.modules import paramfuzz as P
+        names = P.safe_names(["id", "q", "bad name", "x;y", "id", "redirect"])
+        self.assertEqual(names, ["id", "q", "redirect"])           # junk + dupes dropped
+        (qs, tmap, ctl), = P.build_batches(["id"], batch_size=5, run="oztest")
+        self.assertIn("id=oztest0q", qs)
+        self.assertIn("oztestctlname=", qs)                        # control param present
+        self.assertEqual(P.reflected(b"echo oztest0q here", tmap), ["id"])
+        self.assertTrue(P.control_reflected(b"... oztestctlq ...", ctl))
+
+    def test_fold_flags_reflected_param(self):
+        import asyncio
+        from urllib.parse import urlparse, parse_qs
+        from origami.core.scanner import _param_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:                       # reflects ONLY the 'q' param's canary
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                q = parse_qs(urlparse(url).query)
+                body = (b"results for " + q["q"][0].encode()) if "q" in q else b"home"
+                return make_probe(200, body, url=url, ctype="text/html")
+
+        prof = TargetProfile(host="h", base_url="https://h/")
+        prof.parameters = {"q"}                 # harvested param name
+        f = Finding("https://h/search.php", 200, 10, "text/html", 0.9, "wordlist")
+        result = ScanResult(profile=prof, findings=[f])
+        streamed = []
+        opts = ScanOptions(param_fuzz=True, finding_sink=streamed.append)
+        asyncio.run(_param_fold(FakeEngine(), prof, result, opts, NullObserver()))
+        self.assertIn("param", f.tags)
+        self.assertIn("q", f.note)
+        self.assertTrue(any(s is f for s in streamed))             # streamed for JSONL
+
+    def test_fold_skips_endpoint_that_echoes_any_query(self):
+        import asyncio
+        from origami.core.scanner import _param_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class EchoEngine:                       # echoes the WHOLE query → control reflects
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                EchoEngine.total_requests += 1
+                from urllib.parse import urlparse
+                return make_probe(200, b"you sent: " + urlparse(url).query.encode(),
+                                  url=url, ctype="text/html")
+
+        prof = TargetProfile(host="h", base_url="https://h/")
+        f = Finding("https://h/x.php", 200, 10, "text/html", 0.9, "wordlist")
+        result = ScanResult(profile=prof, findings=[f])
+        asyncio.run(_param_fold(EchoEngine(), prof, result, ScanOptions(param_fuzz=True), NullObserver()))
+        self.assertNotIn("param", f.tags)       # echoes-any → no false reflections
+
+
 class TestLeaks(unittest.TestCase):
     def kinds(self, body):
         from origami.modules.leaks import scan
