@@ -33,8 +33,12 @@ _PATTERNS: list[tuple[str, re.Pattern, int]] = [
     ("db-uri-creds",     re.compile(rb"\b((?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|mariadb|redis|amqp|ftp)://[^\s:@/]+:[^\s:@/]{3,}@[^\s/'\"]+)"), 1),
     # contextual aws secret (40-char base64 next to an aws_secret hint)
     ("aws-secret-key",   re.compile(rb"(?i)aws_secret_access_key['\"]?\s*[:=]\s*['\"]([A-Za-z0-9/+]{40})['\"]"), 1),
-    # guarded generic: api_key/secret/token/password = "value"
-    ("generic-secret",   re.compile(rb"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|pwd)\b['\"]?\s*[:=]\s*['\"]([^'\"\s]{6,80})['\"]"), 1),
+    # guarded generic: api_key/secret/token/password = "value". The value must
+    # be credential-SHAPED — start alphanumeric and contain only token chars
+    # (base64/hex/url-safe + . _ - + / = ~). This rejects minified-JS string
+    # concatenation like  "...secret="+this.foo+"...#]/,"  whose captured fragment
+    # starts with an operator and carries code punctuation (#, ], comma, …).
+    ("generic-secret",   re.compile(rb"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|pwd)\b['\"]?\s*[:=]\s*['\"]([A-Za-z0-9][\w./+\-=~]{5,79})['\"]"), 1),
     # unquoted env-style: KEY=value (.env / shell), value long enough to be real
     ("env-secret",       re.compile(rb"(?im)^[\w.\-]*(?:api[_-]?key|secret[_-]?key|access[_-]?key|secret|token|password|passwd|pwd)[\w.\-]*\s*[:=]\s*([^\s'\"#]{12,120})\s*$"), 1),
     ("bearer-token",     re.compile(rb"(?i)\bbearer\s+([A-Za-z0-9._\-]{20,})"), 1),
@@ -50,6 +54,32 @@ def _is_placeholder(value: bytes) -> bool:
     if len(set(value)) <= 3:                 # "aaaaaa", "000000" — not a real secret
         return True
     return bool(_PLACEHOLDER.search(value))
+
+
+# A captured value that is really a code expression, not a credential: a JS
+# member-access / dotted-identifier chain (this.foo.bar, window.cfg.token,
+# obj.prop) or anything with a `..` run.
+_CODE_CHAIN = re.compile(rb"^[A-Za-z_$][\w$]*(?:\.[\w$]+)+$")
+
+
+def _token_like(seg: bytes) -> bool:
+    """A dotted segment that looks like a real credential token, not an
+    identifier: long, or mixed letters+digits — `ab9Xk2mZ7q1P` vs `config`."""
+    has_d = any(48 <= c <= 57 for c in seg)
+    has_a = any(65 <= c <= 90 or 97 <= c <= 122 for c in seg)
+    return len(seg) >= 16 or (len(seg) >= 10 and has_d and has_a)
+
+
+def _looks_like_code(value: bytes) -> bool:
+    if b".." in value:
+        return True
+    if not _CODE_CHAIN.match(value):
+        return False
+    # A dotted chain is CODE only when NO segment looks like a token — a long /
+    # mixed-alnum segment means it's a structured secret (v1.ab9Xk2mZ7q1P,
+    # key1234abcd.def5678ghij), which we must keep, not a `this.config.password`
+    # identifier chain, which we drop.
+    return not any(_token_like(seg) for seg in value.split(b"."))
 
 
 def _redact(value: bytes) -> str:
@@ -75,6 +105,8 @@ def scan(body: bytes) -> list[tuple[str, str]]:
                 continue                       # canonical doc/example key, not a real leak
             if kind in ("generic-secret", "env-secret", "bearer-token", "aws-secret-key") and _is_placeholder(value):
                 continue
+            if kind in ("generic-secret", "env-secret", "bearer-token") and _looks_like_code(value):
+                continue                       # JS member chain / dotted identifier — not a secret
             if value in seen:
                 continue
             seen.add(value)

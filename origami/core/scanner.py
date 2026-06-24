@@ -177,6 +177,9 @@ class ScanOptions:
     exclude_ext: list[str] = field(default_factory=list)  # skip paths with these file extensions (glob: jpg,png,jpg* — static-asset noise)
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
+    bypass_headers: bool = False   # use a header-bypass wordlist for the header axis (--bypass-headers)
+    bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
+    openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
@@ -296,7 +299,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # sub-step counter shown in the status bar: "recon: apidocs  4/7"
     recon_total = (3 + (1 if memory is not None else 0)
                    + (1 if (opts.js and root.body) else 0)
-                   + (2 if opts.apidocs else 0))
+                   + (2 if opts.apidocs else 0)
+                   + (1 if opts.openapi_source else 0))
     _recon_k = [0]
 
     def _recon(name):
@@ -396,6 +400,22 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             if opts.graph:
                 spec_path = urlparse(spec_url).path
                 result.edges += [(spec_path, p) for p in sorted(api_paths) if p != spec_path]
+
+    # user-supplied spec (URL or file) → fold its declared surface onto the target.
+    # Works independently of auto-discovery (so it still runs under --no-apidocs).
+    if opts.openapi_source:
+        _recon("api-spec")
+        src_label, src_paths = await _guard(observer, "api-spec",
+                                            apidocs.ingest_source(engine, opts.openapi_source),
+                                            (None, set()))
+        src_paths = _scope_paths(src_paths, profile.host, opts.scope)
+        if src_label:
+            root_seeds += [(p, "apidocs") for p in sorted(src_paths)]
+            observer.log(f"api-spec: {len(src_paths)} endpoints folded from "
+                         f"{opts.openapi_source}", 0, style="cyan")
+        else:
+            observer.log(f"api-spec: no endpoints parsed from {opts.openapi_source} "
+                         f"(not a recognised OpenAPI/Swagger or JSON:API doc)", 0, style="yellow")
 
     # .well-known/ — OIDC/OAuth index (auth endpoints), security.txt, etc.
     _recon("well-known")
@@ -1179,20 +1199,20 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
             break
         observer.substep(cand)
         pr = await engine.fetch(root, headers={"Host": cand})
-        observer.tick(hit=False)
         observer.request(root, pr.status, False)
+        # tick per non-hit probe here; _report ticks once for a confirmed vhost
         if not pr.ok or pr.status in NOT_FOUND_STATUS:
-            continue
+            observer.tick(hit=False); continue
         # same as the bogus baseline → not a distinct vhost (server ignores Host)
         if base.ok and pr.status == base.status and \
                 hamming(pr.body_simhash, base.body_simhash) <= bl.SIMHASH_MISS_DISTANCE:
-            continue
+            observer.tick(hit=False); continue
         # same as the default site → it's just the target again
         if hamming(pr.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
-            continue
+            observer.tick(hit=False); continue
         sig = (pr.status, pr.body_simhash)
         if sig in seen_sig:                       # collapse aliases of the same app
-            continue
+            observer.tick(hit=False); continue
         seen_sig.add(sig)
         url = f"{scheme}://{cand}/"
         vf = Finding(url, pr.status, pr.length, pr.content_type, 0.8, "vhost",
@@ -1267,37 +1287,57 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     blocked, skipped = _select_bypass_targets(result.findings)
     if not blocked:
         return
+    # Optional user/bundled header-bypass wordlist (--bypass-headers): replaces the
+    # built-in IP-trust header axis. Loaded once; [] (curated built-ins) on failure.
+    header_pairs = (bypass403.load_header_pairs(opts.bypass_headers_path)
+                    if opts.bypass_headers else None)
+    if opts.bypass_headers and opts.bypass_headers_path and not header_pairs:
+        observer.log(f"403-bypass: header wordlist {opts.bypass_headers_path} empty or "
+                     f"unreadable — falling back to the built-in header axis", 0, style="yellow")
+    ci = profile.case_sensitive is False              # IIS/Windows ACL ignores case
     observer.phase("403-bypass")
     msg = f"403-bypass: probing {len(blocked)} blocked resources"
+    if header_pairs:
+        msg += f" with {len(header_pairs)} bypass headers"
     if skipped:
         msg += f" ({skipped} same-wall/over-cap 403s skipped)"
     observer.log(msg, 0, style="cyan")
-    total = sum(len(bypass403.variants(urlparse(f.url).path)) for f in blocked)
+    # count with the SAME case_insensitive as the firing loop, else the bar overcounts
+    total = sum(len(bypass403.variants(urlparse(f.url).path, case_insensitive=ci,
+                                       header_pairs=header_pairs)) for f in blocked)
     observer.start_prefix("403-bypass", total)
     root = _host_root(profile.base_url)
     for f in blocked:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
-        ci = profile.case_sensitive is False
-        for label, method, rpath, headers in bypass403.variants(path, case_insensitive=ci):
+        for label, method, rpath, headers in bypass403.variants(
+                path, case_insensitive=ci, header_pairs=header_pairs):
             if opts.max_requests and engine.total_requests >= opts.max_requests:
                 return
             url = urljoin(root, rpath.lstrip("/"))
             probe = await engine.fetch(url, method=method, headers=headers or None)
-            observer.tick(hit=False)
             observer.request(url, probe.status, False)
+            # tick per non-hit probe here; _report ticks once for the confirmed hit
             if not (probe.ok and 200 <= probe.status < 300 and probe.length > 0):
-                continue                                  # 2xx with actual content only
+                observer.tick(hit=False); continue        # 2xx with actual content only
             if hamming(probe.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
-                continue                                  # just the homepage — not a bypass
+                observer.tick(hit=False); continue        # just the homepage — not a bypass
             if f.simhash and hamming(probe.body_simhash, f.simhash) <= bl.SIMHASH_MISS_DISTANCE:
-                continue                                  # same body as the 403 page — only the status flipped
+                observer.tick(hit=False); continue        # same body as the 403 page — only the status flipped
             if await _confirm(engine, profile, prefix, probe, "bypass403") is None:
-                continue                                  # soft-404 / catch-all
+                observer.tick(hit=False); continue        # soft-404 / catch-all
             bf = Finding(f.url, probe.status, probe.length, probe.content_type, 0.9,
                          "bypass403", note=f"403→{probe.status} bypass: {label}",
-                         tags=list(f.tags), simhash=probe.body_simhash)
+                         tags=sorted(set(f.tags) | {"bypass"}), simhash=probe.body_simhash)
+            # A confirmed bypass SUPERSEDES the wall it came from: drop the original
+            # 403 (and clear it from the live-dedup set) so the bypass — which reuses
+            # the blocked URL — is actually appended/streamed/reported instead of
+            # being suppressed as a duplicate of that 403.
+            if f in result.findings:
+                result.findings.remove(f)
+            result.seen_urls.discard(f.url)
+            result.seen_urls_lc.discard(f.url.lower())
             _report(observer, result, opts, bf, f.url)
             observer.log(f"403-bypass: {observer.disp(f.url)} → {probe.status} via {label}",
                          0, style="bold green")
