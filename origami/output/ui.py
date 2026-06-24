@@ -98,7 +98,7 @@ ORIGIN_STYLE = {
     "wordlist": "white", "recursion": "yellow", "assoc": "bright_magenta",
     "apidocs": "bright_blue", "wellknown": "bright_cyan", "graphql": "bright_magenta",
     "header": "blue", "methods": "bold red", "bypass403": "bold green",
-    "harvest": "bright_blue", "vhost": "bold cyan",
+    "harvest": "bright_blue", "vhost": "bold cyan", "wayback": "bright_green",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.

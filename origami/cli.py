@@ -157,6 +157,7 @@ async def run(args: argparse.Namespace) -> int:
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
+        wayback=args.wayback or args.gau, gau=args.gau,
         filters=_build_filters(args),
     )
 
@@ -214,6 +215,8 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  bypass-hdr: {src}")
         if args.params:
             print(f"  params   : reflection fuzzing on dynamic endpoints")
+        if args.wayback or args.gau:
+            print(f"  history  : {'gau/waybackurls (native fallback)' if args.gau else 'Wayback CDX + Common Crawl'}")
         if args.rate:
             print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
         if args.delay:
@@ -397,6 +400,13 @@ def main() -> None:
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
+    ap.add_argument("--wayback", action="store_true",
+                    help="fold HISTORICAL URLs (Wayback Machine CDX + Common Crawl) as seeds — "
+                         "legacy/forgotten paths that may still respond; runs in the background "
+                         "during fingerprint (zero external dependency)")
+    ap.add_argument("--gau", action="store_true",
+                    help="like --wayback but prefer your gau/waybackurls binary (richer providers); "
+                         "falls back to the native sources if the binary isn't installed")
     ap.add_argument("-x", "--exclude", action="append", metavar="PATTERN",
                     help="never request or recurse a path containing PATTERN "
                          "(case-insensitive, repeatable) — safety rail for "

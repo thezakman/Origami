@@ -8,6 +8,7 @@ Scope/recursion are bounded (§3.11): same host, depth cap, request cap.
 
 from __future__ import annotations
 
+import asyncio
 import random
 import string
 from collections import defaultdict
@@ -41,7 +42,7 @@ from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import bypass403, leaks, paramfuzz, secrets, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
-                                        methods, robots, shortname, wellknown)
+                                        methods, robots, shortname, wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -69,10 +70,11 @@ def _ext_excluded(path: str, patterns) -> bool:
 # (high value), so the cap is generous — overall volume is bounded by
 # --max-requests, not by starving the best candidates.
 MAX_HARVEST_SEEDS = 2000
+MAX_WAYBACK_SEEDS = 2000   # cap historical (Wayback/gau) paths folded as candidates
 
 # Origins whose paths are root-absolute (joined from the host root, not the
 # current prefix) — harvested references point at app-root paths.
-_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown", "header"}
+_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown", "header", "wayback"}
 
 
 def _host_root(url: str) -> str:
@@ -181,6 +183,8 @@ class ScanOptions:
     bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
     openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
     param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
+    wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
+    gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
@@ -255,6 +259,12 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     observer.phase("calibrate")
     await bl.calibrate(engine, profile, [(base_prefix, e) for e in _BASE_CALIB_EXTS + [".php", ".aspx"]])
 
+    # Kick off the (slow, external) historical-URL lookup NOW, in the background,
+    # so it runs while we fingerprint/calibrate; recon awaits its result below.
+    wb_task = None
+    if opts.wayback or opts.gau:
+        wb_task = asyncio.create_task(wayback.harvest(profile.host, use_gau=opts.gau))
+
     observer.phase("fingerprint")
     errors = await fp.forced_error_probes(engine, base_url)
     fp.apply_signals(profile, [root, *errors], kb)
@@ -301,7 +311,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     recon_total = (3 + (1 if memory is not None else 0)
                    + (1 if (opts.js and root.body) else 0)
                    + (2 if opts.apidocs else 0)
-                   + (1 if opts.openapi_source else 0))
+                   + (1 if opts.openapi_source else 0)
+                   + (1 if wb_task is not None else 0))
     _recon_k = [0]
 
     def _recon(name):
@@ -417,6 +428,25 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         else:
             observer.log(f"api-spec: no endpoints parsed from {opts.openapi_source} "
                          f"(not a recognised OpenAPI/Swagger or JSON:API doc)", 0, style="yellow")
+
+    # historical URLs (kicked off at fingerprint, now in hand) → fold as seeds.
+    if wb_task is not None:
+        _recon("wayback")
+        try:
+            wb_paths, wb_params, wb_src = await asyncio.wait_for(wb_task, timeout=30)
+        except Exception as e:        # timeout/any error: never let history stall/break the scan
+            wb_task.cancel()
+            wb_paths, wb_params, wb_src = set(), set(), "skipped"
+            observer.log(f"wayback: skipped ({type(e).__name__})", 0, style="yellow")
+        scoped = [p for p in _scope_paths(wb_paths, profile.host, opts.scope)
+                  if not _excluded("/" + p.lstrip("/"), opts)][:MAX_WAYBACK_SEEDS]
+        if scoped:
+            root_seeds += [(p, "wayback") for p in sorted(scoped)]
+        if wb_params:
+            profile.parameters |= wb_params                   # enrich the --params surface
+        if scoped or wb_params:
+            observer.log(f"wayback: {len(scoped)} historical paths"
+                         f" (+{len(wb_params)} param names) from {wb_src}", 0, style="cyan")
 
     # .well-known/ — OIDC/OAuth index (auth endpoints), security.txt, etc.
     _recon("well-known")
