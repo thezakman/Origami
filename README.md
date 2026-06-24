@@ -64,7 +64,7 @@ Common flags:
 
 | flag | meaning |
 |---|---|
-| `-w FILE` | wordlist (default: curated ~280-word builtin; point at SecLists/Assetnote for exhaustive runs) |
+| `-w FILE` | wordlist (default: curated ~340-word builtin; point at SecLists/Assetnote for exhaustive runs) |
 | `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
 | `-d N` | recursion depth (default 1) |
@@ -139,7 +139,7 @@ checkpoint so repeated resumes never duplicate the report.
 - **Live dashboard** — findings stream as permanent lines under a pinned status bar with phase, req/s, hits, duration, the adaptive concurrency (drops as `⤓conc N` under WAF backoff) and `==> directory` markers.
 - **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable, links to the graph), **`graph.html`** (endpoint topology with an "only hidden" filter) + `graph.dot`, `params.txt` (harvested parameter surface — a drop-in fuzzing list) and `urls.txt`.
 
-The final report groups findings by confidence, tagged by kind (`disclosure`, `config`, `api`, `admin`, `auth`, `source`) and coloured by where each came from (`js`, `robots`, `backup`, `wordlist`, `memory`, `shortscan`…):
+The final report groups findings by confidence, tagged by kind (`secret`, `leak`, `disclosure`, `config`, `api`, `admin`, `auth`, `source`, `param`, `listing`, `vhost`, `bypass`…) and coloured by where each came from (`js`, `robots`, `backup`, `wordlist`, `memory`, `shortscan`, `wayback`, `bypass403`…):
 
 ```
 Findings (16)  ·  fingerprint: iis, asp.net
@@ -176,7 +176,9 @@ python tests/benchmark/bench_adaptive.py                        # adaptive vs bl
 
 ## Status & roadmap
 
-The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
+The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS, OpenAPI/Swagger/JSON:API + `.well-known`/GraphQL), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
+
+On top of that core: **content intelligence** (secrets + stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403`, `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), and anti-WAF realism (`Retry-After` honoring + `--rotate-ua`). 180+ unit tests.
 
 ### Request economy (contextual bandit)
 
