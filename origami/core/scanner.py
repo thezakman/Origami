@@ -39,7 +39,7 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, secrets, vhost, waf
+from origami.modules import bypass403, leaks, secrets, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wellknown)
 from origami.output.ui import NullObserver
@@ -1060,7 +1060,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
         pr = await engine.fetch(f.url, keep_body=True)
         if not (pr.ok and pr.body):
             continue
-        _note_secrets(f, pr.body, observer, opts.finding_sink)   # body's here — scan for creds too
+        _scan_body(f, pr.body, observer, opts.finding_sink)   # body's here — scan creds + leaks too
         extracted = js_parser.extract_paths(pr.body, f.url)
         if is_dir_listing(pr.body):               # autoindex → read its TRUE contents, don't guess
             extracted |= js_parser.parse_listing(pr.body, f.url)
@@ -1111,11 +1111,8 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     return new_dirs
 
 
-def _note_secrets(finding, body, observer, sink=None) -> int:
-    """Scan one body for secrets; tag + annotate the finding. Returns count.
-
-    `sink` (opts.finding_sink) re-emits the now-enriched finding so a JSONL
-    consumer sees the `secret` tag even though detection happens post-confirm."""
+def _note_secrets(finding, body, observer) -> int:
+    """Scan one body for secrets; tag + annotate the finding. Returns count."""
     hits = secrets.scan(body)
     if not hits:
         return 0
@@ -1124,9 +1121,32 @@ def _note_secrets(finding, body, observer, sink=None) -> int:
         finding.tags = list(finding.tags) + ["secret"]
     finding.note = (finding.note + " · " if finding.note else "") + f"secrets: {preview}"
     observer.log(f"secret: {observer.disp(finding.url)} → {preview}", 0, style="bold red")
-    if sink is not None:
-        sink(finding)
     return len(hits)
+
+
+def _note_leaks(finding, body, observer) -> int:
+    """Scan one body for information disclosure (stack traces, framework debug
+    pages, internal IPs/hosts); tag `leak` + annotate the finding. Returns count."""
+    hits = leaks.scan(body)
+    if not hits:
+        return 0
+    preview = ", ".join(f"{k}={v}" for k, v in hits[:4])
+    if "leak" not in finding.tags:
+        finding.tags = list(finding.tags) + ["leak"]
+    finding.note = (finding.note + " · " if finding.note else "") + f"leak: {preview}"
+    observer.log(f"leak: {observer.disp(finding.url)} → {preview}", 0, style="bold yellow")
+    return len(hits)
+
+
+def _scan_body(finding, body, observer, sink=None) -> int:
+    """Run all body-content analyzers (secrets + content-intel leaks) on a body
+    we already have in hand, then re-emit the now-enriched finding ONCE via `sink`
+    (opts.finding_sink) so a JSONL consumer sees the secret/leak tags even though
+    detection happens post-confirm. Returns the total number of hits."""
+    n = _note_secrets(finding, body, observer) + _note_leaks(finding, body, observer)
+    if n and sink is not None:
+        sink(finding)
+    return n
 
 
 # Files most likely to carry credentials (scanned by the secrets fold).
@@ -1138,7 +1158,10 @@ _SECRET_HINT = ("/.env", "/.git/", "config", "secret", "credential", "settings",
 MAX_SECRET_FILES = 40
 
 
-def _secret_candidate(f) -> bool:
+def _content_candidate(f) -> bool:
+    # 5xx error pages are a prime stack-trace / debug-leak source — read them too.
+    if 500 <= f.status < 600:
+        return True
     if not (200 <= f.status < 300):
         return False
     path = urlparse(f.url).path.lower()
@@ -1147,31 +1170,32 @@ def _secret_candidate(f) -> bool:
             or any(h in path for h in _SECRET_HINT)
             or bool(set(getattr(f, "tags", [])) & {"config", "disclosure", "source", "debug"})
             or f.origin in ("bypass403", "backup")
-            or any(t in ct for t in ("javascript", "json", "xml", "yaml", "plain")))
+            or any(t in ct for t in ("javascript", "json", "xml", "yaml", "plain", "html")))
 
 
 async def _secrets_fold(engine, profile, result, opts, observer) -> None:
-    """Read high-value 2xx files (configs/dotfiles/backups/bypassed denials) and
-    flag any credentials inside — the payoff of finding the file in the first
-    place. JS/JSON already read by the harvest fold are skipped (no double-fetch);
-    those bodies are secret-scanned there."""
-    cands = [f for f in result.findings if _secret_candidate(f) and not _harvestable(f)]
+    """Read high-value files (configs/dotfiles/backups/bypassed denials) and 5xx
+    error pages, then flag credentials (secrets) AND information disclosure (stack
+    traces, framework debug pages, internal IPs) inside — the payoff of finding the
+    file in the first place. JS/JSON already read by the harvest fold are skipped
+    (no double-fetch); those bodies are scanned there."""
+    cands = [f for f in result.findings if _content_candidate(f) and not _harvestable(f)]
     if not cands:
         return
     # configs/dotfiles/bypassed first, then smaller files; cap the radius
     cands.sort(key=lambda f: (f.origin not in ("bypass403", "backup"), f.length))
     cands = cands[:MAX_SECRET_FILES]
-    observer.log(f"secrets: scanning {len(cands)} files for credentials", 0, style="cyan")
+    observer.log(f"content: scanning {len(cands)} files for secrets + disclosure", 0, style="cyan")
     total = 0
     for f in cands:
         if opts.max_requests and engine.total_requests >= opts.max_requests:
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
-            total += _note_secrets(f, pr.body, observer, opts.finding_sink)
+            total += _scan_body(f, pr.body, observer, opts.finding_sink)
     if total:
-        observer.log(f"secrets: {total} potential credential(s) flagged — see the 'secret' tag",
-                     0, style="bold red")
+        observer.log(f"content: {total} secret/disclosure hit(s) flagged — see the 'secret'/'leak' tags",
+                     0, style="bold yellow")
 
 
 MAX_VHOSTS = 60   # cap Host-header candidates probed

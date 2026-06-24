@@ -107,7 +107,7 @@ TAG_STYLE = {
     "config": "yellow", "api": "blue",
     "admin": "cyan", "auth": "magenta", "source": "green",
     "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
-    "listing": "bold yellow",
+    "listing": "bold yellow", "leak": "bold black on yellow", "bypass": "bold black on green",
 }
 
 
@@ -382,6 +382,8 @@ class RichUI(NullObserver):
             parts.append(f"[bold white on red] {tags['secret']} SECRET [/]")
         if tags.get("disclosure"):
             parts.append(f"[bold white on red] {tags['disclosure']} disclosure [/]")
+        if tags.get("leak"):
+            parts.append(f"[bold black on yellow] {tags['leak']} LEAK [/]")
         if origins.get("bypass403"):
             parts.append(f"[bold green]{origins['bypass403']} 403-bypass[/]")
         if origins.get("methods"):
