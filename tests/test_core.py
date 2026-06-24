@@ -494,6 +494,22 @@ class TestWayback(unittest.TestCase):
         finally:
             W.from_cdx, W.from_commoncrawl, W.from_gau = orig_cdx, orig_cc, orig_gau
 
+    def test_from_gau_timeout_reaps_child(self):
+        # a hung gau must hit its own timeout, be reaped, and return empty fast —
+        # never left running detached (simulate with `sleep`)
+        import asyncio, time
+        from origami.modules.discovery import wayback as W
+        orig_bins, orig_to = W._GAU_BINARIES, W._GAU_TIMEOUT
+        try:
+            W._GAU_BINARIES = ("sleep",)            # args become `sleep <host>`
+            W._GAU_TIMEOUT = 0.3
+            t0 = time.time()
+            res = asyncio.run(W.from_gau("5"))      # `sleep 5` >> 0.3s timeout
+            self.assertEqual(res, set())
+            self.assertLess(time.time() - t0, 3.0)  # returned promptly, didn't block 5s
+        finally:
+            W._GAU_BINARIES, W._GAU_TIMEOUT = orig_bins, orig_to
+
     def test_harvest_caps_paths(self):
         import asyncio
         from origami.modules.discovery import wayback as W
@@ -539,6 +555,16 @@ class TestLeaks(unittest.TestCase):
         self.assertEqual(self.kinds(b"},this.internal=1,ue.internal=2,x.local=3"), set())
         self.assertNotIn("internal-ip", self.kinds(b"version 10.55.109.024 build"))      # leading-zero octet
         self.assertEqual(self.kinds(b"resolver 8.8.8.8 and 1.1.1.1"), set())             # public IPs
+
+    def test_internal_host_regex_not_superlinear(self):
+        # regression: the internal-host pattern must stay linear on dot/digit/
+        # hyphen-dense bodies (SVG path data) — it was O(n^2) before the fix
+        import time
+        from origami.modules.leaks import scan
+        body = b'd="M1.5-2.3-4.0-10.55.109.024.221.024.33 " ' * 4000   # ~200 KB
+        t0 = time.time()
+        scan(body)
+        self.assertLess(time.time() - t0, 2.0)         # was ~2.6s superlinear pre-fix
 
     def test_infra_skipped_on_js_bodies(self):
         from origami.modules.leaks import scan
