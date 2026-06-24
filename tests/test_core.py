@@ -996,6 +996,15 @@ class TestTagging(unittest.TestCase):
     def test_401_forces_auth(self):
         self.assertIn("auth", self.tags("/whatever", status=401))
 
+    def test_hyphen_needle_does_not_fire_midword(self):
+        # regression: 'sign-in' must not match inside 'design-inovador' (the
+        # product-page false positive); a real /sign-in path still tags auth
+        self.assertNotIn("auth", self.tags(
+            "/puff-zion-sensorial-com-seu-design-inovador-e-multifuncional"))
+        self.assertNotIn("auth", self.tags("/puffs"))
+        self.assertIn("auth", self.tags("/user/sign-in"))
+        self.assertIn("auth", self.tags("/account/sign-in/"))
+
     def test_dashboard_is_not_admin(self):
         # a user dashboard view must NOT be tagged admin (the over-broad bug)
         self.assertNotIn("admin", self.tags("/aprendizagem/views/dashboard.tpl.html"))

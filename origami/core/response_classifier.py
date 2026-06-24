@@ -66,15 +66,31 @@ _TAG_RULES = [
 ]
 
 
+_TOKEN_SEP = re.compile(r"[-_/.]+")
+
+
 def _matches(path: str, needle: str) -> bool:
-    """A dot-needle matches a real extension or whole path segment (so ".cs"
-    doesn't fire on ".css", and ".git" fires on /.git/HEAD); any other needle is
-    a plain substring (catches concatenated names like `esqueciminhasenha`)."""
+    """Match a tag needle against a URL path, tuned for low false positives.
+
+      * dot-needle (".cs"): a real extension or whole segment — so ".cs" doesn't
+        fire on ".css", and ".git" fires on /.git/HEAD;
+      * slash-needle ("/auth", "/api/"): a literal path fragment (slash-anchored);
+      * multi-part needle ("sign-in"): boundary-anchored — must sit between
+        separators/edges, so it does NOT fire mid-word (the `sign-in` inside
+        `de·sign-in·ovador` bug);
+      * plain word ("login", "senha"): a substring of a single separator-delimited
+        token — still catches concatenated names (`esqueciminha·senha`) but not a
+        coincidental hit spanning a separator.
+    """
     if needle.startswith("."):
         last = path.rsplit("/", 1)[-1]
         ext = ("." + last.rsplit(".", 1)[-1]) if "." in last else ""
         return ext == needle or last == needle or needle in path.split("/")
-    return needle in path
+    if needle.startswith("/"):
+        return needle in path
+    if any(sep in needle for sep in "-_./"):    # multi-part (sign-in, id_rsa, web.config)
+        return re.search(r"(?:^|[-_/.])" + re.escape(needle) + r"(?:$|[-_/.])", path) is not None
+    return any(needle in tok for tok in _TOKEN_SEP.split(path))
 
 
 def tag_finding(url: str, status: int) -> list[str]:
