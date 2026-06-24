@@ -156,7 +156,8 @@ async def run(args: argparse.Namespace) -> int:
         bypass403=args.bypass_403 or args.bypass_headers is not None,  # --bypass-headers implies bypass
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
-        openapi_source=args.openapi, vhost=args.vhost, filters=_build_filters(args),
+        openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
+        filters=_build_filters(args),
     )
 
     # JSONL streaming: one record per confirmed finding, written live. `-` streams
@@ -211,6 +212,8 @@ async def run(args: argparse.Namespace) -> int:
         if args.bypass_headers is not None:
             src = args.bypass_headers if isinstance(args.bypass_headers, str) else "bundled 403-headers.txt"
             print(f"  bypass-hdr: {src}")
+        if args.params:
+            print(f"  params   : reflection fuzzing on dynamic endpoints")
         if args.rate:
             print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
         if args.delay:
@@ -391,6 +394,9 @@ def main() -> None:
     ap.add_argument("--vhost", action="store_true",
                     help="virtual-host discovery: fuzz the Host header on the target IP "
                          "and report distinct vhosts (admin/staging/internal/… on the CDN)")
+    ap.add_argument("--params", action="store_true",
+                    help="parameter discovery: fire harvested + common parameter names at "
+                         "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
     ap.add_argument("-x", "--exclude", action="append", metavar="PATTERN",
                     help="never request or recurse a path containing PATTERN "
                          "(case-insensitive, repeatable) — safety rail for "

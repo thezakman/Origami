@@ -39,7 +39,7 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, leaks, secrets, vhost, waf
+from origami.modules import bypass403, leaks, paramfuzz, secrets, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wellknown)
 from origami.output.ui import NullObserver
@@ -180,6 +180,7 @@ class ScanOptions:
     bypass_headers: bool = False   # use a header-bypass wordlist for the header axis (--bypass-headers)
     bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
     openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
+    param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
@@ -723,6 +724,12 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "secrets",
                  _secrets_fold(engine, profile, result, opts, observer), None)
 
+    # 7.5 parameter discovery — fire harvested + common param names at dynamic
+    # endpoints; a reflected canary is a real input (XSS/SSTI/redirect lead). Opt-in.
+    if opts.param_fuzz:
+        await _guard(observer, "params",
+                     _param_fold(engine, profile, result, opts, observer), None)
+
     # 8. virtual-host discovery — Host-header fuzzing on the target IP (opt-in).
     if opts.vhost:
         await _guard(observer, "vhost",
@@ -1245,6 +1252,87 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
         _report(observer, result, opts, vf, url)
         observer.log(f"vhost: {cand} → {pr.status} ({pr.length}B) distinct response",
                      0, style="bold cyan")
+
+
+MAX_FUZZ_ENDPOINTS = 15   # cap dynamic endpoints we fuzz params on
+MAX_FUZZ_PARAMS = 160     # cap distinct param names tried per endpoint
+FUZZ_BATCH = 20           # params per request (each gets its own canary)
+_DYN_EXT = (".php", ".asp", ".aspx", ".jsp", ".jspx", ".do", ".action", ".cgi",
+            ".pl", ".ashx", ".asmx", ".json", ".cfm")
+
+
+def _fuzz_candidate(f) -> bool:
+    """A dynamic endpoint worth fuzzing params on: a 2xx app route / script /
+    API — not a static asset (those don't read query params)."""
+    if not (200 <= f.status < 300):
+        return False
+    last = urlparse(f.url).path.rstrip("/").rsplit("/", 1)[-1].lower()
+    ct = (f.content_type or "").lower()
+    if last.endswith(_DYN_EXT):
+        return True
+    if "." not in last:                          # no extension → app route
+        return True
+    return ("html" in ct or "json" in ct) and bool(set(getattr(f, "tags", [])) & {"api"})
+
+
+async def _param_fold(engine, profile, result, opts, observer) -> None:
+    """Fire harvested + common parameter names at dynamic endpoints and flag the
+    ones whose canary reflects — real inputs (XSS/SSTI/open-redirect leads). An
+    endpoint that echoes the control canary (any query) is skipped to avoid FPs."""
+    targets = [f for f in result.findings if _fuzz_candidate(f)]
+    if not targets:
+        return
+    # api-tagged + dynamic-ext first, then shorter URLs; cap the radius
+    targets.sort(key=lambda f: ("api" not in getattr(f, "tags", []),
+                                not urlparse(f.url).path.rstrip("/").rsplit("/", 1)[-1].lower().endswith(_DYN_EXT),
+                                len(f.url)))
+    targets = targets[:MAX_FUZZ_ENDPOINTS]
+    params = paramfuzz.safe_names(list(profile.parameters) + paramfuzz.COMMON)[:MAX_FUZZ_PARAMS]
+    if not params:
+        return
+    n_batches = (len(params) + FUZZ_BATCH - 1) // FUZZ_BATCH
+    observer.phase("params")
+    observer.log(f"params: fuzzing {len(params)} parameter names across "
+                 f"{len(targets)} dynamic endpoints", 0, style="cyan")
+    observer.start_prefix("params", len(targets) * n_batches)
+    total = 0
+    for f in targets:
+        if opts.max_requests and engine.total_requests >= opts.max_requests:
+            break
+        observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
+        found: list[str] = []
+        echoes = False
+        for qs, token_map, ctl in paramfuzz.build_batches(params, FUZZ_BATCH):
+            if opts.max_requests and engine.total_requests >= opts.max_requests:
+                break
+            sep = "&" if urlparse(f.url).query else "?"
+            url = f.url + sep + qs
+            pr = await engine.fetch(url, keep_body=True)
+            observer.tick(hit=False)
+            observer.request(url, pr.status, False)
+            if not (pr.ok and pr.body):
+                continue
+            if paramfuzz.control_reflected(pr.body, ctl):    # echoes any query → no signal
+                echoes = True
+                break
+            found += paramfuzz.reflected(pr.body, token_map)
+        if echoes:
+            observer.log(f"params: {observer.disp(f.url)} reflects any query param — skipped",
+                         1, style="yellow")
+            continue
+        found = list(dict.fromkeys(found))
+        if found:
+            preview = ", ".join(found[:8]) + (f" (+{len(found) - 8})" if len(found) > 8 else "")
+            if "param" not in f.tags:
+                f.tags = list(f.tags) + ["param"]
+            f.note = (f.note + " · " if f.note else "") + f"reflected params: {preview}"
+            observer.log(f"param: {observer.disp(f.url)} ← reflects {preview}", 0, style="bold green")
+            if opts.finding_sink is not None:
+                opts.finding_sink(f)
+            total += len(found)
+    if total:
+        observer.log(f"params: {total} reflected parameter(s) flagged — see the 'param' tag",
+                     0, style="cyan")
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:

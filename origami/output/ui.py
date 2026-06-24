@@ -108,6 +108,7 @@ TAG_STYLE = {
     "admin": "cyan", "auth": "magenta", "source": "green",
     "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
     "listing": "bold yellow", "leak": "bold black on yellow", "bypass": "bold black on green",
+    "param": "bold green",
 }
 
 
@@ -309,7 +310,7 @@ class RichUI(NullObserver):
         return self.requests / dt if dt > 0 else 0.0
 
     _PHASES = ["calibrate", "fingerprint", "recon", "shortscan", "scan",
-               "harvest", "403-bypass", "backups", "associations", "vhost"]
+               "harvest", "403-bypass", "backups", "associations", "params", "vhost"]
 
     def _phase_text(self) -> "Text":
         # header shows only the position (the name lives in the status-bar chip)
