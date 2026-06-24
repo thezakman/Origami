@@ -1164,7 +1164,12 @@ def _note_secrets(finding, body, observer) -> int:
 def _note_leaks(finding, body, observer) -> int:
     """Scan one body for information disclosure (stack traces, framework debug
     pages, internal IPs/hosts); tag `leak` + annotate the finding. Returns count."""
-    hits = leaks.scan(body)
+    # JS bundles: skip the infra (IP/host) patterns — there they're SVG-float /
+    # minified-property noise, not real leaks.
+    ct = (finding.content_type or "").lower()
+    path = urlparse(finding.url).path.lower()
+    js = "javascript" in ct or "ecmascript" in ct or path.endswith((".js", ".mjs"))
+    hits = leaks.scan(body, js=js)
     if not hits:
         return 0
     preview = ", ".join(f"{k}={v}" for k, v in hits[:4])

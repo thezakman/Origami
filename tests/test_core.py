@@ -529,7 +529,23 @@ class TestLeaks(unittest.TestCase):
 
     def test_internal_infra_leaks(self):
         self.assertIn("internal-ip", self.kinds(b"backend 10.0.5.23 down, retry 192.168.1.1"))
-        self.assertIn("internal-host", self.kinds(b"upstream db01.internal timeout"))
+        self.assertIn("internal-host", self.kinds(b"upstream db01.internal timeout"))   # digit in label
+        self.assertIn("internal-host", self.kinds(b"proxy_pass http://vault.corp.internal/api"))  # URL ctx
+        self.assertIn("internal-host", self.kinds(b"connect cache.corp:6379"))           # host:port
+
+    def test_infra_false_positives_rejected(self):
+        # the real-target noise: SVG path floats and minified JS property access
+        self.assertEqual(self.kinds(b"665 9.444 8.585 10.55.109.024.221.024.33 0 4.9"), set())
+        self.assertEqual(self.kinds(b"},this.internal=1,ue.internal=2,x.local=3"), set())
+        self.assertNotIn("internal-ip", self.kinds(b"version 10.55.109.024 build"))      # leading-zero octet
+        self.assertEqual(self.kinds(b"resolver 8.8.8.8 and 1.1.1.1"), set())             # public IPs
+
+    def test_infra_skipped_on_js_bodies(self):
+        from origami.modules.leaks import scan
+        # even a well-formed internal IP/host is suppressed in a JS bundle (noise)
+        body = b"const x='10.0.0.5'; cfg.host='db01.internal';"
+        self.assertTrue(any(k.startswith("internal") for k, _ in scan(body)))   # html context: flagged
+        self.assertEqual([k for k, _ in scan(body, js=True) if k.startswith("internal")], [])
 
     def test_low_false_positives(self):
         # ordinary content / public IPs / marketing copy must stay clean

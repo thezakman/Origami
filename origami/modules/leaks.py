@@ -38,9 +38,26 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("flask-werkzeug",     re.compile(rb"(?i)Werkzeug Debugger|werkzeug\.exceptions\.")),
     ("aspnet-exception",   re.compile(rb"\[(?:Sql|Http|NullReference|InvalidOperation|Argument)\w*Exception[ :]")),
     # --- internal infrastructure leaks ---
-    ("internal-ip",        re.compile(rb"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b")),
-    ("internal-host",      re.compile(rb"\b[a-z0-9][\w-]{1,40}\.(?:local|internal|intranet|corp|lan)\b")),
+    # RFC1918 with VALID octets (0-255, no leading zeros) and NOT embedded in a
+    # longer dotted-decimal run — rejects SVG path data / minified-JS float blobs
+    # like "8.585 10.55.109.024.221" (octet 024 invalid + trailing .221).
+    ("internal-ip",        re.compile(
+        rb"(?<![\w.])(?:"
+        rb"10(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}"
+        rb"|192\.168(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
+        rb"|172\.(?:1[6-9]|2\d|3[01])(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
+        rb")(?![\d.])")),
+    # internal hostname — only when it's plausibly a HOST, not a JS property
+    # (this.internal, ue.local): in URL/authority context (//host, user@host,
+    # host:port) OR the label carries a digit/hyphen (db01.internal, web-prod.corp).
+    ("internal-host",      re.compile(rb"(?:(?<=//)|(?<=@))[a-z0-9][\w.-]{1,60}\.(?:local|internal|intranet|corp|lan)\b")),
+    ("internal-host",      re.compile(rb"\b[a-z0-9.-]{0,40}[0-9-][a-z0-9.-]{0,40}\.(?:local|internal|intranet|corp|lan)\b")),
+    ("internal-host",      re.compile(rb"\b[a-z0-9][\w.-]{1,60}\.(?:local|internal|intranet|corp|lan)(?=:\d)")),
 ]
+
+# Infra patterns are dominated by noise in JavaScript bundles (SVG path floats,
+# minified `x.internal` property access), so they're skipped on JS bodies.
+_INFRA_KINDS = {"internal-ip", "internal-host"}
 
 # Kinds where DISTINCT values are worth listing (a few), vs once-per-kind for the
 # trace/debug shapes (one hit proves the disclosure; no need to repeat).
@@ -55,14 +72,19 @@ def _snippet(raw: bytes, limit: int = 90) -> str:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
-def scan(body: bytes) -> list[tuple[str, str]]:
-    """Return de-duplicated (kind, snippet) disclosures found in `body`."""
+def scan(body: bytes, js: bool = False) -> list[tuple[str, str]]:
+    """Return de-duplicated (kind, snippet) disclosures found in `body`.
+
+    `js=True` (a JavaScript bundle) skips the internal-IP/host patterns, which are
+    almost all false positives there (SVG float data, minified property access)."""
     if not body:
         return []
     out: list[tuple[str, str]] = []
     seen_kind: set[str] = set()
     seen_val: set[bytes] = set()
     for kind, pat in _PATTERNS:
+        if js and kind in _INFRA_KINDS:
+            continue
         if kind in _MULTI_VALUE:
             n = 0
             for m in pat.finditer(body):
