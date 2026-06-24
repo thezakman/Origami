@@ -34,12 +34,14 @@ _ENDPOINT_KEYS_SUFFIX = ("_endpoint", "_uri")
 
 
 def _same_host_path(url: str, host: str) -> str | None:
-    if url.startswith(("http://", "https://")):
-        u = urlparse(url)
+    if not isinstance(url, str):
+        return None
+    if url.startswith(("http://", "https://", "//")):   # absolute OR protocol-relative
+        u = urlparse(url)                                # urlparse("//evil/x") → netloc=evil
         if u.netloc and not same_host(u.netloc, host):
-            return None
+            return None                                  # off-host (incl. //evil.com) → drop
         url = u.path
-    if not isinstance(url, str) or not url.startswith("/"):
+    if not url.startswith("/") or url.startswith("//"):
         return None
     return url.split("?")[0].split("#")[0] or None
 
