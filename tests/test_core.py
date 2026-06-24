@@ -433,6 +433,82 @@ class TestParamFuzz(unittest.TestCase):
         self.assertNotIn("param", f.tags)       # echoes-any → no false reflections
 
 
+class TestWayback(unittest.TestCase):
+    def test_parse_url_lines(self):
+        from origami.modules.discovery import wayback as W
+        txt = "http://h/a\nhttps://h/b?x=1\ngarbage line\n\nhttp://other/c\n"
+        self.assertEqual(W.parse_url_lines(txt),
+                         {"http://h/a", "https://h/b?x=1", "http://other/c"})
+
+    def test_parse_cc_json(self):
+        from origami.modules.discovery import wayback as W
+        txt = '{"url": "http://h/x"}\n{"url":"https://h/y"}\nnot json\n{"nourl": 1}\n'
+        self.assertEqual(W.parse_cc_json(txt), {"http://h/x", "https://h/y"})
+
+    def test_extract_paths_and_params_scope_and_assets(self):
+        from origami.modules.discovery import wayback as W
+        urls = {"http://h.com/admin?id=1&token=x", "https://h.com/old/page",
+                "http://h.com/logo.png", "https://sub.h.com/secret", "http://h.com/?q=2",
+                "http://evil.com/x"}
+        paths, params = W.extract_paths_and_params(urls, "h.com")
+        self.assertEqual(paths, {"/admin", "/old/page"})      # asset, root, off-host, sub dropped
+        self.assertEqual(params, {"id", "token", "q"})        # query names harvested
+        sub_paths, _ = W.extract_paths_and_params(urls, "h.com", subs=True)
+        self.assertIn("/secret", sub_paths)                   # subdomain kept under subs
+
+    def test_harvest_native_union_and_never_raises(self):
+        import asyncio
+        from origami.modules.discovery import wayback as W
+        orig_cdx, orig_cc, orig_gau = W.from_cdx, W.from_commoncrawl, W.from_gau
+        try:
+            async def cdx(host, cap=0, subs=False): return {"http://h/a?p=1"}
+            async def cc(host, cap=0, subs=False): return {"http://h/b"}
+            W.from_cdx, W.from_commoncrawl = cdx, cc
+            paths, params, src = asyncio.run(W.harvest("h"))
+            self.assertEqual(paths, {"/a", "/b"})
+            self.assertEqual(params, {"p"})
+            self.assertEqual(src, "wayback+cc")
+            # every source failing → empty, no exception
+            async def boom(host, cap=0, subs=False): raise RuntimeError("down")
+            W.from_cdx = W.from_commoncrawl = boom
+            self.assertEqual(asyncio.run(W.harvest("h")), (set(), set(), "none"))
+        finally:
+            W.from_cdx, W.from_commoncrawl, W.from_gau = orig_cdx, orig_cc, orig_gau
+
+    def test_harvest_gau_preferred_with_native_fallback(self):
+        import asyncio
+        from origami.modules.discovery import wayback as W
+        orig_cdx, orig_cc, orig_gau = W.from_cdx, W.from_commoncrawl, W.from_gau
+        try:
+            async def cdx(host, cap=0, subs=False): return {"http://h/native"}
+            async def cc(host, cap=0, subs=False): return set()
+            W.from_cdx, W.from_commoncrawl = cdx, cc
+            async def gau_ok(host, **k): return {"http://h/fromgau"}
+            W.from_gau = gau_ok
+            paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
+            self.assertEqual((paths, src), ({"/fromgau"}, "gau"))
+            async def gau_missing(host, **k): return None        # binary absent
+            W.from_gau = gau_missing
+            paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
+            self.assertEqual((paths, src), ({"/native"}, "wayback"))   # fell back to native
+        finally:
+            W.from_cdx, W.from_commoncrawl, W.from_gau = orig_cdx, orig_cc, orig_gau
+
+    def test_harvest_caps_paths(self):
+        import asyncio
+        from origami.modules.discovery import wayback as W
+        orig_cdx, orig_cc = W.from_cdx, W.from_commoncrawl
+        try:
+            async def many(host, cap=0, subs=False):
+                return {f"http://h/p{i}" for i in range(50)}
+            async def none(host, cap=0, subs=False): return set()
+            W.from_cdx, W.from_commoncrawl = many, none
+            paths, _, _ = asyncio.run(W.harvest("h", cap=10))
+            self.assertEqual(len(paths), 10)
+        finally:
+            W.from_cdx, W.from_commoncrawl = orig_cdx, orig_cc
+
+
 class TestLeaks(unittest.TestCase):
     def kinds(self, body):
         from origami.modules.leaks import scan
