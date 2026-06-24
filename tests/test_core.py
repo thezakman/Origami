@@ -1825,6 +1825,28 @@ class TestEngineBackoff(unittest.TestCase):
         self.assertGreater(e._delay_floor, 0.0)
         self.assertLessEqual(e._delay_floor, 5.0)
 
+    def test_parse_retry_after(self):
+        import time
+        from origami.core.httpclient import _parse_retry_after as P
+        now = time.time()
+        self.assertEqual(P("120", now), 120.0)                       # delta-seconds
+        self.assertIsNone(P(None, now))
+        self.assertIsNone(P("", now))
+        self.assertIsNone(P("soon", now))                            # unparseable
+        self.assertEqual(P("Wed, 21 Oct 2015 07:28:00 GMT", now), 0.0)  # past date → 0
+        future = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(now + 90))
+        self.assertAlmostEqual(P(future, now), 90, delta=2)          # HTTP-date
+
+    def test_retry_after_sets_and_caps_floor(self):
+        from origami.core.httpclient import _RETRY_AFTER_CAP
+        e = self._engine(40)
+        e._note_pushback(12.0)                                       # explicit Retry-After
+        self.assertEqual(e._delay_floor, 12.0)                       # honored exactly
+        self.assertEqual(e._limit, 20.0)                             # still halves concurrency
+        e2 = self._engine(40)
+        e2._note_pushback(86400.0)                                   # hostile huge value
+        self.assertEqual(e2._delay_floor, _RETRY_AFTER_CAP)          # capped, never stalls forever
+
     def test_transport_errors_do_not_collapse_concurrency(self):
         # regression: a few dead/slow URLs (timeout/reset/DNS) must NOT be treated
         # as WAF throttle — they must not halve the limit or inflate pushback_events

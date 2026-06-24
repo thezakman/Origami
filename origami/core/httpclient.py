@@ -77,6 +77,32 @@ class EngineConfig:
 # Statuses that mean "slow down", not "answer".
 _PUSHBACK = {429, 503}
 
+# Cap on an honored Retry-After: a server (or a hostile WAF) can send
+# `Retry-After: 86400` — we respect the signal but never stall the scan for a day.
+_RETRY_AFTER_CAP = 30.0
+
+
+def _parse_retry_after(value: str | None, now: float) -> float | None:
+    """Parse an HTTP `Retry-After` header → seconds to wait (>= 0), or None if
+    absent/unparseable. Handles both forms: delta-seconds (`"120"`) and an
+    HTTP-date (`"Wed, 21 Oct 2015 07:28:00 GMT"`)."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if dt is None:
+        return None
+    try:
+        return max(0.0, dt.timestamp() - now)
+    except (ValueError, OverflowError, OSError):
+        return None
+
 
 class Engine:
     """Owns the httpx client + an *adaptive* concurrency gate + backoff state.
@@ -168,10 +194,16 @@ class Engine:
             self._inflight -= 1
             self._cond.notify_all()      # wake waiters to re-read the (possibly grown) limit
 
-    def _note_pushback(self) -> None:
+    def _note_pushback(self, retry_after: float | None = None) -> None:
         self.pushback_events += 1
-        # Grow the shared delay floor; cap so we don't stall forever.
-        self._delay_floor = min(5.0, max(self.cfg.backoff_base, self._delay_floor * 2))
+        if retry_after and retry_after > 0:
+            # Honor the server's EXPLICIT Retry-After (capped) — it tells us exactly
+            # how long to wait, better than guessing. _sleep_before reads the floor,
+            # so the retry + subsequent requests respect it; _relax decays it after.
+            self._delay_floor = min(_RETRY_AFTER_CAP, max(self._delay_floor, retry_after))
+        else:
+            # No header: AIMD guess — grow the shared delay floor (capped).
+            self._delay_floor = min(5.0, max(self.cfg.backoff_base, self._delay_floor * 2))
         # Multiplicative decrease: halve the concurrency ceiling (floor of 1).
         self._limit = max(1.0, self._limit / 2.0)
 
@@ -215,9 +247,10 @@ class Engine:
                                  error=f"bad-url: {type(e).__name__}: {e}")
 
                 if probe.status in _PUSHBACK:
-                    self._note_pushback()
+                    # honor an explicit Retry-After if the server sent one
+                    self._note_pushback(_parse_retry_after(probe.headers.get("retry-after"), time.time()))
                     if attempt < self.cfg.max_retries:
-                        continue
+                        continue          # _sleep_before waits the (now Retry-After-aware) floor
                     return probe          # out of retries — return the throttle, but DON'T relax
 
                 self._relax()
