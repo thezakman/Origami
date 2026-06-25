@@ -2419,5 +2419,62 @@ class TestDedup(unittest.TestCase):
         self.assertEqual(out["http://h/a"].origin, "memory")
 
 
+class TestEndToEndScan(unittest.TestCase):
+    """A real scan against the in-process fake server — exercises the integrated
+    pipeline (recon → walk → folds) that the unit tests mock. This is the layer
+    that would have caught the 403-bypass report-drop regression."""
+
+    def _server(self):
+        import importlib.util
+        from pathlib import Path
+        from http.server import ThreadingHTTPServer
+        spec = importlib.util.spec_from_file_location(
+            "_fakeserver_e2e", Path(__file__).parent / "fakeserver" / "server.py")
+        srv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(srv)
+        srv.Handler.log_message = lambda *a, **k: None     # quiet during tests
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        except OSError as e:
+            self.skipTest(f"cannot bind loopback socket: {e}")
+        return httpd
+
+    def test_full_scan_reports_403_bypass(self):
+        import asyncio, tempfile, threading, os
+        from origami.core.httpclient import Engine, EngineConfig
+        from origami.core.scanner import scan, ScanOptions
+        from origami.output.ui import NullObserver
+
+        httpd = self._server()
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        wl = tempfile.mktemp(suffix=".txt")
+        with open(wl, "w") as fh:
+            fh.write("admin\nindex\n")
+        quiet = NullObserver(stream=open(os.devnull, "w"))   # no scan chatter in test output
+        try:
+            async def run():
+                # jitter off → fast against the loopback server
+                async with Engine(EngineConfig(concurrency=20, timeout=5, jitter=(0.0, 0.0))) as e:
+                    return await scan(e, f"http://127.0.0.1:{port}/",
+                                      opts=ScanOptions(max_depth=1, wordlist_path=wl,
+                                                       bypass403=True, js=False, apidocs=False,
+                                                       backups=False, max_folds=0),
+                                      observer=quiet, memory=None)
+            res = asyncio.run(run())
+        finally:
+            httpd.shutdown(); httpd.server_close()
+            quiet.stream.close()
+            os.unlink(wl)
+
+        origins = {f.origin for f in res.findings}
+        self.assertIn("methods", origins)          # OPTIONS dangerous-verbs always present
+        # the /admin-secret 403 → 200 trailing-slash bypass must reach the report
+        byp = [f for f in res.findings if f.origin == "bypass403"]
+        self.assertTrue(byp, "403-bypass finding missing from the report")
+        self.assertTrue(any(f.url.rstrip("/").endswith("/admin-secret") for f in byp))
+        self.assertTrue(any("bypass" in (f.tags or []) for f in byp))
+
+
 if __name__ == "__main__":
     unittest.main()
