@@ -16,18 +16,38 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-# second-level labels that act as public suffixes (com.br, co.uk, gov.au, ...)
-_2LD = {"com", "co", "org", "net", "gov", "edu", "ac", "gob", "mil", "or", "ne", "go"}
+# Multi-label public suffixes: the registrable domain is ONE label above these.
+# Two families, both needed for correct scope:
+#   * ccTLD second-levels (com.br, co.uk) — a normal org domain hangs off them;
+#   * shared-hosting / PaaS suffixes (github.io, herokuapp.com, *.amazonaws.com)
+#     from the PSL's PRIVATE section — each subdomain is a DIFFERENT tenant, so
+#     treating them as one site would pull a co-tenant host into `--scope site`.
+# Not a full PSL, but it closes the co-tenant scope hole the heuristic had.
+_PUBLIC_SUFFIX = frozenset({
+    # ccTLD second-level
+    "com.br", "net.br", "org.br", "gov.br", "com.au", "net.au", "org.au",
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "co.kr", "co.in", "co.za",
+    "co.nz", "com.mx", "com.ar", "com.tr", "com.cn", "com.sg", "com.hk", "com.tw",
+    # shared-hosting / PaaS (co-tenant boundaries)
+    "github.io", "gitlab.io", "herokuapp.com", "web.app", "firebaseapp.com",
+    "pages.dev", "workers.dev", "vercel.app", "netlify.app", "azurewebsites.net",
+    "cloudfront.net", "s3.amazonaws.com", "amazonaws.com", "appspot.com", "run.app",
+    "pythonanywhere.com", "onrender.com", "blogspot.com", "wordpress.com",
+    "myshopify.com", "readthedocs.io", "translate.goog",
+})
 
 
 def reg_domain(host: str) -> str:
-    """Best-effort registrable domain without a full public-suffix list."""
+    """Best-effort registrable domain (apex). Honors multi-label public suffixes
+    so co-tenant hosts on shared platforms (foo.github.io vs bar.github.io) are
+    NOT treated as the same site."""
     host = host.split("@")[-1].split(":")[0].lower().strip(".")
     parts = [p for p in host.split(".") if p]
     if len(parts) <= 2:
         return host
-    if parts[-2] in _2LD:
-        return ".".join(parts[-3:])
+    for cut in (3, 2):                      # longest public-suffix match first
+        if len(parts) > cut and ".".join(parts[-cut:]) in _PUBLIC_SUFFIX:
+            return ".".join(parts[-(cut + 1):])
     return ".".join(parts[-2:])
 
 
