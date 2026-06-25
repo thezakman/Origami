@@ -885,6 +885,27 @@ class TestBypass403(unittest.TestCase):
         self.assertIn("/api/v1/admin%c0%af", paths)     # encoded (overlong) trailing slash
         self.assertIn("/api/v1%c0%afadmin", paths)      # encoded mid-path slash
 
+    def test_variants_intensity_and_fingerprint_gating(self):
+        from origami.modules.bypass403 import variants
+        def fams(v): return {l.split()[0] for l, *_ in v}
+        p = "/api/v1/admin"
+        # light = core only (path/header/method); fewest requests
+        self.assertEqual(fams(variants(p, intensity="light")), {"path", "header", "method"})
+        # auto with no stack match = core + hop-by-hop (universal), no enc/api
+        a0 = fams(variants(p, intensity="auto", encoded=False, api=False))
+        self.assertIn("hop-by-hop", a0)
+        self.assertNotIn("enc-sep", a0)
+        self.assertNotIn("api-prefix", a0)
+        # auto gates fire only when the fingerprint says so
+        self.assertIn("enc-sep", fams(variants(p, intensity="auto", encoded=True, api=False)))
+        self.assertIn("api-prefix", fams(variants(p, intensity="auto", encoded=False, api=True)))
+        # full = everything regardless of gates
+        full = fams(variants(p, intensity="full", encoded=False, api=False))
+        self.assertTrue({"enc-sep", "api-prefix", "hop-by-hop"} <= full)
+        # auto-trim is real: light < auto-core < full
+        self.assertLess(len(variants(p, intensity="light")),
+                        len(variants(p, intensity="full")))
+
     def test_select_bypass_targets_caps_per_wall(self):
         from origami.core.scanner import _select_bypass_targets, BYPASS_PER_WALL
         from origami.core.response_classifier import Finding

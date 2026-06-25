@@ -159,7 +159,8 @@ async def run(args: argparse.Namespace) -> int:
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
         extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
-        bypass403=args.bypass_403 or args.bypass_headers is not None,  # --bypass-headers implies bypass
+        bypass403=(args.bypass_403 is not None) or (args.bypass_headers is not None),
+        bypass_intensity=args.bypass_403 or "auto",   # bare flag / --bypass-headers → auto
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
@@ -449,9 +450,12 @@ def main() -> None:
                          "works even with --no-apidocs (an off-host docs server, a client file)")
     ap.add_argument("--no-backups", action="store_true",
                     help="disable VCS/dotfile probes and backup-name folding")
-    ap.add_argument("--bypass-403", action="store_true",
-                    help="on each 403/401, try path/header/method bypass tricks "
-                         "(nomore403-style); a surviving 2xx is reported as a bypass")
+    ap.add_argument("--bypass-403", nargs="?", const="auto", default=None,
+                    choices=["light", "auto", "full"], metavar="light|auto|full",
+                    help="on each 403/401, try path/header/method bypass tricks (nomore403 + "
+                         "BruteLogic hop-by-hop/encoded-sep/api-prefix); a surviving 2xx is "
+                         "reported. Bare = 'auto' (fingerprint-gated families); 'light' = core "
+                         "only; 'full' = everything (exhaustive)")
     ap.add_argument("--bypass-headers", nargs="?", const=True, default=None, metavar="FILE",
                     help="403/401 header-bypass via a wordlist (implies --bypass-403): "
                          "bare flag uses the bundled 403-headers.txt, or pass FILE for "

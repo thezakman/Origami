@@ -179,6 +179,7 @@ class ScanOptions:
     exclude_ext: list[str] = field(default_factory=list)  # skip paths with these file extensions (glob: jpg,png,jpg* — static-asset noise)
     graph: bool = False           # track provenance edges for the endpoint graph (--graph)
     bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
+    bypass_intensity: str = "auto" # "light" (core only) | "auto" (fingerprint-gated) | "full" (all)
     bypass_headers: bool = False   # use a header-bypass wordlist for the header axis (--bypass-headers)
     bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
     openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
@@ -1439,6 +1440,10 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
 
 MAX_BYPASS_TARGETS = 20   # cap blocked resources we attempt to bypass
 BYPASS_PER_WALL = 3       # …and at most this many per identical 403/401 wall
+# Stacks whose normalizers decode overlong/fullwidth/%u slashes → enable the
+# encoded-separator bypass family under "auto" intensity (plus unknown stacks).
+_BYPASS_ENC_STACKS = {"iis", "tomcat", "java", "spring", "spring boot", "jetty",
+                      "coldfusion", "jboss", "wildfly"}
 
 
 def _select_bypass_targets(findings, per_wall=BYPASS_PER_WALL, cap=MAX_BYPASS_TARGETS):
@@ -1480,16 +1485,31 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         observer.log(f"403-bypass: header wordlist {opts.bypass_headers_path} empty or "
                      f"unreadable — falling back to the built-in header axis", 0, style="yellow")
     ci = profile.case_sensitive is False              # IIS/Windows ACL ignores case
+    # Fingerprint gates for the stack-specific families (used in "auto" intensity):
+    # encoded-separator tricks only make sense where a decoding normalizer lives
+    # (IIS/Tomcat/Java/Spring, or an unidentified stack); API-prefix only on
+    # API-ish targets. "light"/"full" ignore these in variants().
+    intensity = getattr(opts, "bypass_intensity", "auto")
+    techs = {t.lower() for t in profile.confirmed_techs()}
+    enc_stack = (not techs) or bool(techs & _BYPASS_ENC_STACKS)
+
+    def _api_gate(f) -> bool:
+        path = urlparse(f.url).path.lower()
+        return ("api" in (getattr(f, "tags", None) or [])
+                or any(s in path for s in ("/api/", "/api.", "/v1/", "/v2/", "/v3/"))
+                or "graphql" in techs)
+
     observer.phase("403-bypass")
-    msg = f"403-bypass: probing {len(blocked)} blocked resources"
+    msg = f"403-bypass: probing {len(blocked)} blocked resources ({intensity})"
     if header_pairs:
         msg += f" with {len(header_pairs)} bypass headers"
     if skipped:
         msg += f" ({skipped} same-wall/over-cap 403s skipped)"
     observer.log(msg, 0, style="cyan")
-    # count with the SAME case_insensitive as the firing loop, else the bar overcounts
+    # count with the SAME gates/case as the firing loop, else the bar miscounts
     total = sum(len(bypass403.variants(urlparse(f.url).path, case_insensitive=ci,
-                                       header_pairs=header_pairs)) for f in blocked)
+                                       header_pairs=header_pairs, intensity=intensity,
+                                       encoded=enc_stack, api=_api_gate(f))) for f in blocked)
     observer.start_prefix("403-bypass", total)
     root = _host_root(profile.base_url)
     for f in blocked:
@@ -1497,7 +1517,8 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
         for label, method, rpath, headers in bypass403.variants(
-                path, case_insensitive=ci, header_pairs=header_pairs):
+                path, case_insensitive=ci, header_pairs=header_pairs,
+                intensity=intensity, encoded=enc_stack, api=_api_gate(f)):
             if opts.max_requests and engine.spent >= opts.max_requests:
                 return
             url = urljoin(root, rpath.lstrip("/"))
