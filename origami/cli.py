@@ -452,10 +452,10 @@ def main() -> None:
                     help="disable VCS/dotfile probes and backup-name folding")
     ap.add_argument("--bypass-403", nargs="?", const="auto", default=None,
                     choices=["light", "auto", "full"], metavar="light|auto|full",
-                    help="on each 403/401, try path/header/method bypass tricks (nomore403 + "
-                         "BruteLogic hop-by-hop/encoded-sep/api-prefix); a surviving 2xx is "
-                         "reported. Bare = 'auto' (fingerprint-gated families); 'light' = core "
-                         "only; 'full' = everything (exhaustive)")
+                    help="on each 403/401, try path/header/method bypass tricks (incl. "
+                         "hop-by-hop/encoded-sep/api-prefix); a surviving 2xx is reported. "
+                         "Bare = 'auto' (fingerprint-gated families); 'light' = core only; "
+                         "'full' = everything (exhaustive)")
     ap.add_argument("--bypass-headers", nargs="?", const=True, default=None, metavar="FILE",
                     help="403/401 header-bypass via a wordlist (implies --bypass-403): "
                          "bare flag uses the bundled 403-headers.txt, or pass FILE for "
