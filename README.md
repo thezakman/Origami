@@ -109,7 +109,7 @@ Run `origami -h` for the full list. Live controls: **`n`** skip the current dire
 
 ### Authenticated scans
 
-Pass session cookies or tokens with `-H` (repeatable) to scan behind a login — they're sent on every request. If you supply credentials but the root still looks like an auth wall (a 401, a redirect to a login page, or a login form at `/`), Origami warns up front that the **session is probably invalid/expired** — so you don't run the whole scan unauthenticated by accident:
+Pass session cookies or tokens with `-H` (repeatable) to scan behind a login — they're sent on every request. If you supply credentials but the root still looks like an auth wall (a 401, a redirect to a login page, or a login form at `/`), Origami warns up front that the **session is probably invalid/expired** — and if the session was valid at the start but the root turns into an auth wall by the end, it warns that the session **expired mid-scan** (so you know later results may be partial). Both are false-positive-free — they only fire when you actually supplied credentials:
 
 ```bash
 origami https://app.example.com \

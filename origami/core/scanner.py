@@ -254,11 +254,16 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # Authenticated-scan sanity check: if -H credentials were given but the root
     # still looks like an auth wall, the session almost certainly isn't working —
     # warn before spending the whole scan running effectively unauthenticated.
+    # `started_authed` (auth supplied AND root NOT a wall) lets us re-check at the
+    # end whether the session expired mid-scan.
+    started_authed = False
     if session.has_auth(engine.cfg.headers):
         wall = session.auth_wall_reason(root, base_url)
         if wall:
             observer.log(f"auth: credentials supplied but {wall} — the session may be "
                          f"invalid/expired; scan may be running UNAUTHENTICATED", 0, style="bold red")
+        else:
+            started_authed = True
 
     # scan starts at the given base path (e.g. /lms/), so calibrate THERE.
     base_prefix = urlparse(base_url).path or "/"
@@ -544,11 +549,23 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # 4. recursive scan + folds (checkpointed) -----------------------------
     queue: list[tuple[str, int]] = [(base_prefix, 0)]   # (prefix, depth)
-    return await _scan_loop(engine, profile, opts, observer, memory, control, result,
-                            base_prefix=base_prefix, words=words, exts=exts,
-                            priority_paths=priority_paths, root_seeds=root_seeds,
-                            queue=queue, scanned=set(), resume_path=resume_path,
-                            root_simhash=root.body_simhash)
+    result = await _scan_loop(engine, profile, opts, observer, memory, control, result,
+                              base_prefix=base_prefix, words=words, exts=exts,
+                              priority_paths=priority_paths, root_seeds=root_seeds,
+                              queue=queue, scanned=set(), resume_path=resume_path,
+                              root_simhash=root.body_simhash)
+
+    # If we started authenticated, re-check the root once: if it's now an auth
+    # wall, the session expired DURING the scan and later findings may be partial.
+    # The root is a stable reference, so this is a false-positive-free signal.
+    if started_authed:
+        recheck = await engine.fetch(base_url, keep_body=True)
+        reason = session.auth_wall_reason(recheck, base_url)
+        if reason:
+            observer.log(f"auth: session appears to have EXPIRED during the scan "
+                         f"(root now {reason}) — results may be partially unauthenticated; "
+                         f"re-run with fresh credentials", 0, style="bold red")
+    return result
 
 
 async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=None,

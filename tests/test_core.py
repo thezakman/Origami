@@ -563,6 +563,64 @@ class TestSessionAuthWall(unittest.TestCase):
         self.assertIsNone(S.auth_wall_reason(self._p(302, "https://h/dashboard")))   # redirect, not to login
         self.assertIsNone(S.auth_wall_reason(self._p(200, body=b"<html>home</html>")))
 
+    def _run_scan(self, engine):
+        import asyncio, os, tempfile
+        from origami.core.scanner import scan, ScanOptions
+        from origami.output.ui import NullObserver
+        wl = tempfile.mktemp(suffix=".txt")
+        with open(wl, "w") as fh:
+            fh.write("admin\nindex\n")          # tiny list → fast walk over the fake engine
+        logs = []
+        class L(NullObserver):
+            def log(self, m, *a, **k): logs.append(m)
+        async def main():
+            await scan(engine, "https://h/", observer=L(), memory=None,
+                       opts=ScanOptions(max_depth=0, wordlist_path=wl, js=False,
+                                        apidocs=False, backups=False, max_folds=0))
+        try:
+            asyncio.run(main())
+        finally:
+            os.unlink(wl)
+        return logs
+
+    def _engine(self, headers, root_seq):
+        # root_seq: list of (status, location, body) returned for successive root fetches
+        from origami.core.httpclient import Probe, EngineConfig
+        class FakeEngine:
+            def __init__(s):
+                s.total_requests = 0; s.prior_requests = 0; s.pushback_events = 0
+                s.on_request = None; s.cfg = EngineConfig(headers=headers); s._i = 0
+            async def fetch(s, url, method="GET", keep_body=False, headers=None):
+                s.total_requests += 1
+                root = url.rstrip("/").endswith("h") or url.endswith("/")
+                if root:
+                    st, loc, body = root_seq[min(s._i, len(root_seq) - 1)]; s._i += 1
+                    return Probe(url, "GET", st, len(body), 0, 0, "text/html", loc, 0, 1.0,
+                                 body_head=body, body=body)
+                return Probe(url, "GET", 404, 0, 0, 0, "text/html", "", 0, 1.0)
+            async def gather(s, urls, method="GET"): return [await s.fetch(u) for u in urls]
+        return FakeEngine()
+
+    def test_scan_warns_on_midscan_session_expiry(self):
+        # started authed (root 200), then root flips to a login redirect → warn
+        eng = self._engine({"Cookie": "s=1"},
+                           [(200, "", b"<html>dashboard</html>")] * 3 +
+                           [(302, "https://h/account/login", b"")])
+        logs = self._run_scan(eng)
+        self.assertTrue(any("EXPIRED during the scan" in m for m in logs))
+
+    def test_scan_no_warning_when_session_stays_valid(self):
+        eng = self._engine({"Cookie": "s=1"}, [(200, "", b"<html>dashboard</html>")])
+        logs = self._run_scan(eng)
+        self.assertFalse(any("EXPIRED" in m for m in logs))
+
+    def test_scan_no_recheck_without_auth(self):
+        # no auth headers → never re-checks / warns, even if root would look walled
+        eng = self._engine({}, [(200, "", b"<html>home</html>"),
+                                (302, "https://h/login", b"")])
+        logs = self._run_scan(eng)
+        self.assertFalse(any("EXPIRED" in m for m in logs))
+
 
 class TestLeaks(unittest.TestCase):
     def kinds(self, body):
