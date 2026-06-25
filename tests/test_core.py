@@ -476,8 +476,23 @@ class TestParamFuzz(unittest.TestCase):
         opts = ScanOptions(param_fuzz=True, finding_sink=streamed.append)
         asyncio.run(_param_fold(FakeEngine(), prof, result, opts, NullObserver()))
         self.assertIn("param", f.tags)
-        self.assertIn("q", f.note)
+        self.assertIn("xss-lead", f.tags)              # reflected into an HTML sink → XSS lead
+        self.assertIn("q (html)", f.note)              # graded by injection context
         self.assertTrue(any(s is f for s in streamed))             # streamed for JSONL
+
+    def test_reflection_contexts_classify_sink(self):
+        from origami.modules import paramfuzz as P
+        (qs, tmap, ctl), = P.build_batches(["q", "name", "data"], batch_size=5, run="oztest")
+        tok = {p: t for t, p in tmap.items()}
+        html = (b"<html>search: " + tok["q"].encode() + b"</html>"
+                b'<input value="' + tok["name"].encode() + b'">'
+                b'<script>var x="' + tok["data"].encode() + b'";</script>')
+        ctx = P.reflection_contexts(html, tmap, "text/html")
+        self.assertEqual(ctx["q"], "html")
+        self.assertEqual(ctx["name"], "attr")
+        self.assertEqual(ctx["data"], "js")
+        jb = b'{"q":"' + tok["q"].encode() + b'"}'
+        self.assertEqual(P.reflection_contexts(jb, tmap, "application/json")["q"], "json")
 
     def test_fold_skips_endpoint_that_echoes_any_query(self):
         import asyncio

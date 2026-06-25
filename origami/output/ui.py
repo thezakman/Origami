@@ -109,7 +109,7 @@ TAG_STYLE = {
     "admin": "cyan", "auth": "magenta", "source": "green",
     "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
     "listing": "bold yellow", "leak": "bold black on yellow", "bypass": "bold black on green",
-    "param": "bold green",
+    "param": "bold green", "xss-lead": "bold black on bright_red",
 }
 
 

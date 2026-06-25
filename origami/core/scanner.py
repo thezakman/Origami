@@ -1374,7 +1374,7 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
         if opts.max_requests and engine.spent >= opts.max_requests:
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
-        found: list[str] = []
+        found: dict[str, str] = {}            # param -> reflection context (js/html/attr/json/body)
         echoes = False
         for qs, token_map, ctl in paramfuzz.build_batches(params, FUZZ_BATCH):
             if opts.max_requests and engine.spent >= opts.max_requests:
@@ -1389,16 +1389,21 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
             if paramfuzz.control_reflected(pr.body, ctl):    # echoes any query → no signal
                 echoes = True
                 break
-            found += paramfuzz.reflected(pr.body, token_map)
+            for param, ctx in paramfuzz.reflection_contexts(pr.body, token_map, pr.content_type).items():
+                found[param] = ctx                # last batch wins; contexts are stable per endpoint
         if echoes:
             observer.log(f"params: {observer.disp(f.url)} reflects any query param — skipped",
                          1, style="yellow")
             continue
-        found = list(dict.fromkeys(found))
         if found:
-            preview = ", ".join(found[:8]) + (f" (+{len(found) - 8})" if len(found) > 8 else "")
-            if "param" not in f.tags:
-                f.tags = list(f.tags) + ["param"]
+            # surface the most exploitable contexts first (js/html → XSS lead)
+            ranked = sorted(found.items(), key=lambda kv: (-paramfuzz._CTX_RANK.get(kv[1], 0), kv[0]))
+            preview = ", ".join(f"{p} ({c})" for p, c in ranked[:8]) \
+                + (f" (+{len(ranked) - 8})" if len(ranked) > 8 else "")
+            f.tags = list(dict.fromkeys(list(f.tags) + ["param"]))
+            # a reflection into an HTML/JS sink is an XSS lead — tag it louder
+            if any(c in ("js", "html", "attr") for c in found.values()):
+                f.tags = list(dict.fromkeys(f.tags + ["xss-lead"]))
             f.note = (f.note + " · " if f.note else "") + f"reflected params: {preview}"
             observer.log(f"param: {observer.disp(f.url)} ← reflects {preview}", 0, style="bold green")
             if opts.finding_sink is not None:

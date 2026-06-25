@@ -81,6 +81,45 @@ def reflected(body: bytes, token_map: dict[str, str]) -> list[str]:
     return [param for tok, param in token_map.items() if tok.encode() in low]
 
 
+# Reflection contexts, ordered by how exploitable a reflection there usually is
+# (a smarter signal than a bare "reflects": tells you the injection sink).
+_CTX_RANK = {"js": 4, "html": 3, "attr": 2, "json": 1, "body": 0}
+
+
+def _context_at(low: bytes, idx: int) -> str:
+    """Classify where the canary landed: inside <script> (js), inside an open tag
+    (attr), or in HTML text (html). Approximate but cheap — no full HTML parse."""
+    pre = low[:idx]
+    if pre.rfind(b"<script") > pre.rfind(b"</script>"):
+        return "js"                                  # inside a <script> block
+    if pre.rfind(b"<") > pre.rfind(b">"):
+        return "attr"                                # between < and > → tag attribute
+    return "html"                                    # HTML text node
+
+
+def reflection_contexts(body: bytes, token_map: dict[str, str], ctype: str = "") -> dict[str, str]:
+    """Map each reflected param → its reflection context (js/html/attr/json/body).
+    `js`/`html`/`attr` are XSS-relevant sinks; `json` is an API echo. The richest
+    context wins when a param reflects more than once."""
+    low = body.lower()
+    ct = (ctype or "").lower()
+    is_html = "html" in ct or b"<html" in low[:4096] or b"<!doctype html" in low[:64]
+    out: dict[str, str] = {}
+    for tok, param in token_map.items():
+        i = low.find(tok.encode())
+        if i < 0:
+            continue
+        if is_html:
+            ctx = _context_at(low, i)
+        elif "json" in ct or low[:1] in (b"{", b"["):
+            ctx = "json"
+        else:
+            ctx = "body"
+        if _CTX_RANK.get(ctx, 0) >= _CTX_RANK.get(out.get(param, ""), -1):
+            out[param] = ctx                          # keep the most exploitable context seen
+    return out
+
+
 def control_reflected(body: bytes, ctl_tok: str) -> bool:
     """True when the control canary reflects → the endpoint echoes ANY query
     param, so per-param reflection carries no signal for it."""
