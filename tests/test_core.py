@@ -776,7 +776,8 @@ class TestBypass403(unittest.TestCase):
         v = variants("/admin")
         labels = [lbl for lbl, *_ in v]
         kinds = {lbl.split()[0] for lbl in labels}
-        self.assertEqual(kinds, {"path", "header", "method"})
+        # the core families are always present (hop-by-hop/api-* added on top)
+        self.assertTrue({"path", "header", "method"} <= kinds)
         # representative techniques present
         self.assertTrue(any(m == "/admin/" for _, _, m, _ in v))           # trailing slash
         self.assertTrue(any(h.get("X-Forwarded-For") for _, _, _, h in v))  # IP header
@@ -866,6 +867,19 @@ class TestBypass403(unittest.TestCase):
         self.assertIn("bypass", byp[0].tags)
         self.assertNotIn(f, result.findings)             # …and supersedes the original 403
         self.assertTrue(any(s.origin == "bypass403" for s in streamed))  # and is streamed (JSONL)
+
+    def test_variants_hop_by_hop_and_api_prefix(self):
+        # BruteLogic techniques: hop-by-hop header stripping + API version-prefix
+        from origami.modules.bypass403 import variants
+        v = variants("/api/v1/admin")
+        # hop-by-hop: Connection lists a proxy-enforced header to strip it in transit
+        hop = [h for _, m, rp, h in v if h.get("Connection")]
+        self.assertTrue(any("X-Forwarded-For" in h["Connection"] for h in hop))
+        self.assertTrue(all(c["Connection"].startswith("close, ") for c in hop))
+        # API version-prefix: a version segment the ACL may not cover
+        paths = {rp for _, _, rp, _ in v}
+        self.assertIn("/v1/api/v1/admin", paths)        # prefix inserted
+        self.assertIn("/v1/admin", paths)               # existing /api segment stripped
 
     def test_select_bypass_targets_caps_per_wall(self):
         from origami.core.scanner import _select_bypass_targets, BYPASS_PER_WALL

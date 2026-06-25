@@ -4,4 +4,4 @@ Folds its strategy around the target's behavior, technology and response
 patterns. See origami.md for the full design.
 """
 
-__version__ = "0.61.0"
+__version__ = "0.62.0"
