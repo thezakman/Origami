@@ -349,6 +349,30 @@ class TestSecrets(unittest.TestCase):
         self.assertIn("db-uri-creds", kinds(b'postgres://admin:s3cr3tpass@db.host:5432/app'))
         self.assertIn("generic-secret", kinds(b'api_key: "9f8a7b6c5d4e3f2a1b0c"'))
 
+    def test_scan_detects_modern_provider_keys(self):
+        # token bodies are ASSEMBLED at runtime (prefix + b"..."*N) so no full-token
+        # literal sits in source — keeps GitHub push-protection from flagging tests.
+        from origami.modules.secrets import scan
+        def kinds(b): return {k for k, _ in scan(b)}
+        self.assertIn("anthropic-key", kinds(b"K=" + b"sk-ant-" + b"A1b2C3d9"*6))
+        self.assertIn("openai-key", kinds(b"OPENAI_API_KEY=" + b"sk-" + b"aB3dE6gH"*6))
+        self.assertIn("openai-key", kinds(b"k=" + b"sk-proj-" + b"aB3dE6gH"*5))
+        self.assertIn("gitlab-token", kinds(b"glpat-" + b"aB3dE6gH"*3))
+        self.assertIn("digitalocean-token", kinds(b"dop_v1_" + b"9f3a7c1e8b2d4056"*4))
+        self.assertIn("shopify-token", kinds(b"shpat_" + b"9f3a7c1e8b2d4056"*2))
+        self.assertIn("square-token", kinds(b"sq0atp-" + b"aB3dE6gH"*3))
+        self.assertIn("telegram-bot-token", kinds(b"1234567890:" + b"AA" + b"aB3dE6gH"*5))
+        self.assertIn("azure-storage-key", kinds(b"AccountKey=" + b"A"*86 + b"==;"))
+        # anthropic wins over openai for the shared sk- prefix (more specific first)
+        self.assertNotIn("openai-key", kinds(b"sk-ant-" + b"A1b2C3d9"*6))
+
+    def test_modern_keys_no_false_positive(self):
+        from origami.modules.secrets import scan
+        # ordinary text with sk-/shp/sq fragments must not trip the provider rules
+        self.assertEqual(scan(b'import {taskRunner} from "task-runner";'), [])
+        self.assertEqual(scan(b'<div class="sidebar-navigation-wrapper-shp">'), [])
+        self.assertEqual(scan(b"please ask-someone about it later"), [])
+
     def test_scan_rejects_placeholders_and_examples(self):
         from origami.modules.secrets import scan
         self.assertEqual(scan(b'password = "changeme"'), [])

@@ -29,6 +29,17 @@ _PATTERNS: list[tuple[str, re.Pattern, int]] = [
     ("private-key",      re.compile(rb"(-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----)"), 1),
     ("jwt",              re.compile(rb"\b(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})"), 1),
     ("google-oauth-id",  re.compile(rb"\b([0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com)\b"), 1),
+    # modern provider keys — distinctive prefixes → essentially zero false positives.
+    # anthropic BEFORE openai: both share the `sk-` prefix, so the more specific
+    # `sk-ant-` must match first (dedup-by-value keeps the first kind).
+    ("anthropic-key",    re.compile(rb"\b(sk-ant-[0-9A-Za-z_\-]{24,})"), 1),
+    ("openai-key",       re.compile(rb"\b(sk-(?:proj-)?[0-9A-Za-z_\-]{32,})"), 1),
+    ("gitlab-token",     re.compile(rb"\b(glpat-[0-9A-Za-z_\-]{20,})"), 1),
+    ("digitalocean-token", re.compile(rb"\b(dop_v1_[0-9a-f]{64})\b"), 1),
+    ("shopify-token",    re.compile(rb"\b(shp(?:at|ss|ca|pa)_[0-9a-fA-F]{32})\b"), 1),
+    ("square-token",     re.compile(rb"\b(sq0(?:atp|csp)-[0-9A-Za-z_\-]{22,})"), 1),
+    ("telegram-bot-token", re.compile(rb"\b([0-9]{8,10}:AA[0-9A-Za-z_\-]{32,})"), 1),
+    ("azure-storage-key", re.compile(rb"AccountKey=([A-Za-z0-9+/]{86}==)"), 1),
     # credentials embedded in a connection URI (user:pass@host)
     ("db-uri-creds",     re.compile(rb"\b((?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|mariadb|redis|amqp|ftp)://[^\s:@/]+:[^\s:@/]{3,}@[^\s/'\"]+)"), 1),
     # contextual aws secret (40-char base64 next to an aws_secret hint)
