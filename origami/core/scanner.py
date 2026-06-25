@@ -40,7 +40,7 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, leaks, paramfuzz, secrets, vhost, waf
+from origami.modules import bypass403, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wayback, wellknown)
 from origami.output.ui import NullObserver
@@ -250,6 +250,15 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     observer.log(f"root: {root.status} · {root.length}B · "
                  f"{root.content_type or 'no ctype'}", 1)
+
+    # Authenticated-scan sanity check: if -H credentials were given but the root
+    # still looks like an auth wall, the session almost certainly isn't working —
+    # warn before spending the whole scan running effectively unauthenticated.
+    if session.has_auth(engine.cfg.headers):
+        wall = session.auth_wall_reason(root, base_url)
+        if wall:
+            observer.log(f"auth: credentials supplied but {wall} — the session may be "
+                         f"invalid/expired; scan may be running UNAUTHENTICATED", 0, style="bold red")
 
     # scan starts at the given base path (e.g. /lms/), so calibrate THERE.
     base_prefix = urlparse(base_url).path or "/"
