@@ -229,6 +229,15 @@ async def run(args: argparse.Namespace) -> int:
         if sys.stdin.isatty() and not args.no_ui:
             print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
+    # HTTP/2 needs the optional `h2` package; check once, warn + fall back if absent.
+    use_http2 = False
+    if args.http2:
+        import importlib.util
+        use_http2 = importlib.util.find_spec("h2") is not None
+        if not jsonl_stdout:
+            print(f"  http2    : {'on (ALPN)' if use_http2 else 'unavailable — pip install h2; using HTTP/1.1'}",
+                  file=_status_out)
+
     rc = 0
     try:
         async with keyboard_control(control):
@@ -250,7 +259,8 @@ async def run(args: argparse.Namespace) -> int:
                                    verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
                                    proxy=args.proxy or "", headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent,
-                                   rotate_ua=args.rotate_ua and not args.user_agent)
+                                   rotate_ua=args.rotate_ua and not args.user_agent,
+                                   http2=use_http2)
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
@@ -353,6 +363,9 @@ def main() -> None:
     ap.add_argument("--proxy", metavar="URL",
                     help="route all traffic through an intercepting proxy "
                          "(e.g. http://127.0.0.1:8080 for Burp/ZAP); implies -k")
+    ap.add_argument("--http2", action="store_true",
+                    help="negotiate HTTP/2 (matches modern CDNs/WAFs; needs the 'h2' package — "
+                         "pip install h2; silently falls back to HTTP/1.1 if absent)")
     ap.add_argument("--json", help="write JSON report to this path")
     ap.add_argument("--jsonl", metavar="FILE",
                     help="stream findings as JSON Lines to FILE as they're confirmed "

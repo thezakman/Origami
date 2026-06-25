@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "origami-scanner"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Adaptive content discovery engine that folds its strategy around the target's behavior, technology and response patterns."
 readme = "origami.md"
 requires-python = ">=3.11"
@@ -15,8 +15,14 @@ dependencies = [
     "mmh3>=4",
 ]
 
+[project.optional-dependencies]
+http2 = ["h2>=4"]                 # enables --http2 (HTTP/2 via ALPN)
+
 [project.scripts]
 origami = "origami.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "origami.__version__"}   # single source of truth (origami/__init__.py)
 
 [tool.setuptools.packages.find]
 include = ["origami*"]

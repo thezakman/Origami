@@ -1847,6 +1847,17 @@ class TestEngineBackoff(unittest.TestCase):
         self.assertGreater(e._delay_floor, 0.0)
         self.assertLessEqual(e._delay_floor, 5.0)
 
+    def test_http2_config_builds_client(self):
+        # the engine must build with http2 off always, and on only when h2 is present
+        import asyncio, importlib.util
+        from origami.core.httpclient import Engine, EngineConfig
+        async def build(flag):
+            async with Engine(EngineConfig(http2=flag)):
+                return True
+        self.assertTrue(asyncio.run(build(False)))
+        if importlib.util.find_spec("h2"):
+            self.assertTrue(asyncio.run(build(True)))
+
     def test_spent_counts_prior_plus_current(self):
         # --max-requests must bound CUMULATIVE spend so --resume can't grant a
         # fresh budget each time
