@@ -51,12 +51,35 @@ class TestSimhash(unittest.TestCase):
 
 
 class TestClassify(unittest.TestCase):
-    def _profile_with_baseline(self, miss_body=b"<html>not found</html>", status=404):
+    def _profile_with_baseline(self, miss_body=b"<html>not found</html>", status=404, samples=4):
         p = TargetProfile(host="t", base_url="http://t/")
-        cb = ContextBaseline(prefix="/", ext_class="none", status=status,
+        cb = ContextBaseline(prefix="/", ext_class="none", status=status, samples=samples,
                              simhashes=[simhash(miss_body)], content_type="text/html")
         p.baseline[TargetProfile.context_key("/", "none")] = cb
         return p
+
+    def test_real_hit_high_confidence_with_valid_baseline(self):
+        # a calibrated baseline (samples>0) → a differing 200 is a confident hit
+        p = self._profile_with_baseline(status=404, samples=4)
+        f = classify(p, make_probe(status=200, body=b"<html>real dashboard</html>",
+                                   url="http://t/admin"), "wordlist", "/")
+        self.assertEqual(f.confidence, 0.95)
+
+    def test_failed_calibration_is_cautious_not_a_flood(self):
+        # samples==0 = calibration probes all failed → must NOT pass every 200 as a
+        # 0.95 hit (the soft-404 flood); fall back to the cautious no-baseline path
+        p = self._profile_with_baseline(status=404, samples=0)
+        f = classify(p, make_probe(status=200, body=b"<html>anything</html>",
+                                   url="http://t/whatever"), "wordlist", "/")
+        self.assertEqual(f.confidence, 0.5)
+        self.assertEqual(f.note, "no-baseline")
+
+    def test_generalize_location_whole_token_only(self):
+        # a short request token must not blank unrelated substrings of the redirect
+        from origami.core.baseline import _generalize_location as g
+        self.assertEqual(g("http://x/a", "http://x/path/a/area"), "http://x/path/*/area")
+        # the calibration random token is still blanked wherever it stands alone
+        self.assertEqual(g("http://x/tok123", "http://x/err?from=tok123"), "http://x/err?from=*")
 
     def test_404_never_a_hit(self):
         # even on a soft-404 host (baseline 200), a real 404 is not found

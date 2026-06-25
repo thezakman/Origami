@@ -213,7 +213,12 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
     if 200 <= probe.status < 300 and is_dir_listing(probe.body_head):
         tags.append("listing")          # autoindex enabled — exposes the dir's files
-    if cb is None:
+    # No baseline — or a baseline whose calibration probes ALL failed (samples==0,
+    # e.g. a transient throttle/network blip during calibration). A samples==0
+    # baseline defaults to status 404, which would pass EVERY 200 on a soft-404
+    # host as a 0.95 hit — the exact flood calibration exists to prevent. So treat
+    # it as no-baseline: cautious 0.5, never the high-confidence path.
+    if cb is None or cb.samples == 0:
         if probe.status in (200, 204, 301, 302, 401, 403, 405):
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
                            0.5, origin, note="no-baseline", tags=tags,
