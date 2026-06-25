@@ -26,23 +26,11 @@ _PREFIXES = (
 # Hosts worth trying verbatim (internal routing / default-vhost reveals).
 _STANDALONE = ("localhost", "internal", "intranet", "admin", "default")
 
-# Registrable-domain suffixes that span two labels (so the apex is the last THREE).
-_MULTI_SUFFIX = frozenset({
-    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "co.kr", "co.in", "co.za",
-    "co.nz", "com.au", "com.br", "net.br", "org.br", "gov.br", "com.mx",
-    "com.ar", "com.tr", "com.cn", "com.sg", "com.hk", "com.tw",
-})
-
-
 def registrable(host: str) -> str:
-    """Best-effort registrable domain (apex), handling common 2-label suffixes."""
-    host = host.split(":")[0].strip(".").lower()
-    parts = host.split(".")
-    if len(parts) <= 2:
-        return host
-    if ".".join(parts[-2:]) in _MULTI_SUFFIX and len(parts) >= 3:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:])
+    """Best-effort registrable domain (apex). Single-sources the public-suffix
+    logic from core.scope so ccTLD and shared-hosting suffixes stay consistent."""
+    from origami.core.scope import reg_domain
+    return reg_domain(host)
 
 
 def candidates(host: str, extra=()) -> list[str]:

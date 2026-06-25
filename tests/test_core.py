@@ -255,6 +255,18 @@ class TestVhost(unittest.TestCase):
         self.assertEqual(registrable("a.b.co.uk"), "b.co.uk")
         self.assertEqual(registrable("example.com"), "example.com")
 
+    def test_same_site_rejects_shared_hosting_co_tenants(self):
+        # scope safety: foo.github.io and bar.github.io are DIFFERENT tenants —
+        # treating them as one site would pull a co-tenant host into --scope site
+        from origami.core.scope import same_site, reg_domain
+        self.assertFalse(same_site("foo.github.io", "bar.github.io"))
+        self.assertFalse(same_site("a.s3.amazonaws.com", "b.s3.amazonaws.com"))
+        self.assertFalse(same_site("app1.herokuapp.com", "app2.herokuapp.com"))
+        self.assertEqual(reg_domain("foo.github.io"), "foo.github.io")
+        # but a normal org's CDN/subdomains are still one site (CDN reading intact)
+        self.assertTrue(same_site("cdn.example.com", "app.example.com"))
+        self.assertTrue(same_site("a.acme.com.br", "b.acme.com.br"))
+
     def test_candidates_build_from_apex_excluding_target(self):
         from origami.modules.vhost import candidates
         c = candidates("nfce.newchoice.com.br")
