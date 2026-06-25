@@ -88,6 +88,7 @@ class EngineConfig:
     rotate_ua: bool = False                     # pick a random UA from _UA_POOL per request (--rotate-ua)
     headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
     proxy: str = ""                             # route through an intercepting proxy (Burp/ZAP), e.g. http://127.0.0.1:8080
+    http2: bool = False                         # negotiate HTTP/2 (ALPN) — matches modern CDNs (--http2; needs the h2 pkg)
     follow_redirects: bool = False              # we want to *see* redirects
     verify_tls: bool = False                    # pentest targets: don't choke on certs
     backoff_base: float = 0.8                   # seconds, grows on pushback
@@ -176,6 +177,7 @@ class Engine:
             follow_redirects=self.cfg.follow_redirects,
             verify=self.cfg.verify_tls,
             proxy=self.cfg.proxy or None,
+            http2=self.cfg.http2,             # negotiated via ALPN; CLI guards the h2 dep
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )

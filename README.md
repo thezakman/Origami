@@ -50,7 +50,7 @@ python3.11 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-This installs the `origami` command into the venv (with `rich` for the live dashboard). Or run without installing: `PYTHONPATH=. python3 -m origami ...`.
+This installs the `origami` command into the venv (with `rich` for the live dashboard). Or run without installing: `PYTHONPATH=. python3 -m origami ...`. For HTTP/2 support (`--http2`) also install the optional extra: `.venv/bin/pip install -e '.[http2]'`.
 
 ## Usage
 
@@ -76,6 +76,7 @@ Common flags:
 | `-A UA` | override the User-Agent |
 | `--rotate-ua` | rotate the User-Agent per request from a pool of real browsers (WAF-evasion; ignored if `-A` is set) |
 | `--proxy URL` | route through an intercepting proxy (Burp/ZAP); implies `-k` |
+| `--http2` | negotiate HTTP/2 (matches modern CDNs/WAFs; needs `pip install h2`, else falls back to HTTP/1.1) |
 | `-mc` / `-fc` / `-ms` / `-fs` | match/filter status codes & sizes (ffuf-style) |
 | `--vhost` | virtual-host discovery (Host-header fuzzing on the target IP) |
 | `--params` | parameter discovery: fire harvested + common param names at dynamic endpoints; flag reflected ones (XSS/SSTI/redirect leads) |
