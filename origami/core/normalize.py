@@ -20,7 +20,7 @@ import re
 # the structural fingerprint. Order doesn't matter; all are applied.
 _VOLATILE = [
     re.compile(rb"<!--.*?-->", re.S),                              # HTML comments dropped WHOLE (a `>` inside one would truncate the tag rule below)
-    re.compile(rb"<[^>]+>", re.I),                                  # all tags -> drop attrs/nonces
+    re.compile(rb"<[^<>]*>", re.I),                                 # all tags -> drop attrs/nonces. `[^<>]` (not `[^>]+`) so a run of unclosed `<` can't trigger O(n^2) backtracking (ReDoS) — simhash runs on every body
     re.compile(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
                rb"[0-9a-f]{4}-[0-9a-f]{12}", re.I),                 # UUID (WAF support IDs etc.)
     re.compile(rb"[0-9a-f]{16,}", re.I),                            # long hex blobs (tokens, hashes)
