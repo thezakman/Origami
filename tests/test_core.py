@@ -869,7 +869,7 @@ class TestBypass403(unittest.TestCase):
         self.assertTrue(any(s.origin == "bypass403" for s in streamed))  # and is streamed (JSONL)
 
     def test_variants_hop_by_hop_and_api_prefix(self):
-        # BruteLogic techniques: hop-by-hop (spoof+strip) + API version-prefix + enc-sep
+        # advanced families: hop-by-hop (spoof+strip) + API version-prefix + enc-sep
         from origami.modules.bypass403 import variants
         v = variants("/api/v1/admin")
         # potent form: a trusted value SET *and* named in Connection (chain desync)

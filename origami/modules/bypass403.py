@@ -102,7 +102,7 @@ _PREFIXES = ("/./", "//", "/%2e/", "/%2e%2e//", "/.;/")
 
 # Hop-by-hop bypass (RFC 7230 §6.1): a header named in `Connection` MUST be
 # removed by a conforming intermediary before forwarding. The potent form against
-# a reverse-proxy CHAIN (BruteLogic's testbed) is SPOOF+STRIP: send a trusted
+# a reverse-proxy CHAIN is SPOOF+STRIP: send a trusted
 # value AND list the header in Connection, so the edge proxy allows on the value
 # then strips it — the inner proxy / backend re-evaluates without it and may pass.
 # (httpx sends the custom Connection value verbatim, confirmed.)
@@ -198,7 +198,7 @@ def variants(path: str, case_insensitive: bool = False,
     for h in ("X-Original-URL", "X-Rewrite-URL", "X-HTTP-DestinationURL", "Request-URI"):
         add(f"header {h}", "GET", "/", {h: p})
 
-    # --- hop-by-hop bypass (BruteLogic) — spoof a trusted value AND name it in
+    # --- hop-by-hop bypass — spoof a trusted value AND name it in
     # Connection so the edge allows then strips it (proxy-chain desync); plus a
     # pure-strip set and one batch strip of the whole proxy-header surface ---
     if inc_hop:
