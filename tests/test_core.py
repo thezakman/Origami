@@ -537,6 +537,33 @@ class TestWayback(unittest.TestCase):
             W.from_cdx, W.from_commoncrawl = orig_cdx, orig_cc
 
 
+class TestSessionAuthWall(unittest.TestCase):
+    def _p(self, status, loc="", body=b""):
+        return make_probe(status, body or b"x", url="http://h/", ctype="text/html", location=loc)
+
+    def test_has_auth(self):
+        from origami.modules import session as S
+        self.assertTrue(S.has_auth({"Cookie": "s=1"}))
+        self.assertTrue(S.has_auth({"authorization": "Bearer x"}))
+        self.assertTrue(S.has_auth({"X-API-Key": "k"}))
+        self.assertFalse(S.has_auth({"X-Custom": "1"}))
+        self.assertFalse(S.has_auth({}))
+
+    def test_auth_wall_detected(self):
+        from origami.modules import session as S
+        self.assertIsNotNone(S.auth_wall_reason(self._p(401)))
+        self.assertIsNotNone(S.auth_wall_reason(self._p(302, "https://h/account/login?next=/")))
+        self.assertIsNotNone(S.auth_wall_reason(self._p(302, "https://h/users/sign_in")))
+        self.assertIsNotNone(S.auth_wall_reason(
+            self._p(200, body=b'<form><input name=pw type="password"></form>')))
+
+    def test_no_false_positive_on_authenticated_root(self):
+        from origami.modules import session as S
+        self.assertIsNone(S.auth_wall_reason(self._p(200, body=b"<html>welcome to your dashboard</html>")))
+        self.assertIsNone(S.auth_wall_reason(self._p(302, "https://h/dashboard")))   # redirect, not to login
+        self.assertIsNone(S.auth_wall_reason(self._p(200, body=b"<html>home</html>")))
+
+
 class TestLeaks(unittest.TestCase):
     def kinds(self, body):
         from origami.modules.leaks import scan
