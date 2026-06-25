@@ -88,6 +88,7 @@ class EngineConfig:
     rotate_ua: bool = False                     # pick a random UA from _UA_POOL per request (--rotate-ua)
     headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
     proxy: str = ""                             # route through an intercepting proxy (Burp/ZAP), e.g. http://127.0.0.1:8080
+    proxies: list[str] = field(default_factory=list)   # rotate per request across these (--proxy-file); overrides `proxy`
     http2: bool = False                         # negotiate HTTP/2 (ALPN) — matches modern CDNs (--http2; needs the h2 pkg)
     follow_redirects: bool = False              # we want to *see* redirects
     verify_tls: bool = False                    # pentest targets: don't choke on certs
@@ -139,6 +140,7 @@ class Engine:
     def __init__(self, cfg: EngineConfig | None = None) -> None:
         self.cfg = cfg or EngineConfig()
         self._client: httpx.AsyncClient | None = None
+        self._clients: list[httpx.AsyncClient] = []   # one per proxy (rotated)
         # Adaptive concurrency: a float limit between 1 and cfg.concurrency,
         # gated by a condition over the live in-flight count.
         self._cond = asyncio.Condition()
@@ -170,23 +172,35 @@ class Engine:
         bounds (so a resumed scan doesn't get a fresh budget each time)."""
         return self.prior_requests + self.total_requests
 
-    async def __aenter__(self) -> "Engine":
+    def _new_client(self, proxy: str | None) -> httpx.AsyncClient:
         # User-Agent first so an explicit -H "User-Agent: ..." override wins.
-        self._client = httpx.AsyncClient(
+        return httpx.AsyncClient(
             timeout=self.cfg.timeout,
             follow_redirects=self.cfg.follow_redirects,
             verify=self.cfg.verify_tls,
-            proxy=self.cfg.proxy or None,
+            proxy=proxy or None,
             http2=self.cfg.http2,             # negotiated via ALPN; CLI guards the h2 dep
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )
+
+    async def __aenter__(self) -> "Engine":
+        # One client per proxy when --proxy-file gives a pool (requests spread
+        # across egress IPs — a per-source rate-limit/ban can't pin the scan);
+        # otherwise a single client (the --proxy one, or none).
+        proxies = self.cfg.proxies or [self.cfg.proxy or ""]
+        self._clients = [self._new_client(p or None) for p in proxies]
+        self._client = self._clients[0]       # default/first (back-compat)
         return self
 
+    def _pick_client(self) -> httpx.AsyncClient:
+        return self._clients[0] if len(self._clients) == 1 else random.choice(self._clients)
+
     async def __aexit__(self, *exc) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        for c in getattr(self, "_clients", []):
+            await c.aclose()
+        self._clients = []
+        self._client = None
 
     async def _sleep_before(self) -> None:
         lo, hi = self.cfg.jitter
@@ -297,7 +311,7 @@ class Engine:
             hdrs = dict(kw.get("headers") or {})
             hdrs["User-Agent"] = random.choice(_UA_POOL)
             kw = {**kw, "headers": hdrs}
-        async with self._client.stream(method, url, **kw) as r:
+        async with self._pick_client().stream(method, url, **kw) as r:
             chunks: list[bytes] = []
             total = 0
             cap = self.cfg.max_body

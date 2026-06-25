@@ -229,6 +229,22 @@ async def run(args: argparse.Namespace) -> int:
         if sys.stdin.isatty() and not args.no_ui:
             print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
+    # Proxy rotation: load the list once (one URL per line, # comments allowed).
+    proxy_list: list[str] = []
+    if args.proxy_file:
+        try:
+            for ln in Path(args.proxy_file).read_text().splitlines():
+                ln = ln.strip()
+                if ln and not ln.startswith("#"):
+                    proxy_list.append(ln)
+        except OSError as e:
+            ap.error(f"--proxy-file unreadable: {e}")
+        if not proxy_list:
+            ap.error(f"--proxy-file {args.proxy_file} has no proxies")
+        if not jsonl_stdout:
+            print(f"  proxies  : rotating across {len(proxy_list)} (from {args.proxy_file})",
+                  file=_status_out)
+
     # HTTP/2 needs the optional `h2` package; check once, warn + fall back if absent.
     use_http2 = False
     if args.http2:
@@ -256,8 +272,9 @@ async def run(args: argparse.Namespace) -> int:
                                             log_stream=sys.stderr if jsonl_stdout else None)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                    delay=args.delay, rate=args.rate,
-                                   verify_tls=not (args.insecure or args.proxy),  # proxy = TLS intercept
-                                   proxy=args.proxy or "", headers=_parse_headers(args.header),
+                                   verify_tls=not (args.insecure or args.proxy or proxy_list),
+                                   proxy=args.proxy or "", proxies=proxy_list,
+                                   headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent,
                                    rotate_ua=args.rotate_ua and not args.user_agent,
                                    http2=use_http2)
@@ -377,6 +394,9 @@ def main() -> None:
     ap.add_argument("--proxy", metavar="URL",
                     help="route all traffic through an intercepting proxy "
                          "(e.g. http://127.0.0.1:8080 for Burp/ZAP); implies -k")
+    ap.add_argument("--proxy-file", metavar="FILE",
+                    help="rotate egress across a list of proxies (one URL per line) — spreads "
+                         "requests so a per-source rate-limit/ban can't pin the scan; implies -k")
     ap.add_argument("--http2", action="store_true",
                     help="negotiate HTTP/2 (matches modern CDNs/WAFs; needs the 'h2' package — "
                          "pip install h2; silently falls back to HTTP/1.1 if absent)")
