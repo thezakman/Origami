@@ -72,6 +72,9 @@ def build(result) -> GraphModel:
     host = result.profile.host
     nodes: dict[str, Node] = {}
     for f in result.findings:
+        if not _in_scope(f.url, host):
+            continue        # off-host (e.g. a vhost finding) — its path-key would
+            #                 collapse onto / and overwrite the real same-host node
         k = _pathkey(f.url)
         nodes[k] = Node(k, status=f.status, origin=f.origin,
                         tags=list(getattr(f, "tags", [])))

@@ -1023,6 +1023,28 @@ class TestEndpointGraph(unittest.TestCase):
         self.assertNotIn("/x", m.nodes)        # external target not collapsed in
         self.assertIn("/local", m.nodes)
 
+    def test_offhost_vhost_finding_excluded(self):
+        # an off-host vhost finding (admin.example.com) must NOT collapse onto the
+        # root path key and overwrite the real same-host root node
+        from origami.output import graph
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        r = ScanResult(profile=TargetProfile(host="example.com", base_url="https://example.com/"))
+        r.findings = [Finding("https://example.com/", 200, 10, "text/html", 0.9, "wordlist"),
+                      Finding("http://admin.example.com/", 403, 5, "text/html", 0.8, "vhost", tags=["vhost"])]
+        m = graph.build(r)
+        self.assertEqual(m.nodes["/"].origin, "wordlist")   # real root preserved
+        self.assertEqual(m.nodes["/"].status, 200)
+        self.assertEqual(len(m.nodes), 1)                   # vhost finding not added
+
+    def test_report_styles_loud_tags(self):
+        # the loudest tags must have their own CSS, not fall back to grey
+        from origami.output import html_report
+        h = html_report.render(self._result())
+        for tag in ("secret", "leak", "bypass", "param"):
+            self.assertIn(f".tag.{tag}{{", h)
+
     def test_empty_result_renders(self):
         from origami.output import graph
         from origami.core.scanner import ScanResult
@@ -1824,6 +1846,16 @@ class TestEngineBackoff(unittest.TestCase):
         e._note_pushback()
         self.assertGreater(e._delay_floor, 0.0)
         self.assertLessEqual(e._delay_floor, 5.0)
+
+    def test_spent_counts_prior_plus_current(self):
+        # --max-requests must bound CUMULATIVE spend so --resume can't grant a
+        # fresh budget each time
+        e = self._engine()
+        e.prior_requests = 700
+        e.total_requests = 250
+        self.assertEqual(e.spent, 950)
+        e.prior_requests = 0
+        self.assertEqual(e.spent, e.total_requests)   # fresh scan: spent == this-run total
 
     def test_parse_retry_after(self):
         import time
