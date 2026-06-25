@@ -38,6 +38,15 @@ class TestSimhash(unittest.TestCase):
         b = b"<html><body>welcome dashboard reports settings logout</body></html>"
         self.assertGreater(hamming(simhash(a), simhash(b)), 3)
 
+    def test_normalize_no_redos_on_unclosed_tags(self):
+        # regression: the tag-strip regex must stay linear — a body with a long run
+        # of unclosed '<' was O(n^2) (300KB → ~17s), hanging the scan (simhash runs
+        # on every response body)
+        import time
+        t0 = time.time()
+        simhash(b"a<" * 150_000)          # ~300 KB of unclosed '<'
+        self.assertLess(time.time() - t0, 2.0)   # was ~17s pre-fix
+
     def test_volatile_comment_with_inner_gt_dropped(self):
         # A comment carrying a literal '>' (IE-conditional, "a > b") must be
         # dropped WHOLE — the generic <[^>]+> tag rule alone would truncate at
@@ -2498,6 +2507,25 @@ class TestDedup(unittest.TestCase):
         self.assertEqual(len(out), 2)                 # /a collapsed to one
         self.assertEqual(out["http://h/a"].confidence, 0.9)
         self.assertEqual(out["http://h/a"].origin, "memory")
+
+
+class TestOutputRobustness(unittest.TestCase):
+    def test_write_outputs_graceful_on_unwritable_path(self):
+        # the scan already ran — a bad --out (existing file) must not crash with a
+        # traceback / abort remaining targets; it should report cleanly
+        import argparse, tempfile, os
+        from origami.cli import _write_outputs
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        f = tempfile.mktemp()
+        with open(f, "w") as fh:
+            fh.write("x")                 # --out points at an existing FILE → mkdir fails
+        try:
+            args = argparse.Namespace(json=None, html=None, out=f, graph=None)
+            _write_outputs(args, r, "https://h/", multi=False)   # must not raise
+        finally:
+            os.unlink(f)
 
 
 class TestEndToEndScan(unittest.TestCase):

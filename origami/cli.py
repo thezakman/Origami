@@ -117,25 +117,31 @@ def _suffix(path: str, slug: str) -> str:
 
 
 def _write_outputs(args, result, target, multi: bool) -> None:
-    if args.json:
-        path = _suffix(args.json, _slug(target)) if multi else args.json
-        Path(path).write_text(json_report.dumps(result))
-        print(f"[+] JSON written to {path}")
-    if args.html:
-        path = _suffix(args.html, _slug(target)) if multi else args.html
-        html_report.write(result, path)
-        print(f"[+] HTML report written to {path}")
-    if args.out:
-        d = str(Path(args.out) / _slug(target)) if multi else args.out
-        info = artifacts.write_artifacts(result, d)
-        print(f"[+] artifacts written to {info['dir']}/ "
-              f"(report.html, graph.html [{info['hidden']} hidden], findings.json, "
-              f"params.txt={info['params']}, urls.txt={info['urls']})")
-    if args.graph:
-        path = _suffix(args.graph, _slug(target)) if multi else args.graph
-        hp, dp, n_hidden = graph.write(result, path)
-        print(f"[+] endpoint graph written to {hp} (+ {Path(dp).name}) · "
-              f"{n_hidden} hidden endpoints")
+    # The scan already ran — a write failure (unwritable dir, --out pointing at an
+    # existing file, full disk) must not crash with a traceback or, in multi-target
+    # mode, abort the remaining targets. Report it cleanly and move on.
+    try:
+        if args.json:
+            path = _suffix(args.json, _slug(target)) if multi else args.json
+            Path(path).write_text(json_report.dumps(result))
+            print(f"[+] JSON written to {path}")
+        if args.html:
+            path = _suffix(args.html, _slug(target)) if multi else args.html
+            html_report.write(result, path)
+            print(f"[+] HTML report written to {path}")
+        if args.out:
+            d = str(Path(args.out) / _slug(target)) if multi else args.out
+            info = artifacts.write_artifacts(result, d)
+            print(f"[+] artifacts written to {info['dir']}/ "
+                  f"(report.html, graph.html [{info['hidden']} hidden], findings.json, "
+                  f"params.txt={info['params']}, urls.txt={info['urls']})")
+        if args.graph:
+            path = _suffix(args.graph, _slug(target)) if multi else args.graph
+            hp, dp, n_hidden = graph.write(result, path)
+            print(f"[+] endpoint graph written to {hp} (+ {Path(dp).name}) · "
+                  f"{n_hidden} hidden endpoints")
+    except OSError as e:
+        print(f"[!] could not write output for {target}: {e}", file=sys.stderr)
 
 
 async def run(args: argparse.Namespace) -> int:
