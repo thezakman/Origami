@@ -1495,6 +1495,23 @@ class TestShortname(unittest.TestCase):
         cs = [p for _, p in shortname.expand(r.entries, words, case_insensitive=False)]
         self.assertGreater(sum(1 for p in cs if p.lower() == "webservices"), 1)
 
+    def test_parse_ndjson_survives_malformed_lines(self):
+        # shortscan output is untrusted: a line with null/number/list fields must
+        # not crash the parser or expand() and forfeit the whole fold
+        from origami.modules.discovery import shortname
+        r = shortname.parse_ndjson(
+            '{"shortfile":null,"shorttilde":"ADMIN~1"}\n'
+            '{"shortfile":123}\n'
+            '{"shortext":["x"],"shortfile":"web"}\n'
+            '{"shorttilde":456}\n'
+            '{"shortfile":"admini","shortext":"asp","shorttilde":"ADMINI~1"}\n'  # 1 valid
+            'not json\n{truncated\n')
+        self.assertEqual(len(r.entries), 5)               # all parsed, none crashed
+        # every coerced field is a str → expand() can't blow up on .lower()/.upper()
+        self.assertTrue(all(isinstance(e.prefix, str) and isinstance(e.ext, str)
+                            and isinstance(e.tilde, str) for e in r.entries))
+        shortname.expand(r.entries, [], case_insensitive=True)   # must not raise
+
 
 class TestRobots(unittest.TestCase):
     def test_robots(self):

@@ -86,12 +86,37 @@ async def run_shortscan(url: str, *, insecure: bool = True, user_agent: str | No
     try:
         proc = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        out, err = await proc.communicate()
     except OSError as e:
         return ShortscanResult(available=True, error=f"spawn failed: {e}")
+    # Bound the wait: a hung shortscan child must not stall the scan forever, and
+    # must always be reaped (killed + awaited) — never left running detached.
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=_SHORTSCAN_TIMEOUT)
+    except asyncio.TimeoutError:
+        await _reap(proc)
+        return ShortscanResult(available=True, error=f"timed out after {_SHORTSCAN_TIMEOUT:.0f}s")
+    except BaseException:                         # cancellation / loop teardown
+        await _reap(proc)
+        raise
 
     return parse_ndjson(out.decode("utf-8", "replace"), fallback_url=url,
                         stderr=err.decode("utf-8", "replace"))
+
+
+_SHORTSCAN_TIMEOUT = 300.0   # overall cap on the shortscan child (it self-limits per-request via -t)
+
+
+async def _reap(proc) -> None:
+    """Kill + reap a subprocess so a hung/cancelled shortscan leaves no zombie."""
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await proc.wait()
+    except BaseException:
+        pass
 
 
 def parse_ndjson(text: str, fallback_url: str = "", stderr: str = "") -> ShortscanResult:
@@ -110,12 +135,17 @@ def parse_ndjson(text: str, fallback_url: str = "", stderr: str = "") -> Shortsc
             res.vulnerable = res.vulnerable or bool(obj["vulnerable"])
             res.server = res.server or obj.get("server", "")
         elif "shorttilde" in obj or "shortfile" in obj:
+            # Coerce every field to str: shortscan output is untrusted, and a
+            # non-string value (null/number/list) would later crash .lower()/.upper()
+            # and forfeit the WHOLE fold over one malformed line.
+            def _s(v):
+                return v if isinstance(v, str) else ""
             res.entries.append(ShortEntry(
-                baseurl=obj.get("baseurl") or obj.get("url") or fallback_url,
-                tilde=obj.get("shorttilde", ""),
-                prefix=obj.get("shortfile", ""),
-                ext=obj.get("shortext", ""),
-                fullname=obj.get("fullname", ""),
+                baseurl=_s(obj.get("baseurl")) or _s(obj.get("url")) or fallback_url,
+                tilde=_s(obj.get("shorttilde")),
+                prefix=_s(obj.get("shortfile")),
+                ext=_s(obj.get("shortext")),
+                fullname=_s(obj.get("fullname")),
                 fullmatch=bool(obj.get("fullmatch", False)),
             ))
     if not res.entries and not res.vulnerable and stderr.strip():
