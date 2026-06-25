@@ -1927,6 +1927,30 @@ class TestEngineBackoff(unittest.TestCase):
         self.assertGreater(e._delay_floor, 0.0)
         self.assertLessEqual(e._delay_floor, 5.0)
 
+    def test_proxy_rotation_builds_pool(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig
+        async def run():
+            e = Engine(EngineConfig(proxies=["http://p1:8080", "http://p2:8080", "http://p3:8080"]))
+            async with e:
+                picks = {id(e._pick_client()) for _ in range(80)}
+                return len(e._clients), len(picks)
+            return 0, 0
+        n_clients, n_picked = asyncio.run(run())
+        self.assertEqual(n_clients, 3)              # one client per proxy
+        self.assertEqual(n_picked, 3)              # all rotated over many requests
+
+    def test_no_proxy_single_client(self):
+        import asyncio
+        from origami.core.httpclient import Engine, EngineConfig
+        async def run():
+            e = Engine(EngineConfig())
+            async with e:
+                return len(e._clients), e._pick_client() is e._client
+        n, stable = asyncio.run(run())
+        self.assertEqual(n, 1)
+        self.assertTrue(stable)                    # single client, deterministic pick
+
     def test_http2_config_builds_client(self):
         # the engine must build with http2 off always, and on only when h2 is present
         import asyncio, importlib.util
