@@ -154,13 +154,20 @@ class Engine:
         self._rate_lock = asyncio.Lock()
         self._next_slot = 0.0
         self.pushback_events = 0
-        self.total_requests = 0      # every logical fetch (calibration, harvests, scan)
+        self.total_requests = 0      # every logical fetch THIS run (calibration, harvests, scan)
+        self.prior_requests = 0      # requests spent on earlier runs of this target (set on --resume)
         self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
 
     @property
     def concurrency_limit(self) -> int:
         """Current adaptive in-flight ceiling (telemetry)."""
         return max(1, int(self._limit))
+
+    @property
+    def spent(self) -> int:
+        """Total requests against this target across runs — what --max-requests
+        bounds (so a resumed scan doesn't get a fresh budget each time)."""
+        return self.prior_requests + self.total_requests
 
     async def __aenter__(self) -> "Engine":
         # User-Agent first so an explicit -H "User-Agent: ..." override wins.

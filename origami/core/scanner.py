@@ -266,19 +266,28 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         wb_task = asyncio.create_task(wayback.harvest(profile.host, use_gau=opts.gau))
 
     observer.phase("fingerprint")
-    errors = await fp.forced_error_probes(engine, base_url)
-    fp.apply_signals(profile, [root, *errors], kb)
-    fp.apply_error_signals(profile, errors)        # default-error-page → stack (header-independent)
-    for pr in (root, *errors):
-        w = waf.detect(pr)
-        if w:
-            profile.waf = w
-            observer.log(f"WAF detected: {w}", 0, style="bold red")
-            break
-    fav = await fp.favicon_fingerprint(engine, base_url, profile)
-    if fav is not None:
-        observer.log(f"favicon mmh3={fav}", 1)
-    exts, priority_paths, folds = fp.confirmed_actions(profile, kb)
+    # The only unguarded code between the wb_task kickoff and its await is the
+    # fingerprint block; if it raises, cancel the background harvest so we don't
+    # orphan the task (and, with --gau, leak a subprocess). The recon harvests
+    # below are _guard-wrapped, and the wayback await self-cancels on error.
+    try:
+        errors = await fp.forced_error_probes(engine, base_url)
+        fp.apply_signals(profile, [root, *errors], kb)
+        fp.apply_error_signals(profile, errors)    # default-error-page → stack (header-independent)
+        for pr in (root, *errors):
+            w = waf.detect(pr)
+            if w:
+                profile.waf = w
+                observer.log(f"WAF detected: {w}", 0, style="bold red")
+                break
+        fav = await fp.favicon_fingerprint(engine, base_url, profile)
+        if fav is not None:
+            observer.log(f"favicon mmh3={fav}", 1)
+        exts, priority_paths, folds = fp.confirmed_actions(profile, kb)
+    except BaseException:
+        if wb_task is not None and not wb_task.done():
+            wb_task.cancel()
+        raise
     # User-forced extensions (-X): replace the auto-detected set under --ext-only,
     # else add to it. Propagates to calibration, candidates and recursion.
     if opts.ext_only and opts.extensions:
@@ -578,6 +587,7 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     checkpoint so a re-fired prefix can't duplicate the report. State is flushed
     after every prefix, so a hard kill loses at most one partial prefix.
     """
+    engine.prior_requests = prior_requests   # so --max-requests bounds CUMULATIVE spend across resumes
     recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
     queued: set[str] = {p for p, _ in queue} | scanned
 
@@ -948,7 +958,7 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     hit_cap = False
     for idx in range(skip, len(cands)):
         cand = cands[idx]
-        if (opts.max_requests and engine.total_requests >= opts.max_requests) or control.quit:
+        if (opts.max_requests and engine.spent >= opts.max_requests) or control.quit:
             consumed, hit_cap = idx, True       # stopped here — resume from idx (0 = unlimited)
             break
         if control.skip_prefix:
@@ -1091,7 +1101,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     # 1. read each file's body, extract referenced paths
     new_paths: dict[str, str] = {}            # path -> source file path (for graph edges)
     for f in files:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
         pr = await engine.fetch(f.url, keep_body=True)
@@ -1128,7 +1138,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     observer.start_prefix("harvest", len(fresh))
     new_dirs: set[str] = set()                    # dirs the confirmed endpoints live in
     for p, src in fresh:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         pth = "/" + p.lstrip("/")
         if _excluded(pth, opts):
@@ -1230,7 +1240,7 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
     observer.log(f"content: scanning {len(cands)} files for secrets + disclosure", 0, style="cyan")
     total = 0
     for f in cands:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
@@ -1261,7 +1271,7 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
     observer.start_prefix("vhost", len(cands))
     seen_sig: set[tuple] = set()
     for cand in cands:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         observer.substep(cand)
         pr = await engine.fetch(root, headers={"Host": cand})
@@ -1332,13 +1342,13 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
     observer.start_prefix("params", len(targets) * n_batches)
     total = 0
     for f in targets:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
         found: list[str] = []
         echoes = False
         for qs, token_map, ctl in paramfuzz.build_batches(params, FUZZ_BATCH):
-            if opts.max_requests and engine.total_requests >= opts.max_requests:
+            if opts.max_requests and engine.spent >= opts.max_requests:
                 break
             sep = "&" if urlparse(f.url).query else "?"
             url = f.url + sep + qs
@@ -1385,7 +1395,7 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rsplit("/", 1)[-1] or path)   # backups: <file>
         for var in backups.variations(path):
-            if opts.max_requests and engine.total_requests >= opts.max_requests:
+            if opts.max_requests and engine.spent >= opts.max_requests:
                 break
             url = urljoin(_host_root(profile.base_url), var)
             if _excluded(urlparse(url).path, opts):
@@ -1460,7 +1470,7 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
         for label, method, rpath, headers in bypass403.variants(
                 path, case_insensitive=ci, header_pairs=header_pairs):
-            if opts.max_requests and engine.total_requests >= opts.max_requests:
+            if opts.max_requests and engine.spent >= opts.max_requests:
                 return
             url = urljoin(root, rpath.lstrip("/"))
             probe = await engine.fetch(url, method=method, headers=headers or None)
@@ -1502,7 +1512,7 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
     observer.start_prefix("associations", len(assoc))
     root = _host_root(profile.base_url)
     for path in assoc:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         p = "/" + path.lstrip("/")
         if _excluded(p, opts):
@@ -1616,7 +1626,7 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
 
     observer.start_prefix("shortscan", len(urls))
     for url, prefix in urls:
-        if opts.max_requests and engine.total_requests >= opts.max_requests:
+        if opts.max_requests and engine.spent >= opts.max_requests:
             break
         pth = urlparse(url).path
         # drop malformed expansions: empty-filename segments (control/.ashx),
