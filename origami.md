@@ -110,7 +110,16 @@ Triggered by evidence/calibration. Each **emits high-confidence seeds**; it does
 - **discovery/shortname.py** — IIS 8.3 shortscan; see §4.
 - **discovery/js_parser.py** — harvests endpoints/routes from HTML/JS; follows webpack chunks and source maps, skips vendor libraries, picks up the RequireJS `data-main` bundle; harvests query/template **parameter names** as pentest intel.
 - **discovery/backups.py** — `.git/`, `.svn/`, `.DS_Store`, `.swp`, `~`, `.bak`, `.old`; folds aggressively, generating variations of already-discovered names.
-- **discovery/robots.py** — robots.txt + sitemap.xml.
+- **discovery/robots.py** — robots.txt + sitemap.xml (follows nested `<sitemapindex>`).
+- **discovery/apidocs.py** — OpenAPI/Swagger + JSON:API spec discovery and folding; also ingests a spec handed in directly (`--openapi URL|FILE`).
+- **discovery/wellknown.py / graphql.py / clientapp.py / methods.py** — `.well-known/` (OIDC/OAuth + security.txt), GraphQL introspection, service-worker/web-app-manifest, HTTP-method (OPTIONS) discovery.
+- **discovery/wayback.py** — historical-URL sourcing (`--wayback`/`--gau`): Wayback CDX + Common Crawl natively, or the `gau`/`waybackurls` binary; fetched in the background during fingerprint and folded as candidates.
+- **modules/secrets.py** — credential detection inside high-value bodies (provider keys, private keys, JWTs, DB URIs, guarded generic `api_key=`).
+- **modules/leaks.py** — content intelligence: stack traces, framework debug pages, internal IP/host disclosure (tagged `leak`).
+- **modules/paramfuzz.py** — reflected-parameter discovery (`--params`): harvested + common names, batched canaries, control-param FP guard.
+- **modules/vhost.py** — virtual-host discovery (`--vhost`): Host-header fuzzing on the target IP.
+- **modules/bypass403.py** — 403/401 bypass battery (`--bypass-403`, `--bypass-headers`): path/header/method tricks.
+- **modules/session.py** — authenticated-scan sanity check: warns when `-H` credentials don't actually authenticate.
 - **modules/waf.py** — WAF/block-page detection (see §3.2).
 - **Vocabulary folding:** the target's own names + extensions (from JS/robots/sitemap + the host/subdomain/path) become scan vocabulary.
 - **Parent-directory recursion:** a deep hit (`/app/x/views/y.html`) reveals `/app/x/` and `/app/x/views/`, which the wordlist+vocab then explore.
@@ -139,7 +148,7 @@ The KB will have **two layers**:
 - **Licensing:** record each source's license (Wappalyzer fork, SecLists MIT, nuclei) and respect the terms.
 
 ### 3.10 Operational safety — rate-limit / WAF (`core/httpclient.py`)
-First-class: configurable concurrency cap, jitter, and **adaptive backoff** on 429 / signed-403 / captcha / connection reset; light UA/header rotation. The bandit that **optimizes** budget comes later (§3.8). Goal: don't get blocked and keep the scan within what the target can take.
+First-class and implemented: a configurable concurrency cap; **AIMD adaptive concurrency + delay floor** (a 429/503 both halves the in-flight ceiling and raises a shared delay, clean responses ramp back); an **aggregate token-bucket rate cap** (`--rate`) and a per-request floor (`--delay`) + jitter; **`Retry-After` honored exactly** on 429/503 (the server's own wait, capped); **User-Agent rotation** (`--rotate-ua`) and **proxy-pool rotation** (`--proxy-file`) to spread a per-UA/per-source heuristic; **HTTP/2** (`--http2`, optional `h2`); a hostile-body size cap. Transport errors (timeout/DNS/reset) retry but do NOT count as throttle, so a few dead URLs can't collapse a healthy scan. The bandit that **optimizes** budget under throttle is §3.8. Goal: don't get blocked and keep the scan within what the target can take.
 
 ### 3.11 Scope and recursion (`core/scanner.py`)
 Recursion-depth cap, same-host/scheme restriction, path-exclusion, and a per-run request ceiling. Two distinct scopes (`core/scope.py`): **parse scope** (same registrable domain — reads the org's own CDN JS) vs **scan scope** (the exact target host — `--scope site` to also scan the CDN). Canonical root redirects (http→https, www) are auto-followed; harvested paths join from the host root so a base path like `/lms/` never doubles.
@@ -191,15 +200,16 @@ origami/
     response_classifier.py    # hit vs soft-404 + filters + tags
     normalize.py  scope.py
   modules/
-    waf.py
-    discovery/   robots.py  js_parser.py  backups.py  shortname.py
+    waf.py  secrets.py  leaks.py  paramfuzz.py  vhost.py  bypass403.py  session.py
+    discovery/   robots.py  js_parser.py  backups.py  shortname.py  apidocs.py
+                 wellknown.py  graphql.py  clientapp.py  methods.py  wayback.py
   brain/
     overlay.yaml              # curated KB
-    memory.py                 # SQLite corpus, k-NN, association
+    memory.py                 # SQLite corpus, k-NN, association, host-normalized
     ngram.py                  # shortscan Regime-2 completer
-    kb.py
-  wordlists/     base.txt
-  output/        json_report.py  html_report.py  artifacts.py  ui.py
+    bandit.py  kb.py  ingest/
+  wordlists/     base.txt  403-headers.txt
+  output/        json_report.py  html_report.py  graph.py  artifacts.py  ui.py
 tests/
   fakeserver/    server.py    # IIS soft-404, wildcard, custom 404, rate-limit
   benchmark/     bench_folds.py
@@ -208,20 +218,20 @@ tests/
 
 ## 7. Status & roadmap
 
-**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 100 unit tests):
+**Implemented and tested** (fake server 404/soft-404/wildcard + real targets, 200+ unit tests + an end-to-end integration scan):
 - per-context calibration (simhash soft-404, wildcard, case-sensitivity, redirect-kind);
 - additive fingerprint + folds (headers/cookies + **favicon mmh3**, **WAF detection**, and a **default-error-page → stack catalogue** that fingerprints nginx/Apache/IIS/Tomcat/Jetty/Express/Spring-Boot/Django/Flask/Laravel/ASP.NET/PHP header-independently — the hard CDN/WAF case);
 - async engine + backoff; soft-404 classifier with **`-mc/-fc/-ms/-fs`** filters (404/400 dropped by default) and random-sibling verification of surprising hits;
 - scoped recursion + parent-directory recursion from deep hits;
 - **shortscan** (gate + constraint-filter + raw 8.3 + prefix-as-dir/file + **n-gram Regime-2 completer**, primed by **cross-target name memory** so 8.3 prefixes reverse into names seen on past targets — the §4 learning loop; 5xx guesses and case-dupes filtered);
-- **recon phase** (single pass feeding the dynamic wordlist): **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **service worker** (precache) + **web app manifest** + **CSP/Link header** endpoints + **parameter** intel; **backups/VCS**; **robots/sitemap** (follows nested `<sitemapindex>` files); **OpenAPI/Swagger + JSON:API** spec discovery; **`.well-known/`** (OIDC/OAuth auth-endpoint folding + security.txt); **GraphQL introspection** (confirms the endpoint + harvests schema fields); **HTTP method discovery** (OPTIONS → flags PUT/DELETE/TRACE/PATCH/WebDAV); **403/401 bypass** (`--bypass-403`: path/header/method tricks, surviving 2xx-with-content reported);
+- **recon phase** (single pass feeding the dynamic wordlist): **js_parser** (JS→JS chunks/sourcemaps, skips vendor, `data-main`) + **service worker** (precache) + **web app manifest** + **CSP/Link header** endpoints + **parameter** intel; **backups/VCS**; **robots/sitemap** (follows nested `<sitemapindex>` files); **OpenAPI/Swagger + JSON:API** spec discovery; **`.well-known/`** (OIDC/OAuth auth-endpoint folding + security.txt); **GraphQL introspection** (confirms the endpoint + harvests schema fields); **HTTP method discovery** (OPTIONS → flags PUT/DELETE/TRACE/PATCH/WebDAV); **403/401 bypass** (`--bypass-403` + `--bypass-headers` wordlist: path/header/method tricks, surviving 2xx-with-content reported); **content intelligence** (`leaks.py`: stack traces, framework debug pages, internal IP/host disclosure, tagged `leak`); **parameter discovery** (`--params`: reflected-canary fuzzing of harvested + common names); **historical URLs** (`--wayback`/`--gau`: Wayback CDX + Common Crawl, background-fetched); **virtual-host discovery** (`--vhost`); **directory-listing–aware harvest** (parse the autoindex, probe only what it hides);
 - **vocabulary folding** (names+extensions from references + host/subdomain/path);
 - **SQLite memory**: **k-NN over fingerprint vectors** + **association mining** + cross-target priming + `--history`;
 - **multi-source KB ingestion** (`--update`: Wappalyzer catalog → KB rules, overlay wins on conflict);
 - **mid-scan resume** (`--resume`): checkpoint the loop state per directory, continue an interrupted run with no re-fingerprinting;
 - **contextual bandit** (`--economy`): Beta-Thompson candidate ranking by learned hit-rate, conditioned on confirmed techs, for request economy under WAFs;
-- scope discipline (`--scope host|site`, canonical-redirect auto-upgrade, host-root joins, `-x/--exclude` safety rail, `-X/--ext` + `--ext-only` manual extensions);
-- pentest plumbing: custom headers (`-H`, authenticated scans), `-A` user-agent, `--proxy` (Burp/ZAP), AIMD adaptive concurrency + body-size cap;
+- scope discipline (`--scope host|site` with a **public-suffix-aware** `same_site` that splits shared-hosting co-tenants, canonical-redirect auto-upgrade, host-root joins, `-x/--exclude` safety rail, `-X/--ext` + `--ext-only` manual extensions, `--exclude-ext` static-asset filter);
+- pentest plumbing: custom headers (`-H`, authenticated scans) with an **auth-wall sanity check**, `-A` user-agent + **`--rotate-ua`**, `--proxy` and **`--proxy-file`** rotation, **`--http2`**, **`Retry-After`** honoring, AIMD adaptive concurrency + body-size cap, explicit spec ingest (`--openapi`), memory hygiene (www/apex normalization + **`--forget`**);
 - **multi-target** scanning (`-l/--list`, multiple URLs), each scanned clean;
 - **endpoint graph** (`--graph`): provenance edges (js/robots/apidocs → target) → self-contained SVG + DOT, with orphan/hidden-endpoint detection;
 - output: live `rich` dashboard (streaming findings, status bar, `==> directory`, semantic tags, origin colors) with a dependency-free fallback; **JSON + HTML report + `--out`** (params.txt/urls.txt/findings.json); installable package (`pip install -e .` → `origami`).
