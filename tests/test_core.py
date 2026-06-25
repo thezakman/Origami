@@ -622,6 +622,8 @@ class TestSessionAuthWall(unittest.TestCase):
             def __init__(s):
                 s.total_requests = 0; s.prior_requests = 0; s.pushback_events = 0
                 s.on_request = None; s.cfg = EngineConfig(headers=headers); s._i = 0
+            @property
+            def spent(s): return s.prior_requests + s.total_requests
             async def fetch(s, url, method="GET", keep_body=False, headers=None):
                 s.total_requests += 1
                 root = url.rstrip("/").endswith("h") or url.endswith("/")

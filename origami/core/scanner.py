@@ -558,8 +558,10 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # If we started authenticated, re-check the root once: if it's now an auth
     # wall, the session expired DURING the scan and later findings may be partial.
     # The root is a stable reference, so this is a false-positive-free signal.
-    if started_authed:
+    # Skipped if the request budget is already spent; counted toward requests_made.
+    if started_authed and not (opts.max_requests and engine.spent >= opts.max_requests):
         recheck = await engine.fetch(base_url, keep_body=True)
+        result.requests_made = engine.spent              # count this extra probe
         reason = session.auth_wall_reason(recheck, base_url)
         if reason:
             observer.log(f"auth: session appears to have EXPIRED during the scan "
