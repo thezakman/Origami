@@ -50,6 +50,14 @@ def _is_asset(path: str) -> bool:
     base = (path or "").rsplit("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
     return "." in base and base.rsplit(".", 1)[-1].lower() in _ASSET_EXT
 
+
+def _norm_host(host: str) -> str:
+    """Canonical host key for memory: lower-cased, no port, no leading `www.` —
+    so `www.x.com` and `x.com` share one corpus/fingerprint and transfer learning
+    across the www/apex split instead of looking like two separate targets."""
+    h = (host or "").split("@")[-1].split(":")[0].lower().strip(".")
+    return h[4:] if h.startswith("www.") else h
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY,
@@ -132,6 +140,7 @@ class Memory:
         ranked by how many such hosts had them."""
         if not techs:
             return []
+        exclude_host = _norm_host(exclude_host)
         qmarks = ",".join("?" * len(techs))
         amarks = ",".join("?" * len(_AMBIENT_PATHS))
         rows = self.db.execute(
@@ -157,7 +166,7 @@ class Memory:
         if not vec:
             return []
         rows = self.db.execute("SELECT host, vec FROM host_fp WHERE host != ?",
-                               (profile.host,)).fetchall()
+                               (_norm_host(profile.host),)).fetchall()
         sims = []
         for host, vjson in rows:
             try:
@@ -235,7 +244,7 @@ class Memory:
 
     def prior_findings(self, host: str) -> list[tuple[str, int]]:
         rows = self.db.execute(
-            "SELECT path, status FROM corpus WHERE host = ? ORDER BY path", (host,)
+            "SELECT path, status FROM corpus WHERE host = ? ORDER BY path", (_norm_host(host),)
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
@@ -257,25 +266,26 @@ class Memory:
 
     def record_run(self, profile, result) -> int:
         confirmed = profile.confirmed_techs()
+        host = _norm_host(profile.host)        # www/apex collapse to one memory key
         cur = self.db.execute(
             "INSERT INTO runs (host, base_url, ts, requests, techs, findings) "
             "VALUES (?,?,?,?,?,?)",
-            (profile.host, profile.base_url, time.time(), result.requests_made,
+            (host, profile.base_url, time.time(), result.requests_made,
              ",".join(confirmed), len(result.findings)),
         )
         run_id = cur.lastrowid
 
         self.db.executemany(
             "INSERT INTO findings VALUES (?,?,?,?,?,?,?,?,?)",
-            [(run_id, profile.host, f.url, _path(f.url), f.status, f.confidence,
+            [(run_id, host, f.url, _path(f.url), f.status, f.confidence,
               f.origin, f.length, f.content_type) for f in result.findings],
         )
         for tech in confirmed:
             self.db.execute("INSERT OR IGNORE INTO host_techs VALUES (?,?)",
-                            (profile.host, tech))
+                            (host, tech))
         # store the fingerprint vector for k-NN priming of future scans
         self.db.execute("INSERT OR REPLACE INTO host_fp VALUES (?,?)",
-                        (profile.host, json.dumps(fingerprint_vector(profile))))
+                        (host, json.dumps(fingerprint_vector(profile))))
         # corpus: only real, low-noise hits (200/3xx/401/403) become memory —
         # and never host-local static assets (images/fonts/media carry no
         # cross-target signal, so they'd only pollute future recall/association).
@@ -286,15 +296,32 @@ class Memory:
                     continue
                 self.db.execute(
                     "INSERT OR REPLACE INTO corpus VALUES (?,?,?)",
-                    (profile.host, p, f.status))
+                    (host, p, f.status))
         self.db.commit()
         return run_id
+
+    def forget(self, host: str | None = None) -> int:
+        """Erase memory: one host (normalized, www/apex together) or — when host
+        is None — ALL of it. Returns the number of corpus rows removed."""
+        if host is None:
+            n = self.db.execute("SELECT COUNT(*) FROM corpus").fetchone()[0]
+            for t in ("runs", "findings", "host_techs", "corpus", "host_fp", "word_stats"):
+                self.db.execute(f"DELETE FROM {t}")
+            self.db.commit()
+            self.db.execute("VACUUM")
+            return n
+        h = _norm_host(host)
+        n = self.db.execute("SELECT COUNT(*) FROM corpus WHERE host = ?", (h,)).fetchone()[0]
+        for t in ("runs", "findings", "host_techs", "corpus", "host_fp"):
+            self.db.execute(f"DELETE FROM {t} WHERE host = ?", (h,))
+        self.db.commit()
+        return n
 
     def history(self, host: str | None = None, limit: int = 20) -> list[tuple]:
         if host:
             q = ("SELECT id, host, ts, requests, findings, techs FROM runs "
                  "WHERE host = ? ORDER BY ts DESC LIMIT ?")
-            return self.db.execute(q, (host, limit)).fetchall()
+            return self.db.execute(q, (_norm_host(host), limit)).fetchall()
         q = ("SELECT id, host, ts, requests, findings, techs FROM runs "
              "ORDER BY ts DESC LIMIT ?")
         return self.db.execute(q, (limit,)).fetchall()

@@ -1489,6 +1489,47 @@ class TestRecallNames(unittest.TestCase):
             m.close()
 
 
+class TestMemoryHygiene(unittest.TestCase):
+    def _mem(self, d):
+        from pathlib import Path
+        from origami.brain.memory import Memory
+        return Memory(Path(d) / "m.sqlite")
+
+    def _record(self, m, host, paths):
+        from origami.core.scanner import ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        p = TargetProfile(host=host, base_url=f"https://{host}/")
+        r = ScanResult(profile=p, findings=[Finding(f"https://{host}{pp}", 200, 1, "", 0.9, "x")
+                                            for pp in paths])
+        m.record_run(p, r)
+
+    def test_www_apex_share_one_key(self):
+        # a scan of www.x.com must be visible/transferable as x.com (and vice versa)
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            m = self._mem(d)
+            self._record(m, "www.acme.com", ["/admin/", "/api/v2/users"])
+            self.assertEqual({p for p, _ in m.prior_findings("acme.com")},
+                             {"/admin/", "/api/v2/users"})        # apex sees www data
+            self.assertTrue(m.prior_findings("www.acme.com"))      # and www sees its own
+            m.close()
+
+    def test_forget_one_host_and_all(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            m = self._mem(d)
+            self._record(m, "a.com", ["/x"])
+            self._record(m, "b.com", ["/y"])
+            removed = m.forget("www.a.com")                       # normalized → a.com
+            self.assertEqual(removed, 1)
+            self.assertEqual(m.prior_findings("a.com"), [])
+            self.assertTrue(m.prior_findings("b.com"))            # other host untouched
+            m.forget(None)                                        # wipe all
+            self.assertEqual(m.prior_findings("b.com"), [])
+            m.close()
+
+
 class TestReportDedup(unittest.TestCase):
     def _setup(self, case_sensitive=None):
         from origami.core.scanner import ScanResult, _report
