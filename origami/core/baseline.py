@@ -15,6 +15,7 @@ the matching baseline (see `looks_like_miss`).
 from __future__ import annotations
 
 import random
+import re
 import string
 from urllib.parse import urljoin, urlparse
 
@@ -107,7 +108,12 @@ def _generalize_location(req_url: str, location: str) -> str:
     """
     tail = urlparse(req_url).path.rsplit("/", 1)[-1]
     token = tail.split(".")[0]
-    return location.replace(token, "*") if token else location
+    if not token:
+        return location
+    # Replace only WHOLE-token occurrences (bounded by a non-alphanumeric or an
+    # edge), so a short token (`a`, `id`, `js`) doesn't blank unrelated substrings
+    # in the redirect target and collapse genuinely-distinct targets together.
+    return re.sub(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", "*", location)
 
 
 def _redirect_kind(req_url: str, location: str) -> str:
