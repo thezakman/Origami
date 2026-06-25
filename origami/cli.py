@@ -296,6 +296,20 @@ async def run(args: argparse.Namespace) -> int:
     return rc
 
 
+def _forget(args) -> int:
+    mem = Memory(args.db)
+    target = args.forget
+    if target.lower() == "all":
+        n = mem.forget(None)
+        print(f"[+] memory wiped — removed {n} corpus paths (all hosts)")
+    else:
+        host = urlparse(target).netloc or target
+        n = mem.forget(host)
+        print(f"[+] forgot {host} — removed {n} corpus paths")
+    mem.close()
+    return 0
+
+
 def _show_history(args) -> int:
     first = args.url[0] if args.url else None
     host = (urlparse(first).netloc or first) if first else None
@@ -387,6 +401,8 @@ def main() -> None:
                     help="fetch the Wappalyzer fingerprint catalog into the KB and exit")
     ap.add_argument("--history", action="store_true",
                     help="show past scan history (optionally filtered by the given host) and exit")
+    ap.add_argument("--forget", metavar="HOST|all",
+                    help="erase cross-target memory for a host (www/apex together) or 'all', then exit")
     ap.add_argument("--no-ui", action="store_true", help="disable the live rich UI")
     ap.add_argument("-F", "--full-url", action="store_true",
                     help="show full URLs instead of just paths")
@@ -468,6 +484,8 @@ def main() -> None:
         sys.exit(0 if n else 2)
     if args.history:
         sys.exit(_show_history(args))
+    if args.forget:
+        sys.exit(_forget(args))
     if not args.url and not args.list:
         ap.error("give at least one target URL or --list FILE")
     if args.ext_only and not args.ext:
