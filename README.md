@@ -21,6 +21,17 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
    \/
 ```
 
+## Why it's different
+
+Blind brute-forcers (`ffuf`, `dirb`, `dirsearch`) fire one fixed wordlist at every target, bury you in soft-404 noise, and ignore everything the app reveals about itself. **Origami exists to make content discovery *adaptive*** — it calibrates to the target, fingerprints the stack, and folds its strategy around the evidence, so it finds more with fewer requests. Six ideas set it apart:
+
+1. **Calibrate before attacking.** A per-context soft-404 profile — per directory *and* extension class, over a normalized-body **simhash** — means CSRF tokens, nonces, timestamps and WAF support-IDs never masquerade as hits.
+2. **Fingerprint additively, fold per-prefix.** Every path-prefix carries its own evidence-weighted stack fingerprint; confirming a technology folds in *its* extensions, paths and modules (IIS → `.aspx` + shortscan; PHP/Laravel/Django/… → their own packs).
+3. **Discovery compounds.** It reads the target's own code — JS, API specs, robots, headers, archives — then re-reads every file *it* uncovers and recurses the directories they live in. The more it finds, the more it finds.
+4. **Reads content, not just status codes.** Response bodies are mined for credentials, information-disclosure leaks, and reflected parameters graded by injection context — it tells you *what leaked*, not just a wall of `200`s.
+5. **Stays alive under a WAF.** Per-context calibration, AIMD backoff, honored `Retry-After`, UA/proxy rotation and a learned request-economy bandit keep it under the radar and spend a tight budget on the hits most likely to land.
+6. **Gets smarter every run.** A SQLite corpus, k-NN over fingerprint vectors and a character n-gram completer prime each new scan from everything past ones turned up.
+
 ## Demo
 
 A real run against the test target — fingerprint, findings streaming live, a **403 → 200 bypass**, and a leaked **`.env`** (AWS key + DB URI + an internal-host leak):
@@ -146,17 +157,6 @@ Findings (16)  ·  fingerprint: iis, asp.net
 │ 200  │       68B │ wordlist  │ 0.95 │ admin auth │ /admin/login.aspx         │
 └──────┴───────────┴───────────┴──────┴────────────┴───────────────────────────┘
 ```
-
-## Why it's different
-
-`ffuf`/`dirb` fire a fixed wordlist and filter the noise. Origami **adapts** — six ideas set it apart:
-
-1. **Calibrate before attacking.** It profiles each context's soft-404 (per directory *and* extension class) with a normalized-body **simhash**, so CSRF tokens, nonces, timestamps and WAF support-IDs never look like hits.
-2. **Fingerprint additively, fold per-prefix.** Each path-prefix gets its own evidence-weighted stack fingerprint; confirming a tech folds in *its* extensions, paths and modules (IIS → `.aspx`/shortscan; PHP/Laravel/Django/… → their packs).
-3. **Discovery compounds.** It reads the target's own code (JS, specs, robots, headers, archives) and re-reads every file *it* finds, recursing the directories they live in — the more it finds, the more it finds.
-4. **Reads content, not just status codes.** Bodies are mined for credentials, information-disclosure leaks, and reflected parameters graded by injection context — findings, not just `200`s.
-5. **Adaptive under a WAF.** Per-context calibration + AIMD backoff + honored `Retry-After` + UA/proxy rotation, and a learned request-economy bandit so a tight budget buys the most hits.
-6. **Learns across targets.** A SQLite corpus + character n-gram completer prime each new scan from every past one.
 
 ## What it does
 
