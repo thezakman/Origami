@@ -1,5 +1,11 @@
 # Origami
 
+[![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/github/license/thezakman/Origami?color=green)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen?logo=pytest&logoColor=white)](tests/test_core.py)
+[![Last commit](https://img.shields.io/github/last-commit/thezakman/Origami)](https://github.com/thezakman/Origami/commits/main)
+[![Stars](https://img.shields.io/github/stars/thezakman/Origami?style=flat)](https://github.com/thezakman/Origami/stargazers)
+
 > Adaptive content discovery engine that **folds its strategy around the target's behavior, technology and response patterns.**
 
 Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it **calibrates before attacking**, fingerprints the stack (additively, per path-prefix), and then *folds* its strategy as evidence appears — by header, cookie, response, directory or file. Every finding becomes evidence that re-weights the modules and expands the wordlist in real time. With each run it also learns across targets.
@@ -14,6 +20,12 @@ Origami is an evolution of `ffuf`/`dirb`: instead of brute-forcing blindly, it *
   \  / adaptive |___/ content discovery
    \/
 ```
+
+## Demo
+
+A real run against the test target — fingerprint, findings streaming live, a **403 → 200 bypass**, and a leaked **`.env`** (AWS key + DB URI + an internal-host leak):
+
+![Origami scanning a target: live dashboard, fingerprint, a 403→200 bypass and a leaked .env](docs/demo.svg)
 
 ## Install
 
