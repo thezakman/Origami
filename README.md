@@ -186,7 +186,7 @@ Findings (16)  ·  fingerprint: iis, asp.net
 **Learning, hygiene & output**
 - **Cross-target memory** — SQLite corpus + k-NN over fingerprint vectors + association mining + n-gram, `www`/apex collapsed to one key; `--forget HOST|all` clears it.
 - **Request economy** (`--economy`) — Thompson-sampling bandit ranks candidates by learned hit-rate (auto-on under a WAF).
-- **Smart noise control** — 404/400 never hit, auth-wall redirects dropped, same-content collisions collapsed, one finding per resource (case-variant + cross-source dedup).
+- **Smart noise control** — 404/400 never hit; auth-wall and URL-canonicalization redirects dropped (an `/x/`→`/x` slash-strip or http→https is noise, only `/x`→`/x/` confirms a directory); same-content collisions collapsed; one finding per resource (case-variant + cross-source dedup).
 - **Authenticated-scan session detection** — warns if `-H` credentials don't actually authenticate, or if the session expires mid-scan.
 - **Mid-scan resume** (`--resume`) — checkpointed per directory; pick up exactly where an interrupted run stopped.
 - **Pentest-ready output** — live `rich` dashboard (never loses findings), JSON, self-contained HTML report, `--out` bundle (`params.txt`/`urls.txt`/graph), and **`--jsonl -`** to stream straight into the next tool (`origami https://t --jsonl - | nuclei`).

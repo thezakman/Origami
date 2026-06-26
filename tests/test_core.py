@@ -114,6 +114,24 @@ class TestClassify(unittest.TestCase):
         probe = make_probe(status=404, body=b"<html>not found</html>", url="http://t/x")
         self.assertIsNone(classify(p, probe, "wordlist", "/"))
 
+    def test_strip_slash_redirect_never_a_finding(self):
+        # the make.com case: a blanket 308 /x/ → /x (framework slash-canonicalization)
+        # must not be reported — it's not a discovered resource
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="t", base_url="https://t/")
+        for st in (301, 302, 308):
+            probe = make_probe(status=st, body=b"", url="https://t/authenticate/composer/",
+                               location="/authenticate/composer")
+            self.assertIsNone(classify(p, probe, "wordlist", "/"), f"{st} strip-slash leaked")
+
+    def test_add_slash_redirect_confirms_directory(self):
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="t", base_url="https://t/")
+        probe = make_probe(status=301, body=b"", url="https://t/admin", location="/admin/")
+        f = classify(p, probe, "wordlist", "/")
+        self.assertIsNotNone(f)                 # /admin → /admin/ confirms a directory
+        self.assertEqual(f.status, 301)
+
 
 class TestHarvestFold(unittest.TestCase):
     def test_harvestable_predicate(self):
@@ -2557,20 +2575,30 @@ class TestHeaderParse(unittest.TestCase):
 
 
 class TestDirRedirect(unittest.TestCase):
-    def test_self_redirect_relative(self):
+    def test_add_slash_is_a_dir(self):
         from origami.core.scanner import _is_self_redirect_dir
-        self.assertTrue(_is_self_redirect_dir("/admin/", "/admin"))     # added trailing slash
-        self.assertTrue(_is_self_redirect_dir("/admin", "/admin"))
-
-    def test_self_redirect_absolute(self):
-        from origami.core.scanner import _is_self_redirect_dir
+        self.assertTrue(_is_self_redirect_dir("/admin/", "/admin"))       # /admin → /admin/ (dir)
         self.assertTrue(_is_self_redirect_dir("http://h/admin/", "/admin"))
+
+    def test_strip_slash_is_not_a_dir(self):
+        # /admin/ → /admin (framework slash-canonicalization) is NOT a directory
+        from origami.core.scanner import _is_self_redirect_dir, _strips_trailing_slash
+        self.assertFalse(_is_self_redirect_dir("/admin", "/admin/"))
+        self.assertTrue(_strips_trailing_slash("/admin", "/admin/"))
+        self.assertFalse(_is_self_redirect_dir("/admin", "/admin"))       # same path, no slash added
 
     def test_cross_path_redirect_is_not_a_dir(self):
         from origami.core.scanner import _is_self_redirect_dir
         # /login 302 -> /gateway/login must NOT look like a directory self-redirect
         self.assertFalse(_is_self_redirect_dir("/gateway/login", "/login"))
         self.assertFalse(_is_self_redirect_dir("http://h/auth?next=/login", "/login"))
+
+    def test_redirect_kind_dir_vs_self(self):
+        from origami.core.baseline import _redirect_kind
+        self.assertEqual(_redirect_kind("http://h/admin", "http://h/admin/"), "DIR")   # add slash
+        self.assertEqual(_redirect_kind("http://h/cache/", "http://h/cache"), "SELF")  # strip slash
+        self.assertEqual(_redirect_kind("http://h/x", "https://h/x"), "SELF")          # scheme
+        self.assertTrue(_redirect_kind("http://h/a", "http://h/login").startswith("->"))
 
 
 class TestFoldHygiene(unittest.TestCase):

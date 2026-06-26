@@ -114,12 +114,24 @@ def _excluded(path: str, opts) -> bool:
 
 
 def _is_self_redirect_dir(location: str, path: str) -> bool:
-    """True when a 301/302 Location points at this same path (the server adding
-    a trailing slash) — the canonical "this is a directory" signal. Compares the
-    parsed path for EQUALITY (so /login → /gateway/login is not a self-redirect),
-    while still matching an absolute Location (http://host/x/) against its path.
+    """True when the Location ADDS a trailing slash to this same path (/x → /x/)
+    — the canonical "this is a directory" signal. Compares the parsed path for
+    EQUALITY (so /login → /gateway/login is not a self-redirect), matches an
+    absolute Location (http://host/x/), and — crucially — requires the slash to
+    be *added*: a STRIP (/x/ → /x) is framework canonicalization, not a directory.
     """
-    return urlparse(location).path.rstrip("/") == path.rstrip("/")
+    lp = urlparse(location).path
+    return lp.rstrip("/") == path.rstrip("/") and lp.endswith("/") and not path.endswith("/")
+
+
+def _strips_trailing_slash(location: str, path: str) -> bool:
+    """A redirect that removes this path's trailing slash (/x/ → /x) — blanket URL
+    canonicalization (Next.js etc.), so a trailing-slash candidate that gets it is
+    NOT a real directory and must not be recursed."""
+    if not location:
+        return False
+    lp = urlparse(location).path
+    return path.endswith("/") and lp.rstrip("/") == path.rstrip("/") and not lp.endswith("/")
 
 
 async def _guard(observer, label, coro, default):
@@ -1033,8 +1045,12 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # equality (not a suffix) so /login → /gateway/login isn't mistaken for a
         # directory self-redirect, while an absolute Location (http://h/x/) still
         # matches its own path.
-        is_dir = (cand.path.endswith("/")
-                  or (probe.status in (301, 302)
+        # A trailing-slash candidate is a directory UNLESS the server strips the
+        # slash back off (canonicalization → not a real dir); a no-slash candidate
+        # is a directory when the server adds the slash.
+        redir = 300 <= probe.status < 400
+        is_dir = ((cand.path.endswith("/") and not (redir and _strips_trailing_slash(probe.location, path)))
+                  or (probe.status in (301, 302, 308)
                       and _is_self_redirect_dir(probe.location, path)))
         if is_dir:
             dpath = path if path.endswith("/") else path + "/"

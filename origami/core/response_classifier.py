@@ -192,10 +192,13 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     if not probe.ok or probe.status in NOT_FOUND_STATUS:
         return None
 
-    # A redirect that LEAVES the requested path (→ /login, an auth wall, an SSO
-    # gateway, a Firebase/SockJS transport) isn't a discovery hit. Keep only
-    # self-redirects (/admin → /admin/) which reveal a real directory.
-    if 300 <= probe.status < 400 and _redirect_kind(probe.url, probe.location) != "SELF":
+    # A redirect is a discovery hit ONLY when it confirms a directory (/admin →
+    # /admin/). Everything else 3xx is dropped: a redirect that LEAVES the path
+    # (→ /login auth wall, SSO gateway, SockJS transport) AND pure URL
+    # canonicalization (/x/ → /x slash-strip, http→https, www) — the latter is a
+    # blanket framework behavior (e.g. Next.js) that would otherwise report every
+    # probed path as a 308 hit.
+    if 300 <= probe.status < 400 and _redirect_kind(probe.url, probe.location) != "DIR":
         return None
 
     # WAF block page → never a hit (it's the firewall, not the app). Record the

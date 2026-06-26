@@ -119,21 +119,26 @@ def _generalize_location(req_url: str, location: str) -> str:
 def _redirect_kind(req_url: str, location: str) -> str:
     """Classify a redirect so misses across different paths compare equal.
 
-      "SELF"  — redirect to the same path (http→https, www, trailing slash);
-                every path self-redirects, so this is a global wall.
+      "DIR"   — adds a trailing slash to THIS path (/x → /x/): the server
+                confirming a real directory. The only self-redirect worth a hit.
+      "SELF"  — same path otherwise (http→https, www, or STRIPPING the trailing
+                slash /x/ → /x — framework URL canonicalization). Every path
+                does it, so it's a global wall, not a discovery.
       "->X"   — redirect to a constant target (e.g. /action/login auth wall),
                 token-blanked so the random probe path doesn't leak in.
 
-    This is what makes a scheme-upgrade or login wall read as a single soft-404
-    pattern instead of "every path is a unique hit".
+    This is what makes a scheme-upgrade, slash-canonicalization or login wall
+    read as a single soft-404 pattern instead of "every path is a unique hit".
     """
     if not location:
         return ""
     loc = urljoin(req_url, location)
-    rp = urlparse(req_url).path.rstrip("/")
-    lp = urlparse(loc).path.rstrip("/")
-    if lp == rp:
-        return "SELF"
+    rpath = urlparse(req_url).path
+    lpath = urlparse(loc).path
+    if lpath.rstrip("/") == rpath.rstrip("/"):
+        if not rpath.endswith("/") and lpath == rpath + "/":   # /x → /x/ : a real directory
+            return "DIR"
+        return "SELF"                                          # /x/ → /x, scheme, www, loop
     return "->" + _generalize_location(req_url, loc)
 
 
