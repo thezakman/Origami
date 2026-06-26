@@ -271,13 +271,15 @@ class Engine:
                 await self._sleep_before()
                 try:
                     probe = await self._stream_probe(url, method, keep_body, kw)
-                except (httpx.TransportError, httpx.HTTPError) as e:
+                except (httpx.TransportError, httpx.HTTPError, OSError) as e:
                     # Transient transport failure (timeout, connection reset/refused,
-                    # DNS). Retry, but do NOT treat it as throttle pushback: a handful
-                    # of slow/dead URLs must not collapse global concurrency (and
-                    # inflate pushback_events) for the whole, otherwise-healthy scan.
-                    # Only an explicit 429/503 status (below) is a reliable overload
-                    # signal. The held in-flight slot already slows us on slow hosts.
+                    # DNS, or a raw ssl.SSLError — a subclass of OSError — that escapes
+                    # httpx's wrapping on a flaky TLS read, common with CDN/WAF
+                    # tarpitting). Retry, but do NOT treat it as throttle pushback: a
+                    # handful of slow/dead URLs must not collapse global concurrency
+                    # (and inflate pushback_events) for the whole, otherwise-healthy
+                    # scan. Only an explicit 429/503 status (below) is a reliable
+                    # overload signal. The held in-flight slot already slows us.
                     last_err = f"{type(e).__name__}: {e}"
                     continue
                 except (ValueError, UnicodeError, httpx.InvalidURL) as e:

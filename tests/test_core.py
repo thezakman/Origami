@@ -2278,6 +2278,24 @@ class TestEngineBackoff(unittest.TestCase):
         self.assertEqual(e.pushback_events, 0)           # not counted as throttle
         self.assertEqual(e._delay_floor, 0.0)
 
+    def test_raw_ssl_error_does_not_crash_fetch(self):
+        # a raw ssl.SSLError (subclass of OSError) escaping httpx's wrapping on a
+        # flaky TLS read must become an error probe, not crash the whole scan
+        import asyncio, ssl
+        from origami.core.httpclient import Engine, EngineConfig
+        e = Engine(EngineConfig(concurrency=10, max_retries=1))
+        async def run():
+            async with e:
+                async def boom(url, method, keep_body, kw):
+                    raise ssl.SSLError("record layer failure (_ssl.c:2580)")
+                e._stream_probe = boom
+                return await e.fetch("https://t/x")
+        pr = asyncio.run(run())
+        self.assertFalse(pr.ok)                 # error probe, not an exception
+        self.assertIn("SSLError", pr.error)
+        self.assertEqual(e.pushback_events, 0)  # transport fault ≠ throttle
+        self.assertEqual(e._limit, 10.0)        # concurrency not collapsed
+
     def test_real_429_still_backs_off(self):
         # the genuine throttle signal must still trigger AIMD backoff
         import asyncio
