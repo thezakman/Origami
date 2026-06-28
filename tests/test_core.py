@@ -2802,6 +2802,11 @@ class TestCachePoison(unittest.TestCase):
                 base_hdrs = {"cache-control": "public, max-age=60"}
                 if cb in self.store:                       # cache HIT on a poisoned key
                     return outer._cprobe(self.store[cb], url, {**base_hdrs, "x-cache": "HIT"})
+                if mode == "echo":
+                    # endpoint reflects its OWN query string heavily, ignores headers —
+                    # the classic differ-signal trap (each cb differs the body).
+                    body = b"<html>" + (b"q-" + cb.encode() + b" ") * 40 + b"</html>"
+                    return outer._cprobe(body, url, base_hdrs)
                 xfh = (headers or {}).get("X-Forwarded-Host", "")
                 if xfh and "example.com" in xfh:
                     body = b"<html><a href='https://" + xfh.encode() + b"/login'>go</a></html>"
@@ -2840,6 +2845,14 @@ class TestCachePoison(unittest.TestCase):
 
     def test_keyed_input_not_flagged(self):
         result, _ = self._run_fold("keyed")
+        f = result.findings[0]
+        self.assertNotIn("poisonable", f.tags)
+        self.assertNotIn("cache", f.tags)
+
+    def test_query_reflecting_endpoint_not_flagged_via_differ(self):
+        # An endpoint that echoes its own cache-buster must NOT be flagged just
+        # because each probe's body differs (it differs by the cb token alone).
+        result, _ = self._run_fold("echo")
         f = result.findings[0]
         self.assertNotIn("poisonable", f.tags)
         self.assertNotIn("cache", f.tags)

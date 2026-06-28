@@ -1518,6 +1518,12 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
         # full probes regardless (the cache may simply not advertise itself).
         if intensity != "full" and not (base_cacheable or profile.cache_layer):
             continue
+        # If the endpoint echoes its OWN cache-buster, every probe's body differs
+        # from the baseline by the (distinct) cb token alone — the "response
+        # differs → unkeyed" signal is then worthless and would flag every header.
+        # Detect it once and fall back to the robust signal only: a header canary
+        # that reflects AND survives the cache (it can't come from the query).
+        echoes = f"{run}base".encode() in base.body.lower()
         for i, (name, tmpl) in enumerate(hdrs):
             if opts.max_requests and engine.spent >= opts.max_requests:
                 return
@@ -1535,7 +1541,7 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
                                                     probe.content_type).get(name, "")
                 if not ctx and cache_poison.canary_in_headers(probe.headers, canary):
                     ctx = "header"
-            unkeyed = _differs(base, probe)
+            unkeyed = _differs(base, probe) and not echoes
             if not (ctx or unkeyed):
                 continue
             # Confirm cacheability on OUR throwaway key: re-fetch the SAME ?cb
