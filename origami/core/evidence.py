@@ -57,6 +57,7 @@ class TargetProfile:
     case_sensitive: bool | None = None     # None == not determined yet
     wildcard: bool = False
     waf: str = ""                          # detected WAF/block product, if any
+    cache_layer: str = ""                  # detected CDN/cache layer (cloudflare/fastly/varnish/…), if any
     enabled_extensions: set[str] = field(default_factory=set)
     parameters: set[str] = field(default_factory=set)  # harvested param names (pentest intel)
     evidence: list[Evidence] = field(default_factory=list)

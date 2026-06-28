@@ -99,7 +99,7 @@ ORIGIN_STYLE = {
     "apidocs": "bright_blue", "wellknown": "bright_cyan", "graphql": "bright_magenta",
     "header": "blue", "methods": "bold red", "bypass403": "bold green",
     "harvest": "bright_blue", "vhost": "bold cyan", "wayback": "bright_green",
-    "index-hidden": "yellow",
+    "cache-poison": "bold magenta", "index-hidden": "yellow",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
@@ -110,6 +110,7 @@ TAG_STYLE = {
     "upload": "bright_yellow", "debug": "bright_red", "vhost": "bold cyan",
     "listing": "bold yellow", "leak": "bold black on yellow", "bypass": "bold black on green",
     "param": "bold green", "xss-lead": "bold black on bright_red",
+    "cache": "cyan", "poisonable": "bold white on magenta",
 }
 
 
