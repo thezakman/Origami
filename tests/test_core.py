@@ -2728,5 +2728,131 @@ class TestEndToEndScan(unittest.TestCase):
         self.assertTrue(any("bypass" in (f.tags or []) for f in byp))
 
 
+class TestCachePoison(unittest.TestCase):
+    def test_detect_cache_layer(self):
+        from origami.modules.cache_poison import detect_cache_layer
+        self.assertEqual(detect_cache_layer({"cf-ray": "abc", "server": "cloudflare"}), "cloudflare")
+        self.assertEqual(detect_cache_layer({"x-served-by": "cache-fra"}), "fastly")
+        self.assertEqual(detect_cache_layer({"x-varnish": "12345"}), "varnish")
+        self.assertEqual(detect_cache_layer({"x-amz-cf-id": "z"}), "cloudfront")
+        self.assertEqual(detect_cache_layer({"via": "1.1 varnish (Varnish/6.0)"}), "varnish")
+        self.assertEqual(detect_cache_layer({"x-cache": "MISS"}), "cache")   # generic
+        self.assertEqual(detect_cache_layer({"content-type": "text/html"}), "")
+
+    def test_cache_status(self):
+        from origami.modules.cache_poison import cache_status
+        self.assertEqual(cache_status({"cf-cache-status": "HIT"}), "HIT")
+        self.assertEqual(cache_status({"x-cache": "MISS, MISS"}), "MISS")
+        self.assertEqual(cache_status({"x-cache": "HIT, MISS"}), "HIT")   # any layer HIT → cached
+        self.assertEqual(cache_status({"cf-cache-status": "DYNAMIC"}), "MISS")
+        self.assertEqual(cache_status({}), "")
+
+    def test_is_cacheable(self):
+        from origami.modules.cache_poison import is_cacheable
+        self.assertFalse(is_cacheable({"cache-control": "no-store, private"}))
+        self.assertFalse(is_cacheable({"cache-control": "no-cache"}))
+        self.assertFalse(is_cacheable({}))
+        self.assertTrue(is_cacheable({"cache-control": "public, max-age=300"}))
+        self.assertTrue(is_cacheable({"age": "42"}))
+        self.assertTrue(is_cacheable({"cf-cache-status": "HIT"}))
+        self.assertTrue(is_cacheable({"expires": "Wed, 21 Oct 2099 07:28:00 GMT"}))
+
+    def test_header_set_intensity_and_custom(self):
+        from origami.modules.cache_poison import header_set
+        light, auto, full = header_set("light"), header_set("auto"), header_set("full")
+        self.assertLess(len(light), len(auto))
+        self.assertLess(len(auto), len(full))
+        # X-Forwarded-Host (the #1 vector) is present at every level
+        for s in (light, auto, full):
+            self.assertTrue(any(n == "X-Forwarded-Host" for n, _ in s))
+        # custom pairs are appended, deduped by (lower name, value)
+        custom = [("X-Custom-Cache", "evil"), ("x-forwarded-host", "{canary}.example.com")]
+        merged = header_set("light", custom)
+        self.assertIn(("X-Custom-Cache", "evil"), merged)
+        self.assertEqual(sum(1 for n, v in merged
+                             if n.lower() == "x-forwarded-host" and v == "{canary}.example.com"), 1)
+
+    # --- fold: a fake cache that keys on the query but NOT on the headers ----
+    def _cprobe(self, body, url, headers):
+        p = make_probe(200, body, url=url, ctype="text/html")
+        p.headers = headers
+        return p
+
+    def _run_fold(self, mode):
+        """mode: 'poison' (reflected+cached), 'lead' (reflected, not cached),
+        'keyed' (header ignored)."""
+        import asyncio
+        from urllib.parse import urlparse, parse_qs
+        from origami.core.scanner import _cache_poison_fold, ScanResult, ScanOptions
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        outer = self
+
+        class CacheEngine:
+            total_requests = 0
+            spent = 0
+            def __init__(self):
+                self.calls = []
+                self.store = {}          # cb token -> cached (poisoned) body
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                CacheEngine.total_requests += 1
+                CacheEngine.spent += 1
+                self.calls.append((url, headers or {}))
+                cb = parse_qs(urlparse(url).query).get("cb", [""])[0]
+                base_hdrs = {"cache-control": "public, max-age=60"}
+                if cb in self.store:                       # cache HIT on a poisoned key
+                    return outer._cprobe(self.store[cb], url, {**base_hdrs, "x-cache": "HIT"})
+                xfh = (headers or {}).get("X-Forwarded-Host", "")
+                if xfh and "example.com" in xfh:
+                    body = b"<html><a href='https://" + xfh.encode() + b"/login'>go</a></html>"
+                    if mode == "poison":
+                        self.store[cb] = body              # the cache stores our injected body
+                        return outer._cprobe(body, url, base_hdrs)
+                    if mode == "lead":
+                        return outer._cprobe(body, url, base_hdrs)   # reflected but never cached
+                # keyed / baseline / confirm-without-header → clean page
+                return outer._cprobe(b"<html>clean homepage</html>", url, base_hdrs)
+
+        profile = TargetProfile(host="t.example.com", base_url="https://t.example.com/")
+        profile.cache_layer = "cloudflare"
+        result = ScanResult(profile=profile)
+        result.findings.append(Finding("https://t.example.com/page", 200, 30, "text/html",
+                                       0.5, "wordlist"))
+        eng = CacheEngine()
+        asyncio.run(_cache_poison_fold(eng, profile, result, ScanOptions(cache_poison="auto"),
+                                       NullObserver(), simhash(b"<html>clean homepage</html>")))
+        return result, eng
+
+    def test_reflected_and_cached_is_poisonable(self):
+        result, _ = self._run_fold("poison")
+        f = result.findings[0]
+        self.assertIn("poisonable", f.tags)
+        self.assertIn("cache", f.tags)
+        self.assertGreaterEqual(f.confidence, 0.9)
+        self.assertIn("cache poisoning", f.note)
+
+    def test_reflected_but_not_cached_is_lead_only(self):
+        result, _ = self._run_fold("lead")
+        f = result.findings[0]
+        self.assertIn("cache", f.tags)
+        self.assertNotIn("poisonable", f.tags)
+        self.assertIn("lead", f.note)
+
+    def test_keyed_input_not_flagged(self):
+        result, _ = self._run_fold("keyed")
+        f = result.findings[0]
+        self.assertNotIn("poisonable", f.tags)
+        self.assertNotIn("cache", f.tags)
+
+    def test_safety_every_probe_rides_a_cache_buster(self):
+        # The core safety invariant: we NEVER touch the real cache key. Every
+        # request carries a unique ?cb= token; the bare URL is never fetched.
+        _, eng = self._run_fold("poison")
+        self.assertTrue(eng.calls, "fold made no requests")
+        for url, _hdrs in eng.calls:
+            self.assertIn("cb=", url, f"probe without a cache-buster: {url}")
+            self.assertNotEqual(url, "https://t.example.com/page")   # never the real key
+
+
 if __name__ == "__main__":
     unittest.main()

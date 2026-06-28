@@ -165,6 +165,8 @@ async def run(args: argparse.Namespace) -> int:
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
         wayback=args.wayback or args.gau, gau=args.gau,
+        cache_poison=(args.cache_poison or ("auto" if args.cache_headers else "")),
+        cache_headers=args.cache_headers,
         filters=_build_filters(args),
     )
 
@@ -225,6 +227,10 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  bypass-hdr: {src}")
         if args.params:
             print(f"  params   : reflection fuzzing on dynamic endpoints")
+        if args.cache_poison or args.cache_headers:
+            lvl = args.cache_poison or "auto"
+            extra = f" + {args.cache_headers}" if args.cache_headers else ""
+            print(f"  cache    : poisoning probe ({lvl}{extra}) — throwaway cache-buster, never the real key")
         if args.wayback or args.gau:
             print(f"  history  : {'gau/waybackurls (native fallback)' if args.gau else 'Wayback CDX + Common Crawl'}")
         if args.rate:
@@ -466,6 +472,16 @@ def main() -> None:
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
+    ap.add_argument("--cache-poison", nargs="?", const="auto", default=None,
+                    choices=["light", "auto", "full"], metavar="light|auto|full",
+                    help="web cache poisoning: probe cacheable endpoints for UNKEYED inputs "
+                         "(X-Forwarded-Host & friends) that reflect or change the cached "
+                         "response. Safe — every probe rides a throwaway cache-buster, never "
+                         "the real key. Bare = 'auto' (only where caching is detected); "
+                         "'light' = core headers; 'full' = exhaustive (all headers, any endpoint)")
+    ap.add_argument("--cache-headers", metavar="FILE",
+                    help="custom unkeyed-header wordlist for --cache-poison ('Header: value' "
+                         "lines), added to the built-in set (implies --cache-poison)")
     ap.add_argument("--wayback", action="store_true",
                     help="fold HISTORICAL URLs (Wayback Machine CDX + Common Crawl) as seeds — "
                          "legacy/forgotten paths that may still respond; runs in the background "

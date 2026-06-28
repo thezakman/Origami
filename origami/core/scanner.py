@@ -40,7 +40,7 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
-from origami.modules import bypass403, leaks, paramfuzz, secrets, session, vhost, waf
+from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
                                         methods, robots, shortname, wayback, wellknown)
 from origami.output.ui import NullObserver
@@ -196,6 +196,8 @@ class ScanOptions:
     bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
     openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
     param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
+    cache_poison: str = ""         # "" = off; "light"|"auto"|"full" — probe unkeyed inputs for cache poisoning (--cache-poison)
+    cache_headers: str | None = None  # custom unkeyed-header wordlist for --cache-poison (None → bundled set)
     wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
     gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
@@ -263,6 +265,14 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     observer.log(f"root: {root.status} · {root.length}B · "
                  f"{root.content_type or 'no ctype'}", 1)
+
+    # Passive cache-layer fingerprint (free — reads headers we already captured).
+    # Always on; just enriches the profile and gates the active --cache-poison fold.
+    profile.cache_layer = cache_poison.detect_cache_layer(root.headers)
+    if profile.cache_layer:
+        cs = cache_poison.cache_status(root.headers)
+        observer.log(f"cache-layer: {profile.cache_layer}" + (f" ({cs})" if cs else ""),
+                     1, style="cyan")
 
     # Authenticated-scan sanity check: if -H credentials were given but the root
     # still looks like an auth wall, the session almost certainly isn't working —
@@ -810,6 +820,14 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     if opts.param_fuzz:
         await _guard(observer, "params",
                      _param_fold(engine, profile, result, opts, observer), None)
+
+    # 7.6 cache poisoning — probe unkeyed inputs (X-Forwarded-Host & friends) on
+    # cacheable endpoints; a reflected-and-cached or behaviour-changing unkeyed
+    # input is a poisoning primitive. Safe: every probe rides a throwaway
+    # cache-buster, never the real key. Opt-in.
+    if opts.cache_poison:
+        await _guard(observer, "cache-poison",
+                     _cache_poison_fold(engine, profile, result, opts, observer, root_simhash), None)
 
     # 8. virtual-host discovery — Host-header fuzzing on the target IP (opt-in).
     if opts.vhost:
@@ -1428,6 +1446,128 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
     if total:
         observer.log(f"params: {total} reflected parameter(s) flagged — see the 'param' tag",
                      0, style="cyan")
+
+
+MAX_CACHE_TARGETS = 12          # cap endpoints probed for cache poisoning
+MAX_CACHE_TARGETS_LIGHT = 4     # tighter cap at --cache-poison light
+
+
+def _cache_candidate(f) -> bool:
+    """A 2xx endpoint worth probing for cache poisoning."""
+    return 200 <= f.status < 300 and f.length > 0
+
+
+def _differs(a, b) -> bool:
+    """True if probe `b`'s response meaningfully differs from baseline `a` —
+    a different status or a body beyond soft-404 simhash distance."""
+    if not (a.ok and b.ok):
+        return False
+    if a.status != b.status:
+        return True
+    return hamming(a.body_simhash, b.body_simhash) > bl.SIMHASH_MISS_DISTANCE
+
+
+async def _cache_poison_fold(engine, profile, result, opts, observer, root_simhash) -> None:
+    """Probe cacheable endpoints for unkeyed inputs (X-Forwarded-Host & friends).
+
+    For each target: fetch a cache-busted baseline, then replay it with one
+    unkeyed header at a time (each on its OWN throwaway cache-buster). An input
+    is interesting when the response either reflects its canary or differs from
+    the baseline (unkeyed-but-processed). It's CONFIRMED poisonable when a final
+    re-fetch of that same throwaway key — WITHOUT the header — still serves the
+    injected content (proof the cache stored it). Safety invariant: every request
+    carries a unique `?cb=` token, so we never read or write the cache key real
+    users hit; confirmation re-fetches our sandbox key, never the bare URL."""
+    intensity = opts.cache_poison or "auto"
+    targets = [f for f in result.findings if _cache_candidate(f)]
+    if not targets:
+        return
+    # cacheable/api endpoints first, then shorter URLs; cap the radius
+    targets.sort(key=lambda f: ("cache" not in getattr(f, "tags", []),
+                                "api" not in getattr(f, "tags", []),
+                                len(f.url)))
+    cap = MAX_CACHE_TARGETS_LIGHT if intensity == "light" else MAX_CACHE_TARGETS
+    targets = targets[:cap]
+    extra = bypass403.load_header_pairs(opts.cache_headers) if opts.cache_headers else None
+    if opts.cache_headers and not extra:
+        observer.log(f"cache-poison: header wordlist {opts.cache_headers} empty or "
+                     f"unreadable — using the built-in set", 0, style="yellow")
+    hdrs = cache_poison.header_set(intensity, extra)
+    run = paramfuzz.run_prefix()
+    observer.phase("cache-poison")
+    observer.log(f"cache-poison: probing {len(targets)} endpoints for unkeyed inputs "
+                 f"({intensity}, {len(hdrs)} headers)"
+                 + (f" · cache-layer {profile.cache_layer}" if profile.cache_layer else ""),
+                 0, style="cyan")
+    observer.start_prefix("cache-poison", len(targets) * (1 + len(hdrs)))
+    found = 0
+    for f in targets:
+        if opts.max_requests and engine.spent >= opts.max_requests:
+            break
+        url = f.url
+        observer.substep(urlparse(url).path.rsplit("/", 1)[-1] or url)
+        # cache-busted baseline — the sandbox key nothing else ever touches
+        burl = cache_poison.with_buster(url, f"{run}base")
+        base = await engine.fetch(burl, keep_body=True)
+        observer.tick(hit=False); observer.request(burl, base.status, False)
+        if not (base.ok and base.body):
+            continue
+        base_cacheable = (cache_poison.is_cacheable(base.headers)
+                          or cache_poison.cache_status(base.headers) == "HIT")
+        # auto/light only spend the header budget where caching is plausible;
+        # full probes regardless (the cache may simply not advertise itself).
+        if intensity != "full" and not (base_cacheable or profile.cache_layer):
+            continue
+        for i, (name, tmpl) in enumerate(hdrs):
+            if opts.max_requests and engine.spent >= opts.max_requests:
+                return
+            canary = f"{run}cp{i}"
+            has_can = cache_poison.has_canary(tmpl)
+            value = tmpl.format(canary=canary) if has_can else tmpl
+            purl = cache_poison.with_buster(url, f"{run}h{i}")   # fresh key per probe
+            probe = await engine.fetch(purl, keep_body=True, headers={name: value})
+            observer.tick(hit=False); observer.request(purl, probe.status, False)
+            if not probe.ok:
+                continue
+            ctx = ""
+            if has_can and probe.body:
+                ctx = paramfuzz.reflection_contexts(probe.body, {canary: name},
+                                                    probe.content_type).get(name, "")
+                if not ctx and cache_poison.canary_in_headers(probe.headers, canary):
+                    ctx = "header"
+            unkeyed = _differs(base, probe)
+            if not (ctx or unkeyed):
+                continue
+            # Confirm cacheability on OUR throwaway key: re-fetch the SAME ?cb
+            # WITHOUT the header. If the injected content still comes back, the
+            # cache stored our poisoned response → confirmed. Never the bare URL.
+            confirm = await engine.fetch(purl, keep_body=True)
+            observer.request(purl, confirm.status, False)
+            if has_can and ctx:
+                cached = (confirm.ok and (canary.encode() in confirm.body.lower()
+                          or cache_poison.canary_in_headers(confirm.headers, canary)))
+            else:
+                cached = (_differs(base, confirm) and not _differs(probe, confirm))
+            cached = cached or cache_poison.cache_status(confirm.headers) == "HIT"
+            where = ctx or "behaviour-change"
+            if cached:
+                note = f"cache poisoning: unkeyed '{name}' reflected/cached ({where})"
+                f.tags = list(dict.fromkeys(list(f.tags) + ["cache", "poisonable"]))
+                f.confidence = max(f.confidence, 0.9)
+                style = "bold magenta"
+            else:
+                note = f"cache-poison lead: unkeyed '{name}' ({where}) — cacheability unconfirmed"
+                f.tags = list(dict.fromkeys(list(f.tags) + ["cache"]))
+                style = "magenta"
+            f.note = (f.note + " · " if f.note else "") + note
+            observer.log(f"cache-poison: {observer.disp(url)} ← {note}", 0, style=style)
+            if opts.finding_sink is not None:
+                opts.finding_sink(f)
+            found += 1
+            break                           # one primitive per endpoint is enough
+    if found:
+        observer.log(f"cache-poison: {found} endpoint(s) with unkeyed inputs flagged "
+                     f"— see the 'poisonable'/'cache' tag", 0, style="cyan")
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:
