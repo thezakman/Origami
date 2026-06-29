@@ -51,6 +51,43 @@ def _is_asset(path: str) -> bool:
     return "." in base and base.rsplit(".", 1)[-1].lower() in _ASSET_EXT
 
 
+import re as _re
+
+# Delimiters that separate a filename into name/hash/extension segments.
+_FP_SEP = _re.compile(r"[.\-_~]")
+
+
+def _looks_fingerprinted(path: str) -> bool:
+    """True when a path's filename carries a build/content hash (webpack/Vite
+    bundles, GUIDs, timestamps): `app.a1b2c3d4.js`, `application-0912i831283.js`,
+    `f47ac10b-58cc-…html`, `report-20231015.csv`. These are unique per host+build
+    — they never transfer cross-target and only pollute the corpus, recall and
+    the n-gram. `_is_asset` misses them (they're `.js`/`.css`); this catches the
+    *name*. Kept on purpose: words, short tokens and lib+version names
+    (`bootstrap4`, `base64url`, `error404`, `jquery-3.6.0.min`, `oauth2`)."""
+    base = (path or "").rsplit("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    if "." in base:                                 # drop the final extension
+        base = base.rsplit(".", 1)[0]
+    for seg in _FP_SEP.split(base.lower()):
+        n = len(seg)
+        if n < 8 or not seg.isalnum():
+            continue
+        if seg.isdigit():                           # long pure digits → timestamp/epoch/id
+            return True
+        if all(c in "0123456789abcdef" for c in seg):   # hex blob → sha/git/contenthash
+            return True
+        digits = sum(c.isdigit() for c in seg)
+        if digits >= 2 and (digits / n >= 0.4 or n >= 16):   # digit-heavy / very long mixed token
+            return True
+    return False
+
+
+def _is_noise(path: str) -> bool:
+    """A path that carries no cross-target signal — a static asset OR a
+    content-hashed/fingerprinted filename. Dropped on both corpus write and read."""
+    return _is_asset(path) or _looks_fingerprinted(path)
+
+
 def _norm_host(host: str) -> str:
     """Canonical host key for memory: lower-cased, no port, no leading `www.` —
     so `www.x.com` and `x.com` share one corpus/fingerprint and transfer learning
@@ -155,7 +192,7 @@ class Memory:
                  LIMIT ?""",
             (*techs, exclude_host, *_AMBIENT_PATHS, limit),
         ).fetchall()
-        return [r[0] for r in rows if not _is_asset(r[0])]
+        return [r[0] for r in rows if not _is_noise(r[0])]
 
     def recall_knn(self, profile, k: int = 5, limit: int = 200) -> list[str]:
         """Prime from the k most *similar* past hosts (cosine over fingerprint
@@ -181,7 +218,7 @@ class Memory:
         scores: dict[str, float] = defaultdict(float)
         for s, host in sims[:k]:
             for path, _ in self.prior_findings(host):
-                if path not in _AMBIENT_PATHS and not _is_asset(path):  # ambient/asset paths transfer no signal
+                if path not in _AMBIENT_PATHS and not _is_noise(path):  # ambient/asset/hashed paths transfer no signal
                     scores[path] += s
         return sorted(scores, key=lambda p: -scores[p])[:limit]
 
@@ -208,7 +245,7 @@ class Memory:
                 "WHERE host IN (SELECT host FROM corpus WHERE path = ?) "
                 "GROUP BY path", (a,)).fetchall()
             for b, cnt in rows:
-                if b in found or b in _AMBIENT_PATHS or _is_asset(b):  # skip self + ambient + static assets
+                if b in found or b in _AMBIENT_PATHS or _is_noise(b):  # skip self + ambient + assets + hashed
                     continue
                 conf = cnt / n_a
                 if conf >= min_conf and conf > best.get(b, 0):
@@ -248,18 +285,24 @@ class Memory:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
-    def recall_names(self, limit: int = 2000) -> list[str]:
-        """Distinct file/dir basenames (extension stripped) seen across ALL past
-        targets — the cross-target name corpus that lets the shortscan completer
-        reverse an 8.3 prefix into a real name it has met before (§4 loop)."""
-        names: set[str] = set()
-        for (path,) in self.db.execute("SELECT DISTINCT path FROM corpus"):
+    def recall_names(self, limit: int = 2000, min_hosts: int = 2) -> list[str]:
+        """Distinct file/dir basenames (extension stripped) seen on at least
+        `min_hosts` DISTINCT past hosts — the cross-target name corpus that lets
+        the shortscan completer reverse an 8.3 prefix into a real name it has met
+        before (§4 loop). The frequency floor keeps host-specific one-offs (and
+        any content-hashed name that slipped in) out of the n-gram; the scanner
+        still trains on the current target's own vocabulary alongside these."""
+        hosts_per_name: dict[str, set[str]] = defaultdict(set)
+        for path, host in self.db.execute("SELECT DISTINCT path, host FROM corpus"):
+            if _is_noise(path):                       # never feed hashed/asset names to the completer
+                continue
             base = (path or "").rstrip("/").rsplit("/", 1)[-1]
             if "." in base:
                 base = base.rsplit(".", 1)[0]
             base = base.lower()
             if 3 <= len(base) <= 40 and base.replace("_", "").replace("-", "").isalnum():
-                names.add(base)
+                hosts_per_name[base].add(host)
+        names = [n for n, hosts in hosts_per_name.items() if len(hosts) >= min_hosts]
         return sorted(names)[:limit]
 
     # ---- persistence -------------------------------------------------------
@@ -292,13 +335,34 @@ class Memory:
         for f in result.findings:
             if f.status in (200, 204, 301, 302, 401, 403):
                 p = _path(f.url)
-                if _is_asset(p):
+                if _is_noise(p):
                     continue
                 self.db.execute(
                     "INSERT OR REPLACE INTO corpus VALUES (?,?,?)",
                     (host, p, f.status))
+        # Self-heal: drop any fingerprinted rows this host accumulated before the
+        # filter existed (content-hashed bundles can't be expressed in SQL, so
+        # filter in Python over just this host's rows — cheap, runs once per scan).
+        stale = [p for (p,) in self.db.execute(
+            "SELECT path FROM corpus WHERE host = ?", (host,)) if _looks_fingerprinted(p)]
+        for p in stale:
+            self.db.execute("DELETE FROM corpus WHERE host = ? AND path = ?", (host, p))
         self.db.commit()
         return run_id
+
+    def prune_fingerprinted(self) -> int:
+        """Sweep the whole corpus (and findings) and delete every content-hashed
+        /fingerprinted path — the one-off build artifacts that carry no
+        cross-target signal. Returns the number of corpus rows removed."""
+        victims = [p for (p,) in self.db.execute("SELECT DISTINCT path FROM corpus")
+                   if _looks_fingerprinted(p)]
+        removed = 0
+        for p in victims:
+            removed += self.db.execute(
+                "DELETE FROM corpus WHERE path = ?", (p,)).rowcount
+            self.db.execute("DELETE FROM findings WHERE path = ?", (p,))
+        self.db.commit()
+        return removed
 
     def forget(self, host: str | None = None) -> int:
         """Erase memory: one host (normalized, www/apex together) or — when host

@@ -1710,14 +1710,37 @@ class TestRecallNames(unittest.TestCase):
         from origami.core.response_classifier import Finding
         with tempfile.TemporaryDirectory() as d:
             m = Memory(Path(d) / "m.sqlite")
-            p = TargetProfile(host="a", base_url="http://a/")
-            r = ScanResult(profile=p, findings=[
-                Finding("http://a/Administration.aspx", 200, 1, "", 0.9, "x"),
-                Finding("http://a/painel_novo/", 301, 1, "", 0.85, "x")])
-            m.record_run(p, r)
+            # names must appear on >=2 DISTINCT hosts to be recalled (freq floor)
+            for host in ("a", "b"):
+                p = TargetProfile(host=host, base_url=f"http://{host}/")
+                r = ScanResult(profile=p, findings=[
+                    Finding(f"http://{host}/Administration.aspx", 200, 1, "", 0.9, "x"),
+                    Finding(f"http://{host}/painel_novo/", 301, 1, "", 0.85, "x")])
+                m.record_run(p, r)
             names = m.recall_names()
             self.assertIn("administration", names)   # stem, lowercased
             self.assertIn("painel_novo", names)       # dir basename
+            m.close()
+
+    def test_recall_names_freq_floor_and_hash(self):
+        import tempfile
+        from pathlib import Path
+        from origami.brain.memory import Memory
+        with tempfile.TemporaryDirectory() as d:
+            m = Memory(Path(d) / "m.sqlite")
+            # 'shared' on 2 hosts, 'oneoff' on 1, a hashed bundle on 2
+            m.db.execute("INSERT INTO corpus VALUES ('h1','/shared.aspx',200)")
+            m.db.execute("INSERT INTO corpus VALUES ('h2','/shared.aspx',200)")
+            m.db.execute("INSERT INTO corpus VALUES ('h1','/oneoff.aspx',200)")
+            # hyphen-delimited hash passes the alnum guard → must be caught by _is_noise
+            m.db.execute("INSERT INTO corpus VALUES ('h1','/application-0912i831283.js',200)")
+            m.db.execute("INSERT INTO corpus VALUES ('h2','/application-0912i831283.js',200)")
+            m.db.commit()
+            names = m.recall_names()
+            self.assertIn("shared", names)            # >=2 hosts → recalled
+            self.assertNotIn("oneoff", names)         # 1 host → below the floor
+            # hashed bundle never feeds the n-gram (even on >=2 hosts)
+            self.assertNotIn("application-0912i831283", names)
             m.close()
 
 
@@ -1929,6 +1952,77 @@ class TestAssociation(unittest.TestCase):
             self.assertIn("/admin/", paths)
             self.assertIn("/app.css", paths)           # css kept (shared names transfer)
             self.assertNotIn("/logo.png", paths)       # image dropped
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_looks_fingerprinted(self):
+        from origami.brain.memory import _looks_fingerprinted as fp
+        # build hashes / GUIDs / timestamps → fingerprinted (dropped)
+        for p in ("/static/app.a1b2c3d4.js", "/js/application-0912i831283.js",
+                  "/main.8f3a2b1c.css", "/runtime~abcdef12.js",
+                  "/f47ac10b-58cc-4372-a567-0e02b2c3d479.html",
+                  "/vendor.deadbeef.js", "/report-20231015.csv", "/bundle.1700000000.js"):
+            self.assertTrue(fp(p), f"should be fingerprinted: {p}")
+        # real names / lib+version / words → kept
+        for p in ("/app.js", "/bootstrap.css", "/jquery.min.js",
+                  "/bootstrap-4.5.2.min.js", "/bootstrap4.min.js", "/base64url.js",
+                  "/error404.html", "/administration.aspx", "/oauth2/authorize",
+                  "/painel_novo/", "/api/v2/users", "/login"):
+            self.assertFalse(fp(p), f"should be kept: {p}")
+
+    def test_record_run_excludes_hashed_bundles(self):
+        import os, tempfile
+        from origami.brain.memory import Memory
+        from origami.core.evidence import TargetProfile
+        class R:
+            def __init__(self, findings): self.findings = findings; self.requests_made = 5
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            p = TargetProfile(host="h", base_url="http://h/")
+            m.record_run(p, R([make_finding("http://h/app.js", 200),
+                               make_finding("http://h/app.a1b2c3d4.js", 200)]))
+            paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
+            self.assertIn("/app.js", paths)            # shared name kept
+            self.assertNotIn("/app.a1b2c3d4.js", paths)  # content-hashed bundle dropped
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_recall_skips_fingerprinted(self):
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            for h in ("h1", "h2"):
+                m.db.execute("INSERT INTO host_techs VALUES (?, 'php')", (h,))
+                m.db.execute("INSERT INTO corpus VALUES (?, '/admin/', 200)", (h,))
+                m.db.execute("INSERT INTO corpus VALUES (?, '/app.a1b2c3d4.js', 200)", (h,))
+            m.db.commit()
+            paths = m.recall(["php"], exclude_host="other")
+            self.assertIn("/admin/", paths)
+            self.assertNotIn("/app.a1b2c3d4.js", paths)   # hashed never primed
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_prune_fingerprinted(self):
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            for h in ("h1", "h2"):
+                m.db.execute("INSERT INTO corpus VALUES (?, '/admin/', 200)", (h,))
+                m.db.execute("INSERT INTO corpus VALUES (?, '/app.a1b2c3d4.js', 200)", (h,))
+            m.db.execute("INSERT INTO corpus VALUES ('h1', '/main.8f3a2b1c.css', 200)")
+            m.db.commit()
+            removed = m.prune_fingerprinted()
+            self.assertEqual(removed, 3)               # 2x hashed js + 1 hashed css
+            paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
+            self.assertEqual(paths, {"/admin/"})       # only the clean path survives
         finally:
             m.close()
             os.unlink(db)
