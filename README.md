@@ -102,6 +102,7 @@ Common flags:
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |
 | `--forget HOST\|all` | erase cross-target memory for a host (www/apex together) or everything |
+| `--forget-noise` | prune content-hashed bundle names (`app.a1b2c3d4.js`, GUIDs, timestamps) from memory — one-off build artifacts that carry no cross-target signal |
 | `--resume` | continue an interrupted scan from its checkpoint |
 | `--update` | refresh the fingerprint catalog (Wappalyzer) into the KB |
 | `-V` | print version |
@@ -187,7 +188,7 @@ Findings (16)  ·  fingerprint: iis, asp.net
 - **Throttle control** — `--rate` (aggregate cap), `--delay`, AIMD backoff, exact `Retry-After`, `--rotate-ua`, `--proxy-file` rotation, `--http2`.
 
 **Learning, hygiene & output**
-- **Cross-target memory** — SQLite corpus + k-NN over fingerprint vectors + association mining + n-gram, `www`/apex collapsed to one key; `--forget HOST|all` clears it.
+- **Cross-target memory** — SQLite corpus + k-NN over fingerprint vectors + association mining + n-gram, `www`/apex collapsed to one key; content-hashed bundle names (`app.a1b2c3d4.js`) are filtered out so they never pollute recall, and the n-gram only learns names seen on ≥2 hosts; `--forget HOST|all` / `--forget-noise` clear it.
 - **Request economy** (`--economy`) — Thompson-sampling bandit ranks candidates by learned hit-rate (auto-on under a WAF).
 - **Smart noise control** — 404/400 never hit; auth-wall and URL-canonicalization redirects dropped (an `/x/`→`/x` slash-strip or http→https is noise, only `/x`→`/x/` confirms a directory); same-content collisions collapsed; one finding per resource (case-variant + cross-source dedup).
 - **Authenticated-scan session detection** — warns if `-H` credentials don't actually authenticate, or if the session expires mid-scan.
@@ -216,7 +217,7 @@ python tests/benchmark/bench_adaptive.py                        # adaptive vs bl
 
 The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS, OpenAPI/Swagger/JSON:API + `.well-known`/GraphQL), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
 
-On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **memory hygiene** (www/apex normalization + `--forget`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 229 unit tests + an end-to-end integration scan.
+On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **memory hygiene** (www/apex normalization, content-hash bundle filtering + ≥2-host n-gram floor, `--forget`/`--forget-noise`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 234 unit tests + an end-to-end integration scan.
 
 ### Request economy (contextual bandit)
 

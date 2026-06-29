@@ -340,6 +340,14 @@ def _forget(args) -> int:
     return 0
 
 
+def _forget_noise(args) -> int:
+    mem = Memory(args.db)
+    n = mem.prune_fingerprinted()
+    print(f"[+] pruned {n} content-hashed/fingerprinted entries from memory")
+    mem.close()
+    return 0
+
+
 def _show_history(args) -> int:
     first = args.url[0] if args.url else None
     host = (urlparse(first).netloc or first) if first else None
@@ -436,6 +444,9 @@ def main() -> None:
                     help="show past scan history (optionally filtered by the given host) and exit")
     ap.add_argument("--forget", metavar="HOST|all",
                     help="erase cross-target memory for a host (www/apex together) or 'all', then exit")
+    ap.add_argument("--forget-noise", action="store_true",
+                    help="prune content-hashed/fingerprinted bundle names (app.a1b2c3d4.js, "
+                         "GUIDs, timestamps) from cross-target memory, then exit")
     ap.add_argument("--no-ui", action="store_true", help="disable the live rich UI")
     ap.add_argument("-F", "--full-url", action="store_true",
                     help="show full URLs instead of just paths")
@@ -532,6 +543,8 @@ def main() -> None:
         sys.exit(_show_history(args))
     if args.forget:
         sys.exit(_forget(args))
+    if args.forget_noise:
+        sys.exit(_forget_noise(args))
     if not args.url and not args.list:
         ap.error("give at least one target URL or --list FILE")
     if args.ext_only and not args.ext:
