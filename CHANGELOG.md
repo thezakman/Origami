@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.70.0] — API surface stays visible
+- Declared-contract findings (OpenAPI/Swagger + `.well-known`) are now exempt from
+  block-wall muting and the same-`(status,length)` report collapse: every spec-declared
+  endpoint stays listed — even a wall of `401`/`403` — because each is real, named intel
+  ("exists, needs auth"), not generic-wall noise. Guessed wordlist paths still collapse.
+
 ## [0.69.1] — Design-doc sync
 - `origami.md` (the design doc / PyPI long-description) brought current: cache-poisoning
   fold, content-hash memory hygiene, `--forget-noise`, directory structure, test count.

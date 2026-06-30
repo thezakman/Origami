@@ -1802,6 +1802,22 @@ class TestReportDedup(unittest.TestCase):
         _report(obs, r, opts, make_finding("https://h/trace.axd"), "https://h/trace.axd")
         self.assertEqual([f.url for f in r.findings], ["https://h/trace.axd"])
 
+    def test_declared_api_endpoints_never_collapse(self):
+        # A swagger-sourced wall of 401 0B endpoints is the API map, not noise:
+        # each must stay listed. Guessed-wordlist 401s at the same shape collapse.
+        from origami.core.scanner import _dedupe_and_collapse
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        findings = []
+        for i in range(6):
+            findings.append(Finding(f"https://h/api/res{i}", 401, 0, "", 0.85, "apidocs"))
+            findings.append(Finding(f"https://h/guess{i}", 401, 0, "", 0.5, "wordlist"))
+        out = _dedupe_and_collapse(findings, NullObserver())
+        api = [f for f in out if f.origin == "apidocs"]
+        guessed = [f for f in out if f.origin == "wordlist"]
+        self.assertEqual(len(api), 6)          # every declared endpoint kept
+        self.assertEqual(len(guessed), 1)      # guessed wall collapses to one
+
     def test_case_variants_collapse_on_iis(self):
         r, _report, obs, opts = self._setup(case_sensitive=False)
         for u in ("https://h/WEBSERVICES", "https://h/webservices", "https://h/WebServices"):
