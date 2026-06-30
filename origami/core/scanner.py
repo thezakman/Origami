@@ -23,6 +23,12 @@ COLLISION_MAX = 4
 # every .env*/.git*…) — muted in the live stream past COLLISION_MAX. 2xx/3xx are
 # left to the end-of-scan collapse, which keys on length without this gate.
 _WALL_STATUS = frozenset({401, 403, 405})
+# Origins that come from a DECLARED contract (an OpenAPI/Swagger spec, a
+# .well-known index) — a bounded, curated set where every path is a real, named
+# endpoint. A 401/403 on one is high-value intel ("exists, needs auth"), not a
+# generic-wall flood, so these are exempt from block-wall muting AND the
+# same-(status,length) report collapse: the full API surface stays visible.
+_DECLARED_ORIGINS = frozenset({"apidocs", "wellknown"})
 MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 
 from origami.brain.bandit import Ranker as Bandit
@@ -921,11 +927,15 @@ def _dedupe_and_collapse(findings, observer, ci=False):
     """
     deduped = _dedup_by_url(findings, ci=ci)
 
+    # Declared-contract findings (OpenAPI/.well-known) are never collapsed — each
+    # is a real named endpoint the user wants listed, even when it returns 401/403.
+    out: list = [f for f in deduped if f.origin in _DECLARED_ORIGINS]
     clusters: dict[tuple, list] = defaultdict(list)
     for f in deduped:
-        clusters[(f.status, f.length)].append(f)
+        if f.origin not in _DECLARED_ORIGINS:
+            clusters[(f.status, f.length)].append(f)
 
-    out, collapsed = [], 0
+    collapsed = 0
     for (status, length), group in clusters.items():
         if len(group) > COLLISION_MAX:
             rep = min(group, key=lambda f: len(f.url))
@@ -976,7 +986,7 @@ def _report(observer, result, opts, finding, url) -> None:
         # substring). Show the first COLLISION_MAX, then stop STREAMING the rest
         # (they're still kept and folded to one line in the report by
         # _dedupe_and_collapse). 2xx/3xx are left to that end collapse.
-        wall = finding.status in _WALL_STATUS
+        wall = finding.status in _WALL_STATUS and finding.origin not in _DECLARED_ORIGINS
         n = 0
         if wall:
             sig = (finding.status, finding.length)
