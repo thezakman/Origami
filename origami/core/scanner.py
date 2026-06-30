@@ -204,6 +204,7 @@ class ScanOptions:
     param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
     cache_poison: str = ""         # "" = off; "light"|"auto"|"full" — probe unkeyed inputs for cache poisoning (--cache-poison)
     cache_headers: str | None = None  # custom unkeyed-header wordlist for --cache-poison (None → bundled set)
+    probe_405: bool = False        # on each 405, replay with POST/PATCH (empty & {} body) to find the accepted method (--probe-405)
     wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
     gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
@@ -834,6 +835,12 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     if opts.cache_poison:
         await _guard(observer, "cache-poison",
                      _cache_poison_fold(engine, profile, result, opts, observer, root_simhash), None)
+
+    # 7.7 method discovery — on each 405, find the write method the endpoint
+    # accepts (POST/PATCH, empty/{} body). State-changing → opt-in.
+    if opts.probe_405:
+        await _guard(observer, "methods-405",
+                     _method_fold(engine, profile, result, opts, observer), None)
 
     # 8. virtual-host discovery — Host-header fuzzing on the target IP (opt-in).
     if opts.vhost:
@@ -1584,6 +1591,83 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
     if found:
         observer.log(f"cache-poison: {found} endpoint(s) with unkeyed inputs flagged "
                      f"— see the 'poisonable'/'cache' tag", 0, style="cyan")
+
+
+# Empty-body probes for method discovery: a truly empty body and an empty JSON
+# object. An endpoint that processes either (a 400/422 validation error, a 401
+# auth wall, or a 2xx) is confirmed to accept the method — without sending real
+# data that could create/trigger something.
+_METHOD_BODIES = ((b"", ""), (b"{}", "application/json"))
+
+
+async def _try_method(engine, url, method, opts, observer):
+    """Fire `method` at `url` with each empty-body variant; return the most
+    informative probe (a non-404/405 response wins), or None if all failed."""
+    best = None
+    for body, ctype in _METHOD_BODIES:
+        if opts.max_requests and engine.spent >= opts.max_requests:
+            break
+        kw = {"content": body}
+        if ctype:
+            kw["headers"] = {"Content-Type": ctype}
+        pr = await engine.fetch(url, method=method, keep_body=True, **kw)
+        observer.tick(hit=False)
+        observer.request(url, pr.status, False)
+        if not pr.ok:
+            continue
+        if best is None or (pr.status not in (404, 405) and best.status in (404, 405)):
+            best = pr
+        if pr.status not in (404, 405):
+            break                                 # this method does something — stop
+    return best
+
+
+async def _method_fold(engine, profile, result, opts, observer) -> None:
+    """For each 405 (method-not-allowed) finding, replay with a safe WRITE method
+    (POST, plus PATCH iff the server's `Allow` advertises it — never PUT/DELETE)
+    carrying an empty or `{}` body, and annotate the method the endpoint accepts.
+
+    Opt-in (`--probe-405`): POST/PATCH change server state, so this never runs by
+    default. Bodies are empty/`{}` (which usually 400/422) to confirm the method
+    without sending real data, and `--exclude` paths are skipped."""
+    targets = [f for f in result.findings if f.status == 405]
+    if not targets:
+        return
+    observer.phase("methods")
+    observer.log(f"methods: probing {len(targets)} '405' endpoint(s) with POST/PATCH "
+                 f"(empty & {{}} body)", 0, style="cyan")
+    observer.start_prefix("methods", len(targets) * len(_METHOD_BODIES) * 2)
+    found = 0
+    for f in targets:
+        if opts.max_requests and engine.spent >= opts.max_requests:
+            break
+        path = urlparse(f.url).path
+        if _excluded(path, opts):                 # honor the safety rail (/logout, /delete…)
+            continue
+        observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)
+        best = await _try_method(engine, f.url, "POST", opts, observer)
+        method = "POST"
+        # POST rejected too? consult Allow and try PATCH only if it's advertised.
+        if best is not None and best.status == 405:
+            allowed, _ = methods.parse_allow(best.headers.get("allow", ""))
+            if "PATCH" in allowed:
+                pr = await _try_method(engine, f.url, "PATCH", opts, observer)
+                if pr is not None and pr.status not in (404, 405):
+                    best, method = pr, "PATCH"
+        if best is None or best.status in (404, 405):
+            continue                              # no safe method accepted
+        f.tags = list(dict.fromkeys(list(f.tags) + ["method"]))
+        f.confidence = max(f.confidence, 0.9)
+        verdict = "accepted" if 200 <= best.status < 300 else f"reached ({best.status})"
+        f.note = (f.note + " · " if f.note else "") + f"{method} {verdict}"
+        observer.log(f"method: {observer.disp(f.url)} ← {method} → {best.status}",
+                     0, style="bold green" if 200 <= best.status < 300 else "green")
+        if opts.finding_sink is not None:
+            opts.finding_sink(f)
+        found += 1
+    if found:
+        observer.log(f"methods: {found} endpoint(s) accept a write method — see the 'method' tag",
+                     0, style="cyan")
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:

@@ -111,6 +111,7 @@ TAG_STYLE = {
     "listing": "bold yellow", "leak": "bold black on yellow", "bypass": "bold black on green",
     "param": "bold green", "xss-lead": "bold black on bright_red",
     "cache": "cyan", "poisonable": "bold white on magenta",
+    "method": "bold cyan",
 }
 
 
