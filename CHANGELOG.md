@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.71.0] — Method discovery on 405
+- A 405 finding now surfaces the server's `Allow` header for free (`405 · Allow: POST`),
+  telling you which method the existing resource wants — no extra request.
+- New opt-in `--probe-405`: replays each 405 with POST (and PATCH iff `Allow` advertises
+  it — **never** PUT/DELETE) using an empty and a `{}` body, and flags the method the
+  endpoint accepts (a 400/422/2xx confirms it without sending real data). Honors `--exclude`.
+
 ## [0.70.0] — API surface stays visible
 - Declared-contract findings (OpenAPI/Swagger + `.well-known`) are now exempt from
   block-wall muting and the same-`(status,length)` report collapse: every spec-declared

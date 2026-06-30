@@ -166,7 +166,7 @@ async def run(args: argparse.Namespace) -> int:
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
         wayback=args.wayback or args.gau, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if args.cache_headers else "")),
-        cache_headers=args.cache_headers,
+        cache_headers=args.cache_headers, probe_405=args.probe_405,
         filters=_build_filters(args),
     )
 
@@ -231,6 +231,8 @@ async def run(args: argparse.Namespace) -> int:
             lvl = args.cache_poison or "auto"
             extra = f" + {args.cache_headers}" if args.cache_headers else ""
             print(f"  cache    : poisoning probe ({lvl}{extra}) — throwaway cache-buster, never the real key")
+        if args.probe_405:
+            print(f"  methods  : 405 → POST/PATCH (empty & {{}} body) — state-changing, never PUT/DELETE")
         if args.wayback or args.gau:
             print(f"  history  : {'gau/waybackurls (native fallback)' if args.gau else 'Wayback CDX + Common Crawl'}")
         if args.rate:
@@ -493,6 +495,11 @@ def main() -> None:
     ap.add_argument("--cache-headers", metavar="FILE",
                     help="custom unkeyed-header wordlist for --cache-poison ('Header: value' "
                          "lines), added to the built-in set (implies --cache-poison)")
+    ap.add_argument("--probe-405", action="store_true",
+                    help="on each 405 (method-not-allowed), replay with POST (and PATCH if the "
+                         "Allow header lists it — never PUT/DELETE) using an empty and a {} body "
+                         "to reveal the method the endpoint accepts. State-changing → opt-in; "
+                         "the Allow header is surfaced for free without this flag")
     ap.add_argument("--wayback", action="store_true",
                     help="fold HISTORICAL URLs (Wayback Machine CDX + Common Crawl) as seeds — "
                          "legacy/forgotten paths that may still respond; runs in the background "

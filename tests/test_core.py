@@ -2977,5 +2977,75 @@ class TestCachePoison(unittest.TestCase):
             self.assertNotEqual(url, "https://t.example.com/page")   # never the real key
 
 
+class TestMethodProbe(unittest.TestCase):
+    def test_classify_surfaces_allow_on_405(self):
+        from origami.core.response_classifier import classify
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="t", base_url="http://t/")
+        probe = make_probe(405, b"", url="http://t/api/x")
+        probe.headers = {"allow": "POST, OPTIONS"}
+        f = classify(p, probe, "apidocs", "/")
+        self.assertIsNotNone(f)
+        self.assertIn("Allow: OPTIONS, POST", f.note)   # sorted, surfaced for free
+
+    def _run_method_fold(self, post_status=422, allow="", patch_status=None, exclude=None):
+        import asyncio
+        from origami.core.scanner import _method_fold, ScanResult, ScanOptions
+        from origami.core.response_classifier import Finding
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+        outer = self
+
+        class MEngine:
+            total_requests = 0
+            spent = 0
+            def __init__(self): self.calls = []
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                MEngine.total_requests += 1; MEngine.spent += 1
+                self.calls.append(method)
+                if method == "POST":
+                    pr = make_probe(post_status, b'{"e":1}', url=url, ctype="application/json")
+                    pr.headers = {"allow": allow} if allow else {}
+                    return pr
+                if method == "PATCH" and patch_status is not None:
+                    return make_probe(patch_status, b'{"ok":1}', url=url)
+                return make_probe(405, b"", url=url)
+
+        p = TargetProfile(host="t", base_url="http://t/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://t/api/registrar/", 405, 0, "", 0.85, "apidocs"))
+        opts = ScanOptions(probe_405=True, exclude=([exclude] if exclude else []))
+        eng = MEngine()
+        asyncio.run(_method_fold(eng, p, result, opts, NullObserver()))
+        return result.findings[0], eng
+
+    def test_post_accepted_is_flagged(self):
+        f, eng = self._run_method_fold(post_status=422)   # 422 = endpoint processed POST
+        self.assertIn("method", f.tags)
+        self.assertIn("POST reached (422)", f.note)
+        self.assertNotIn("PUT", eng.calls)
+        self.assertNotIn("DELETE", eng.calls)
+
+    def test_patch_tried_only_when_allow_advertises_it(self):
+        # POST 405, Allow lists PATCH → PATCH tried and accepted
+        f, eng = self._run_method_fold(post_status=405, allow="PATCH, PUT", patch_status=200)
+        self.assertIn("method", f.tags)
+        self.assertIn("PATCH accepted", f.note)
+        self.assertIn("PATCH", eng.calls)
+        self.assertNotIn("PUT", eng.calls)            # advertised but destructive → never fired
+
+    def test_destructive_only_allow_fires_nothing_extra(self):
+        # POST 405, Allow lists only PUT/DELETE → no safe method works, nothing flagged
+        f, eng = self._run_method_fold(post_status=405, allow="PUT, DELETE")
+        self.assertNotIn("method", f.tags)
+        self.assertNotIn("PUT", eng.calls)
+        self.assertNotIn("DELETE", eng.calls)
+
+    def test_excluded_path_skipped(self):
+        f, eng = self._run_method_fold(post_status=200, exclude="registrar")
+        self.assertNotIn("method", f.tags)
+        self.assertEqual(eng.calls, [])               # never probed an excluded path
+
+
 if __name__ == "__main__":
     unittest.main()

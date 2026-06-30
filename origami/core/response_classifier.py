@@ -209,6 +209,16 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
             profile.waf = blocked
         return None
 
+    # A 405 means the resource EXISTS but rejects this method — surface the
+    # server's `Allow` header so the report shows which method works (free, no
+    # extra request; the opt-in --probe-405 fold then exercises it).
+    note405 = ""
+    if probe.status == 405:
+        allow = probe.headers.get("allow") or probe.headers.get("access-control-allow-methods") or ""
+        if allow.strip():
+            note405 = "Allow: " + ", ".join(sorted({m.strip().upper()
+                                                    for m in allow.split(",") if m.strip()}))
+
     cb = resolve_baseline(profile, probe.url, scan_prefix)
 
     # Semantic tags only on accessible content (2xx). A 403 .htpasswd is blocked,
@@ -224,8 +234,9 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     if cb is None or cb.samples == 0:
         if probe.status in (200, 204, 301, 302, 401, 403, 405):
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
-                           0.5, origin, note="no-baseline", tags=tags,
-                           simhash=probe.body_simhash)
+                           0.5, origin,
+                           note=(note405 + " · no-baseline") if note405 else "no-baseline",
+                           tags=tags, simhash=probe.body_simhash)
         return None
 
     if looks_like_miss(probe, cb):
@@ -233,7 +244,7 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
 
     confidence = _confidence(probe, cb)
     return Finding(probe.url, probe.status, probe.length, probe.content_type,
-                   confidence, origin, tags=tags, simhash=probe.body_simhash)
+                   confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash)
 
 
 def _confidence(probe: Probe, cb: ContextBaseline) -> float:
