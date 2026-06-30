@@ -597,19 +597,20 @@ class TestWayback(unittest.TestCase):
 
     def test_from_gau_timeout_reaps_child(self):
         # a hung gau must hit its own timeout, be reaped, and return empty fast —
-        # never left running detached (simulate with `sleep`)
+        # never left running detached. Pass the fake binary EXPLICITLY (`binaries`
+        # is a def-time default, so rebinding the module global wouldn't take) so
+        # the test is deterministic regardless of whether gau is installed.
         import asyncio, time
         from origami.modules.discovery import wayback as W
-        orig_bins, orig_to = W._GAU_BINARIES, W._GAU_TIMEOUT
+        orig_to = W._GAU_TIMEOUT
         try:
-            W._GAU_BINARIES = ("sleep",)            # args become `sleep <host>`
             W._GAU_TIMEOUT = 0.3
             t0 = time.time()
-            res = asyncio.run(W.from_gau("5"))      # `sleep 5` >> 0.3s timeout
+            res = asyncio.run(W.from_gau("5", binaries=("sleep",)))  # `sleep 5` >> 0.3s timeout
             self.assertEqual(res, set())
             self.assertLess(time.time() - t0, 3.0)  # returned promptly, didn't block 5s
         finally:
-            W._GAU_BINARIES, W._GAU_TIMEOUT = orig_bins, orig_to
+            W._GAU_TIMEOUT = orig_to
 
     def test_harvest_caps_paths(self):
         import asyncio
