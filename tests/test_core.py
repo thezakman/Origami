@@ -2991,11 +2991,9 @@ class TestMethodProbe(unittest.TestCase):
 
     def _run_method_fold(self, post_status=422, allow="", patch_status=None, exclude=None):
         import asyncio
-        from origami.core.scanner import _method_fold, ScanResult, ScanOptions
+        from origami.core.scanner import _probe_405_finding, ScanOptions
         from origami.core.response_classifier import Finding
-        from origami.core.evidence import TargetProfile
         from origami.output.ui import NullObserver
-        outer = self
 
         class MEngine:
             total_requests = 0
@@ -3012,13 +3010,11 @@ class TestMethodProbe(unittest.TestCase):
                     return make_probe(patch_status, b'{"ok":1}', url=url)
                 return make_probe(405, b"", url=url)
 
-        p = TargetProfile(host="t", base_url="http://t/")
-        result = ScanResult(profile=p)
-        result.findings.append(Finding("http://t/api/registrar/", 405, 0, "", 0.85, "apidocs"))
+        finding = Finding("http://t/api/registrar/", 405, 0, "", 0.85, "apidocs")
         opts = ScanOptions(probe_405=True, exclude=([exclude] if exclude else []))
         eng = MEngine()
-        asyncio.run(_method_fold(eng, p, result, opts, NullObserver()))
-        return result.findings[0], eng
+        asyncio.run(_probe_405_finding(eng, finding, opts, NullObserver()))
+        return finding, eng
 
     def test_post_accepted_is_flagged(self):
         f, eng = self._run_method_fold(post_status=422)   # 422 = endpoint processed POST
@@ -3046,6 +3042,44 @@ class TestMethodProbe(unittest.TestCase):
         f, eng = self._run_method_fold(post_status=200, exclude="registrar")
         self.assertNotIn("method", f.tags)
         self.assertEqual(eng.calls, [])               # never probed an excluded path
+
+    def test_inline_probe_fires_in_scan_prefix(self):
+        # the probe must run the MOMENT a 405 is found (inline), not in a late phase
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _scan_prefix, ScanResult, ScanOptions, ScanControl
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.scheduler import Candidate
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:
+            cfg = type("C", (), {"verify_tls": False})()
+            total_requests = 0
+            spent = 0
+            def __init__(self): self.methods = []
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                FakeEngine.total_requests += 1
+                self.methods.append(method)
+                if urlparse(url).path == "/register/":
+                    if method == "POST":
+                        return make_probe(200, b'{"ok":1}', url=url, ctype="application/json")
+                    pr = make_probe(405, b"", url=url)          # GET → 405
+                    pr.headers = {"allow": "POST"}
+                    return pr
+                return make_probe(404, b"not found", url=url)   # randoms/siblings
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        result = ScanResult(profile=p)
+        eng = FakeEngine()
+        asyncio.run(_scan_prefix(eng, p, "/", [Candidate("register/", 2, "apidocs")],
+                                 result, ScanOptions(probe_405=True), NullObserver(), ScanControl()))
+        self.assertIn("POST", eng.methods)            # POST fired inline, during the scan
+        f = next(f for f in result.findings if "register" in f.url)
+        self.assertIn("method", f.tags)
+        self.assertIn("POST accepted", f.note)        # verdict annotated on the finding
 
 
 if __name__ == "__main__":
