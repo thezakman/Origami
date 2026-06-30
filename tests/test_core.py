@@ -3043,6 +3043,34 @@ class TestMethodProbe(unittest.TestCase):
         self.assertNotIn("method", f.tags)
         self.assertEqual(eng.calls, [])               # never probed an excluded path
 
+    def test_415_tries_next_content_type(self):
+        # a 415 on the JSON body must NOT stop the probe — it should try the next
+        # content-type and report the more informative result (here a 400).
+        import asyncio
+        from origami.core.scanner import _probe_405_finding, ScanOptions
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class MEngine:
+            spent = 0
+            def __init__(self): self.posts = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                MEngine.spent += 1
+                ctype = (kw.get("headers") or {}).get("Content-Type", "")
+                if method == "POST":
+                    self.posts += 1
+                    if ctype == "application/json":
+                        return make_probe(415, b"", url=url)         # JSON rejected on media type
+                    return make_probe(400, b'{"err":"missing"}', url=url)  # next variant → real result
+                return make_probe(405, b"", url=url)
+
+        finding = Finding("http://t/api/login", 405, 0, "", 0.85, "apidocs")
+        eng = MEngine()
+        asyncio.run(_probe_405_finding(eng, finding, ScanOptions(probe_405=True), NullObserver()))
+        self.assertIn("method", finding.tags)
+        self.assertIn("POST reached (400)", finding.note)   # the 400, not the 415
+        self.assertGreaterEqual(eng.posts, 2)               # tried past the 415
+
     def test_inline_probe_fires_in_scan_prefix(self):
         # the probe must run the MOMENT a 405 is found (inline), not in a late phase
         import asyncio

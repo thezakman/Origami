@@ -1600,16 +1600,40 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
                      f"— see the 'poisonable'/'cache' tag", 0, style="cyan")
 
 
-# Empty-body probes for method discovery: a truly empty body and an empty JSON
-# object. An endpoint that processes either (a 400/422 validation error, a 401
-# auth wall, or a 2xx) is confirmed to accept the method — without sending real
-# data that could create/trigger something.
-_METHOD_BODIES = ((b"", ""), (b"{}", "application/json"))
+# Empty-body probes for method discovery, ordered most-likely-accepted first: an
+# empty JSON object (modern APIs), a truly empty body, then an empty form. An
+# endpoint that processes any of these (a 400/422 validation error, a 401 auth
+# wall, or a 2xx) is confirmed to accept the method — without sending real data
+# that could create/trigger something.
+_METHOD_BODIES = (
+    (b"{}", "application/json"),
+    (b"", ""),
+    (b"", "application/x-www-form-urlencoded"),
+)
+
+# Statuses that mean "try the next body variant": wrong path/method (404/405), or
+# 415 Unsupported Media Type — the body's content-type is wrong, so another
+# variant may be accepted (don't stop on the 415, which is the signal to retry).
+_METHOD_RETRY = (404, 405, 415)
+
+
+def _method_probe_rank(pr) -> int:
+    """How informative a method-probe response is: a real processing result
+    (2xx/400/401/422/500…) > 415 (method accepted, media type wrong) > 404/405
+    (path/method wrong) > nothing."""
+    if pr is None:
+        return -1
+    if pr.status in (404, 405):
+        return 0
+    if pr.status == 415:
+        return 1
+    return 2
 
 
 async def _try_method(engine, url, method, opts, observer):
     """Fire `method` at `url` with each empty-body variant; return the most
-    informative probe (a non-404/405 response wins), or None if all failed.
+    informative probe (real processing > 415 > 404/405), or None if all failed.
+    A 415 keeps trying the other content-types instead of settling for it.
 
     Logs each probe to the live request stream but does NOT tick the prefix
     progress bar — these are inline side-probes, not budgeted scan candidates."""
@@ -1624,10 +1648,10 @@ async def _try_method(engine, url, method, opts, observer):
         observer.request(url, pr.status, False)
         if not pr.ok:
             continue
-        if best is None or (pr.status not in (404, 405) and best.status in (404, 405)):
+        if _method_probe_rank(pr) > _method_probe_rank(best):
             best = pr
-        if pr.status not in (404, 405):
-            break                                 # this method does something — stop
+        if pr.status not in _METHOD_RETRY:
+            break                                 # endpoint actually processed it — stop
     return best
 
 
