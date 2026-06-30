@@ -16,6 +16,9 @@ venv/
 wordlist_custom.txt
 # default report output dir (results_*.html/.json)
 html/
+# stray run artifacts (streamed JSONL, scratch output)
+leftovers/
+*.jsonl
 # local source list — bundled as origami/wordlists/403-headers.txt
 /403-bypass.txt
 

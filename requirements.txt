@@ -1,7 +1,11 @@
-# Origami — runtime deps
-httpx>=0.27          # engine HTTP async
-PyYAML>=6            # knowledge base / overlay
+# Origami runtime dependencies.
+# Source of truth is pyproject.toml — this mirror exists for `pip install -r`.
+# Preferred install: `pip install .` (or `pip install -e .` for development).
 
-# usados a partir do fingerprint/saída (instalar quando chegar a hora)
-mmh3>=4              # favicon hash (fingerprint)
-rich>=13            # saída de CLI bonita (opcional; há fallback em texto puro)
+httpx>=0.27          # async HTTP engine
+PyYAML>=6            # fingerprint knowledge base (overlay + ingested rules)
+rich>=13             # live terminal UI (degrades to plain text if absent)
+mmh3>=4              # favicon MurmurHash3 fingerprint
+
+# Optional extra (enables --http2 via ALPN):  pip install "origami-scanner[http2]"
+# h2>=4
