@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.72.0] — --probe-405 goes inline
+- `--probe-405` now tests the write method **the moment a 405 is found** (inline in
+  the scan), not in a phase at the end — so the accepted method rides the finding's
+  live line, and a partial/interrupted scan still probes what it discovered (instead
+  of waiting behind the slower `--bypass-403`/`--cache-poison` passes).
+
 ## [0.71.1] — CI fix
 - Make `test_from_gau_timeout_reaps_child` environment-independent: pass the fake
   `sleep` binary explicitly instead of rebinding a module global that's a def-time

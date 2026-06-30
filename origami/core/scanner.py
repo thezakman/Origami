@@ -836,11 +836,9 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         await _guard(observer, "cache-poison",
                      _cache_poison_fold(engine, profile, result, opts, observer, root_simhash), None)
 
-    # 7.7 method discovery — on each 405, find the write method the endpoint
-    # accepts (POST/PATCH, empty/{} body). State-changing → opt-in.
-    if opts.probe_405:
-        await _guard(observer, "methods-405",
-                     _method_fold(engine, profile, result, opts, observer), None)
+    # (method discovery on a 405 happens INLINE in _scan_prefix the moment the
+    # 405 is found — under --probe-405 — so the accepted method rides the finding
+    # in the live stream and a partial scan still probes what it discovered.)
 
     # 8. virtual-host discovery — Host-header fuzzing on the target IP (opt-in).
     if opts.vhost:
@@ -1114,6 +1112,15 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         for i in range(1, len(segs)):
             ancestor_dirs.append("/" + "/".join(segs[:i]) + "/")
             observer.set_skippable(True)
+
+        # --probe-405: the moment a 405 is found, test the write method it accepts
+        # (POST/PATCH, empty/{} body) so the verdict rides this finding's live line.
+        # Skip if this URL was already reported (and thus already probed) elsewhere.
+        if opts.probe_405 and finding.status == 405:
+            ci = result.profile.case_sensitive is False
+            seen = (url.lower() in result.seen_urls_lc) if ci else (url in result.seen_urls)
+            if not seen:
+                await _probe_405_finding(engine, finding, opts, observer)
 
         _report(observer, result, opts, finding, url)
 
@@ -1602,7 +1609,10 @@ _METHOD_BODIES = ((b"", ""), (b"{}", "application/json"))
 
 async def _try_method(engine, url, method, opts, observer):
     """Fire `method` at `url` with each empty-body variant; return the most
-    informative probe (a non-404/405 response wins), or None if all failed."""
+    informative probe (a non-404/405 response wins), or None if all failed.
+
+    Logs each probe to the live request stream but does NOT tick the prefix
+    progress bar — these are inline side-probes, not budgeted scan candidates."""
     best = None
     for body, ctype in _METHOD_BODIES:
         if opts.max_requests and engine.spent >= opts.max_requests:
@@ -1611,7 +1621,6 @@ async def _try_method(engine, url, method, opts, observer):
         if ctype:
             kw["headers"] = {"Content-Type": ctype}
         pr = await engine.fetch(url, method=method, keep_body=True, **kw)
-        observer.tick(hit=False)
         observer.request(url, pr.status, False)
         if not pr.ok:
             continue
@@ -1622,52 +1631,34 @@ async def _try_method(engine, url, method, opts, observer):
     return best
 
 
-async def _method_fold(engine, profile, result, opts, observer) -> None:
-    """For each 405 (method-not-allowed) finding, replay with a safe WRITE method
-    (POST, plus PATCH iff the server's `Allow` advertises it — never PUT/DELETE)
-    carrying an empty or `{}` body, and annotate the method the endpoint accepts.
+async def _probe_405_finding(engine, finding, opts, observer) -> bool:
+    """Right when a 405 (method-not-allowed) is found, replay it with a safe WRITE
+    method — POST, plus PATCH iff the server's `Allow` advertises it (NEVER
+    PUT/DELETE) — carrying an empty and a `{}` body, and annotate `finding` in
+    place with the method it accepts. Returns True if a write method was accepted.
 
-    Opt-in (`--probe-405`): POST/PATCH change server state, so this never runs by
-    default. Bodies are empty/`{}` (which usually 400/422) to confirm the method
-    without sending real data, and `--exclude` paths are skipped."""
-    targets = [f for f in result.findings if f.status == 405]
-    if not targets:
-        return
-    observer.phase("methods")
-    observer.log(f"methods: probing {len(targets)} '405' endpoint(s) with POST/PATCH "
-                 f"(empty & {{}} body)", 0, style="cyan")
-    observer.start_prefix("methods", len(targets) * len(_METHOD_BODIES) * 2)
-    found = 0
-    for f in targets:
-        if opts.max_requests and engine.spent >= opts.max_requests:
-            break
-        path = urlparse(f.url).path
-        if _excluded(path, opts):                 # honor the safety rail (/logout, /delete…)
-            continue
-        observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)
-        best = await _try_method(engine, f.url, "POST", opts, observer)
-        method = "POST"
-        # POST rejected too? consult Allow and try PATCH only if it's advertised.
-        if best is not None and best.status == 405:
-            allowed, _ = methods.parse_allow(best.headers.get("allow", ""))
-            if "PATCH" in allowed:
-                pr = await _try_method(engine, f.url, "PATCH", opts, observer)
-                if pr is not None and pr.status not in (404, 405):
-                    best, method = pr, "PATCH"
-        if best is None or best.status in (404, 405):
-            continue                              # no safe method accepted
-        f.tags = list(dict.fromkeys(list(f.tags) + ["method"]))
-        f.confidence = max(f.confidence, 0.9)
-        verdict = "accepted" if 200 <= best.status < 300 else f"reached ({best.status})"
-        f.note = (f.note + " · " if f.note else "") + f"{method} {verdict}"
-        observer.log(f"method: {observer.disp(f.url)} ← {method} → {best.status}",
-                     0, style="bold green" if 200 <= best.status < 300 else "green")
-        if opts.finding_sink is not None:
-            opts.finding_sink(f)
-        found += 1
-    if found:
-        observer.log(f"methods: {found} endpoint(s) accept a write method — see the 'method' tag",
-                     0, style="cyan")
+    Probed inline (under `--probe-405`) so the result rides the finding in the
+    live stream and a partial/interrupted scan still tests what it found. Bodies
+    are empty/`{}` (usually 400/422) to confirm the method without sending real
+    data; `--exclude` paths are skipped (state-changing safety rail)."""
+    if _excluded(urlparse(finding.url).path, opts):
+        return False
+    best = await _try_method(engine, finding.url, "POST", opts, observer)
+    method = "POST"
+    # POST rejected too? consult Allow and try PATCH only if it's advertised.
+    if best is not None and best.status == 405:
+        allowed, _ = methods.parse_allow(best.headers.get("allow", ""))
+        if "PATCH" in allowed:
+            pr = await _try_method(engine, finding.url, "PATCH", opts, observer)
+            if pr is not None and pr.status not in (404, 405):
+                best, method = pr, "PATCH"
+    if best is None or best.status in (404, 405):
+        return False                              # no safe method accepted
+    finding.tags = list(dict.fromkeys(list(finding.tags) + ["method"]))
+    finding.confidence = max(finding.confidence, 0.9)
+    verdict = "accepted" if 200 <= best.status < 300 else f"reached ({best.status})"
+    finding.note = (finding.note + " · " if finding.note else "") + f"{method} {verdict}"
+    return True
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:
