@@ -5,6 +5,10 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.69.1] — Design-doc sync
+- `origami.md` (the design doc / PyPI long-description) brought current: cache-poisoning
+  fold, content-hash memory hygiene, `--forget-noise`, directory structure, test count.
+
 ## [0.69.0] — Sale-readiness polish
 - Project packaging metadata completed (authors, license, URLs, classifiers, keywords).
 - Added `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`.
