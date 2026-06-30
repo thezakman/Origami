@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/github/license/thezakman/Origami?color=green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen?logo=pytest&logoColor=white)](tests/test_core.py)
+[![Tests](https://github.com/thezakman/Origami/actions/workflows/tests.yml/badge.svg)](https://github.com/thezakman/Origami/actions/workflows/tests.yml)
 [![Last commit](https://img.shields.io/github/last-commit/thezakman/Origami)](https://github.com/thezakman/Origami/commits/main)
 [![Stars](https://img.shields.io/github/stars/thezakman/Origami?style=flat)](https://github.com/thezakman/Origami/stargazers)
 
