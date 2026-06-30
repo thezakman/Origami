@@ -1606,10 +1606,27 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
 # wall, or a 2xx) is confirmed to accept the method — without sending real data
 # that could create/trigger something.
 _METHOD_BODIES = (
-    (b"{}", "application/json"),
-    (b"", ""),
-    (b"", "application/x-www-form-urlencoded"),
+    (b"{}", "application/json", "json"),
+    (b"", "", "empty"),
+    (b"", "application/x-www-form-urlencoded", "form"),
 )
+
+
+def _body_hint(probe, limit: int = 120) -> str:
+    """A short one-line snippet of a method-probe response body — usually the JSON
+    validation error that reveals the endpoint's expected input (`{"message":
+    "username is required"}`). '' for an empty, binary, or HTML-error body."""
+    raw = (getattr(probe, "body", b"") or b"")[:400]
+    if not raw:
+        return ""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    text = " ".join(text.split())
+    if not text or text.startswith("<"):          # empty or an HTML page — no useful hint
+        return ""
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 # Statuses that mean "try the next body variant": wrong path/method (404/405), or
 # 415 Unsupported Media Type — the body's content-type is wrong, so another
@@ -1637,8 +1654,8 @@ async def _try_method(engine, url, method, opts, observer):
 
     Logs each probe to the live request stream but does NOT tick the prefix
     progress bar — these are inline side-probes, not budgeted scan candidates."""
-    best = None
-    for body, ctype in _METHOD_BODIES:
+    best, best_label = None, ""
+    for body, ctype, label in _METHOD_BODIES:
         if opts.max_requests and engine.spent >= opts.max_requests:
             break
         kw = {"content": body}
@@ -1649,10 +1666,10 @@ async def _try_method(engine, url, method, opts, observer):
         if not pr.ok:
             continue
         if _method_probe_rank(pr) > _method_probe_rank(best):
-            best = pr
+            best, best_label = pr, label
         if pr.status not in _METHOD_RETRY:
             break                                 # endpoint actually processed it — stop
-    return best
+    return best, best_label
 
 
 async def _probe_405_finding(engine, finding, opts, observer) -> bool:
@@ -1667,21 +1684,23 @@ async def _probe_405_finding(engine, finding, opts, observer) -> bool:
     data; `--exclude` paths are skipped (state-changing safety rail)."""
     if _excluded(urlparse(finding.url).path, opts):
         return False
-    best = await _try_method(engine, finding.url, "POST", opts, observer)
+    best, label = await _try_method(engine, finding.url, "POST", opts, observer)
     method = "POST"
     # POST rejected too? consult Allow and try PATCH only if it's advertised.
     if best is not None and best.status == 405:
         allowed, _ = methods.parse_allow(best.headers.get("allow", ""))
         if "PATCH" in allowed:
-            pr = await _try_method(engine, finding.url, "PATCH", opts, observer)
+            pr, plabel = await _try_method(engine, finding.url, "PATCH", opts, observer)
             if pr is not None and pr.status not in (404, 405):
-                best, method = pr, "PATCH"
+                best, label, method = pr, plabel, "PATCH"
     if best is None or best.status in (404, 405):
         return False                              # no safe method accepted
     finding.tags = list(dict.fromkeys(list(finding.tags) + ["method"]))
     finding.confidence = max(finding.confidence, 0.9)
     verdict = "accepted" if 200 <= best.status < 300 else f"reached ({best.status})"
-    finding.note = (finding.note + " · " if finding.note else "") + f"{method} {verdict}"
+    hint = _body_hint(best)
+    finding.note = ((finding.note + " · " if finding.note else "")
+                    + f"{method} ({label}) {verdict}" + (f": {hint}" if hint else ""))
     return True
 
 

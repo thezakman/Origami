@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.73.0] — Richer 405 probes + memory case hygiene
+- `--probe-405` now reports the **response-body hint** and the **content-type that
+  worked**: `POST (json) reached (400): {"message":"username is required"}` — the
+  validation error reveals the endpoint's expected input, the real payoff.
+- Memory no longer primes both `/MANIFEST.JSON` and `/manifest.json`: recall
+  collapses case-variant paths (preferring the lowercase, conventional casing), and
+  a **case-insensitive** host stores paths lowercased (casing is meaningless there)
+  so the corpus stays clean. Case-sensitive hosts keep their exact casing.
+
 ## [0.72.1] — --probe-405: don't stop on 415
 - A `415 Unsupported Media Type` on a method probe now means "try the next
   content-type" instead of being the final verdict: variants are JSON `{}`, empty,

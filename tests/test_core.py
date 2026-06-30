@@ -2025,6 +2025,47 @@ class TestAssociation(unittest.TestCase):
             m.close()
             os.unlink(db)
 
+    def test_recall_dedupes_case_variants(self):
+        # /MANIFEST.JSON and /manifest.json are one resource — prime only one,
+        # preferring the lowercase (conventional) casing.
+        import os, tempfile
+        from origami.brain.memory import Memory
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            for h in ("h1", "h2"):
+                m.db.execute("INSERT INTO host_techs VALUES (?, 'php')", (h,))
+                m.db.execute("INSERT INTO corpus VALUES (?, '/MANIFEST.JSON', 200)", (h,))
+                m.db.execute("INSERT INTO corpus VALUES (?, '/manifest.json', 200)", (h,))
+            m.db.commit()
+            manifests = [p for p in m.recall(["php"], exclude_host="other")
+                         if p.lower() == "/manifest.json"]
+            self.assertEqual(manifests, ["/manifest.json"])   # one, lowercase
+        finally:
+            m.close()
+            os.unlink(db)
+
+    def test_record_run_lowercases_on_case_insensitive_host(self):
+        # a case-insensitive (IIS/Windows) host → casing is meaningless, so store
+        # the canonical lowercase form and never pollute the corpus with variants.
+        import os, tempfile
+        from origami.brain.memory import Memory
+        from origami.core.evidence import TargetProfile
+        class R:
+            def __init__(self, findings): self.findings = findings; self.requests_made = 1
+        db = tempfile.mktemp(suffix=".sqlite")
+        m = Memory(db)
+        try:
+            p = TargetProfile(host="h", base_url="http://h/")
+            p.case_sensitive = False
+            m.record_run(p, R([make_finding("http://h/MANIFEST.JSON", 200)]))
+            paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
+            self.assertIn("/manifest.json", paths)
+            self.assertNotIn("/MANIFEST.JSON", paths)
+        finally:
+            m.close()
+            os.unlink(db)
+
     def test_prune_fingerprinted(self):
         import os, tempfile
         from origami.brain.memory import Memory
@@ -3019,7 +3060,8 @@ class TestMethodProbe(unittest.TestCase):
     def test_post_accepted_is_flagged(self):
         f, eng = self._run_method_fold(post_status=422)   # 422 = endpoint processed POST
         self.assertIn("method", f.tags)
-        self.assertIn("POST reached (422)", f.note)
+        self.assertIn("POST (json) reached (422)", f.note)
+        self.assertIn('{"e":1}', f.note)              # response-body hint surfaced
         self.assertNotIn("PUT", eng.calls)
         self.assertNotIn("DELETE", eng.calls)
 
@@ -3027,7 +3069,7 @@ class TestMethodProbe(unittest.TestCase):
         # POST 405, Allow lists PATCH → PATCH tried and accepted
         f, eng = self._run_method_fold(post_status=405, allow="PATCH, PUT", patch_status=200)
         self.assertIn("method", f.tags)
-        self.assertIn("PATCH accepted", f.note)
+        self.assertIn("PATCH (json) accepted", f.note)
         self.assertIn("PATCH", eng.calls)
         self.assertNotIn("PUT", eng.calls)            # advertised but destructive → never fired
 
@@ -3068,7 +3110,8 @@ class TestMethodProbe(unittest.TestCase):
         eng = MEngine()
         asyncio.run(_probe_405_finding(eng, finding, ScanOptions(probe_405=True), NullObserver()))
         self.assertIn("method", finding.tags)
-        self.assertIn("POST reached (400)", finding.note)   # the 400, not the 415
+        self.assertIn("POST (empty) reached (400)", finding.note)   # the 400, not the 415
+        self.assertIn('{"err":"missing"}', finding.note)        # body hint from the 400
         self.assertGreaterEqual(eng.posts, 2)               # tried past the 415
 
     def test_inline_probe_fires_in_scan_prefix(self):
@@ -3107,7 +3150,7 @@ class TestMethodProbe(unittest.TestCase):
         self.assertIn("POST", eng.methods)            # POST fired inline, during the scan
         f = next(f for f in result.findings if "register" in f.url)
         self.assertIn("method", f.tags)
-        self.assertIn("POST accepted", f.note)        # verdict annotated on the finding
+        self.assertIn("POST (json) accepted", f.note)  # verdict + content-type on the finding
 
 
 if __name__ == "__main__":

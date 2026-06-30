@@ -88,6 +88,24 @@ def _is_noise(path: str) -> bool:
     return _is_asset(path) or _looks_fingerprinted(path)
 
 
+def _dedupe_case(paths):
+    """Collapse paths differing only in case, preferring an all-lowercase variant
+    (the convention for well-known files like `/manifest.json`) — so a
+    case-insensitive host isn't primed with both `/MANIFEST.JSON` and
+    `/manifest.json`. First-appearance order is preserved; a path seen in only one
+    casing is kept as-is (a case-sensitive host may genuinely serve it that way)."""
+    chosen: dict[str, str] = {}
+    order: list[str] = []
+    for p in paths:
+        key = p.lower()
+        if key not in chosen:
+            chosen[key] = p
+            order.append(key)
+        elif p == key and chosen[key] != key:
+            chosen[key] = p          # upgrade the kept variant to the all-lowercase one
+    return [chosen[k] for k in order]
+
+
 def _norm_host(host: str) -> str:
     """Canonical host key for memory: lower-cased, no port, no leading `www.` —
     so `www.x.com` and `x.com` share one corpus/fingerprint and transfer learning
@@ -192,7 +210,7 @@ class Memory:
                  LIMIT ?""",
             (*techs, exclude_host, *_AMBIENT_PATHS, limit),
         ).fetchall()
-        return [r[0] for r in rows if not _is_noise(r[0])]
+        return _dedupe_case([r[0] for r in rows if not _is_noise(r[0])])
 
     def recall_knn(self, profile, k: int = 5, limit: int = 200) -> list[str]:
         """Prime from the k most *similar* past hosts (cosine over fingerprint
@@ -220,7 +238,7 @@ class Memory:
             for path, _ in self.prior_findings(host):
                 if path not in _AMBIENT_PATHS and not _is_noise(path):  # ambient/asset/hashed paths transfer no signal
                     scores[path] += s
-        return sorted(scores, key=lambda p: -scores[p])[:limit]
+        return _dedupe_case(sorted(scores, key=lambda p: -scores[p]))[:limit]
 
     def associate(self, found_paths, min_support: int = 2, min_conf: float = 0.3,
                   limit: int = 60) -> list[str]:
@@ -332,11 +350,14 @@ class Memory:
         # corpus: only real, low-noise hits (200/3xx/401/403) become memory —
         # and never host-local static assets (images/fonts/media carry no
         # cross-target signal, so they'd only pollute future recall/association).
+        ci = profile.case_sensitive is False     # case-insensitive host → casing is meaningless
         for f in result.findings:
             if f.status in (200, 204, 301, 302, 401, 403):
                 p = _path(f.url)
                 if _is_noise(p):
                     continue
+                if ci:
+                    p = p.lower()                # canonicalize so /MANIFEST.JSON ≡ /manifest.json
                 self.db.execute(
                     "INSERT OR REPLACE INTO corpus VALUES (?,?,?)",
                     (host, p, f.status))
