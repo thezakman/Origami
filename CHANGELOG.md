@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.71.1] — CI fix
+- Make `test_from_gau_timeout_reaps_child` environment-independent: pass the fake
+  `sleep` binary explicitly instead of rebinding a module global that's a def-time
+  default (which silently no-op'd, so the test passed only where `gau` was installed
+  and failed in CI). No production change.
+
 ## [0.71.0] — Method discovery on 405
 - A 405 finding now surfaces the server's `Allow` header for free (`405 · Allow: POST`),
   telling you which method the existing resource wants — no extra request.
