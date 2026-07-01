@@ -3153,5 +3153,115 @@ class TestMethodProbe(unittest.TestCase):
         self.assertIn("POST (json) accepted", f.note)  # verdict + content-type on the finding
 
 
+def _git_index(paths):
+    import struct
+    body = b"DIRC" + struct.pack(">II", 2, len(paths))
+    for p in paths:
+        name = p.encode()
+        entry = b"\x00" * 60 + struct.pack(">H", len(name)) + name
+        entry += b"\x00" * (8 - (len(entry) % 8))
+        body += entry
+    return body
+
+
+def _ds_store(names):
+    import struct
+    body = b"\x00" * 8
+    for n in names:
+        nb = n.encode("utf-16-be")
+        body += struct.pack(">I", len(n)) + nb + b"Iloc" + b"blob"
+    return body + b"\x00" * 4
+
+
+def _svn_wcdb(relpaths):
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE nodes (local_relpath TEXT)")
+    con.executemany("INSERT INTO nodes VALUES (?)", [("",)] + [(p,) for p in relpaths])
+    con.commit()
+    data = con.serialize()
+    con.close()
+    return data
+
+
+class TestVCS(unittest.TestCase):
+    def test_parse_git_index(self):
+        from origami.modules.discovery import vcs
+        paths = vcs.parse_git_index(_git_index(["src/app.js", "config/database.php", ".env"]))
+        self.assertEqual(paths, ["src/app.js", "config/database.php", ".env"])
+
+    def test_parse_ds_store(self):
+        from origami.modules.discovery import vcs
+        self.assertEqual(vcs.parse_ds_store(_ds_store(["admin", "backup.zip"])),
+                         ["admin", "backup.zip"])
+
+    def test_parse_svn_wcdb(self):
+        from origami.modules.discovery import vcs
+        self.assertEqual(sorted(vcs.parse_svn(_svn_wcdb(["app/index.php", "lib/db.php"]))),
+                         ["app/index.php", "lib/db.php"])
+
+    def test_parsers_reject_garbage(self):
+        from origami.modules.discovery import vcs
+        self.assertEqual(vcs.parse_git_index(b"not an index"), [])
+        self.assertEqual(vcs.parse_ds_store(b"xx"), [])
+        self.assertEqual(vcs.parse_svn(b"xx"), [])
+
+    def test_vcs_fold_enumerates_git_tree(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _vcs_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        index = _git_index(["src/app.js", ".env"])
+
+        class FakeEngine:
+            spent = 0
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                FakeEngine.total_requests += 1
+                path = urlparse(url).path
+                if path == "/.git/index":
+                    return make_probe(200, index, url=url, ctype="application/octet-stream")
+                if path in ("/src/app.js", "/.env"):
+                    return make_probe(200, b"SECRET=hunter2", url=url, ctype="text/plain")
+                return make_probe(404, b"nope", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/.git/HEAD", 200, 23, "text/plain", 0.85, "backup"))
+        asyncio.run(_vcs_fold(FakeEngine(), p, result, ScanOptions(), NullObserver()))
+        urls = {f.url for f in result.findings}
+        self.assertIn("http://h/src/app.js", urls)      # tracked file enumerated + fetched
+        self.assertIn("http://h/.env", urls)
+
+    def test_vcs_fold_honors_exclude(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _vcs_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        index = _git_index(["src/app.js", "logout.php"])
+
+        class FakeEngine:
+            spent = 0
+            def __init__(self): self.fetched = []
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                self.fetched.append(urlparse(url).path)
+                if urlparse(url).path == "/.git/index":
+                    return make_probe(200, index, url=url)
+                return make_probe(200, b"x", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/.git/HEAD", 200, 1, "", 0.85, "backup"))
+        eng = FakeEngine()
+        asyncio.run(_vcs_fold(eng, p, result, ScanOptions(exclude=["logout"]), NullObserver()))
+        self.assertNotIn("/logout.php", eng.fetched)     # excluded path never fetched
+
+
 if __name__ == "__main__":
     unittest.main()

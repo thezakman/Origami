@@ -48,7 +48,7 @@ from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
-                                        methods, robots, shortname, wayback, wellknown)
+                                        methods, robots, shortname, vcs, wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -807,6 +807,10 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     if opts.backups:
         await _guard(observer, "backups",
                      _backup_fold(engine, profile, result, opts, observer), None)
+        # 6.1 VCS/metadata reconstruction — a leaked .git/.svn/.DS_Store enumerated
+        # into its whole file tree (one leak → the repo). Part of the backups family.
+        await _guard(observer, "vcs",
+                     _vcs_fold(engine, profile, result, opts, observer), None)
         result.findings = _dedupe_and_collapse(result.findings, observer,
                                             ci=profile.case_sensitive is False)
 
@@ -1731,6 +1735,84 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
                 observer.request(url, probe.status, False)
                 continue
             _report(observer, result, opts, finding, url)
+
+
+MAX_VCS_FILES = 300       # cap files enumerated from a VCS/metadata leak
+
+
+async def _vcs_fold(engine, profile, result, opts, observer) -> None:
+    """Turn a leaked `.git/`, `.svn/` or `.DS_Store` into an enumeration.
+
+    Origami already reports the leak; this fetches the index/metadata, parses the
+    file list (vcs.py), and fetches each entry from the webroot — one leak becomes
+    the whole tree. On-host only; bounded by MAX_VCS_FILES; honours `--exclude`."""
+    git_roots, ds_dirs, svn_roots = set(), set(), set()
+    for f in result.findings:
+        if f.status not in (200, 206):
+            continue
+        p = urlparse(f.url).path
+        lp = p.lower()
+        i = lp.find("/.git/")
+        if i != -1:
+            git_roots.add(p[:i + 1])              # web dir that contains .git/
+        j = lp.find("/.svn/")
+        if j != -1:
+            svn_roots.add(p[:j + 1])
+        if lp.endswith("/.ds_store"):
+            ds_dirs.add(p[:-len(".DS_Store")])    # the dir the .DS_Store describes
+    if not (git_roots or ds_dirs or svn_roots):
+        return
+
+    observer.phase("vcs")
+    host = _host_root(profile.base_url)
+    seeds: list[str] = []                          # root-absolute paths to enumerate
+
+    async def _grab(meta_path, parse, label):
+        pr = await engine.fetch(urljoin(host, meta_path.lstrip("/")), keep_body=True)
+        observer.request(pr.url, pr.status, False)
+        if not (pr.ok and pr.status in (200, 206) and pr.body):
+            return
+        got = parse(pr.body)
+        if got:
+            observer.log(f"vcs: {label} → {len(got)} entries", 0, style="bold green")
+        return got
+
+    for root in sorted(git_roots):
+        files = await _grab(root + ".git/index", vcs.parse_git_index, f"{root}.git/index")
+        seeds += [root + fp for fp in (files or [])]
+    for d in sorted(ds_dirs):
+        names = await _grab(d + ".DS_Store", vcs.parse_ds_store, f"{d}.DS_Store")
+        seeds += [d + n for n in (names or [])]
+    for root in sorted(svn_roots):
+        files = await _grab(root + ".svn/wc.db", vcs.parse_svn, f"{root}.svn/wc.db")
+        seeds += [root + fp for fp in (files or [])]
+
+    # de-dup, cap, then fetch each from the webroot and report the real hits.
+    uniq, seen = [], set()
+    for p in seeds:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    if len(uniq) > MAX_VCS_FILES:
+        observer.log(f"vcs: {len(uniq)} files enumerated — capping fetch at {MAX_VCS_FILES}",
+                     0, style="yellow")
+        uniq = uniq[:MAX_VCS_FILES]
+    observer.start_prefix("vcs", len(uniq))
+    for p in uniq:
+        if opts.max_requests and engine.spent >= opts.max_requests:
+            break
+        url = urljoin(host, p.lstrip("/"))
+        if _excluded(urlparse(url).path, opts):
+            continue
+        observer.substep(p.rsplit("/", 1)[-1] or p)
+        probe = await engine.fetch(url)
+        prefix = urlparse(url).path.rsplit("/", 1)[0] + "/"
+        finding = await _confirm(engine, profile, prefix, probe, "vcs")
+        if finding is None:
+            observer.tick(hit=False)
+            observer.request(url, probe.status, False)
+            continue
+        _report(observer, result, opts, finding, url)
 
 
 MAX_BYPASS_TARGETS = 20   # cap blocked resources we attempt to bypass

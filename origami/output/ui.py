@@ -99,7 +99,7 @@ ORIGIN_STYLE = {
     "apidocs": "bright_blue", "wellknown": "bright_cyan", "graphql": "bright_magenta",
     "header": "blue", "methods": "bold red", "bypass403": "bold green",
     "harvest": "bright_blue", "vhost": "bold cyan", "wayback": "bright_green",
-    "cache-poison": "bold magenta", "index-hidden": "yellow",
+    "cache-poison": "bold magenta", "vcs": "bold red", "index-hidden": "yellow",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
