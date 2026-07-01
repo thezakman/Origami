@@ -11,6 +11,7 @@ drop obvious noise (assets we already have, data URIs, externals).
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -126,10 +127,37 @@ def parse_listing(body: bytes, base_url: str) -> set[str]:
     return out
 
 
+def _looks_sourcemap(body: bytes) -> bool:
+    """Cheap gate: a JSON object carrying `sourcesContent` (the original source)."""
+    return body[:64].lstrip().startswith(b"{") and b'"sourcesContent"' in body
+
+
+def parse_sourcemap(body: bytes) -> list[bytes]:
+    """The original (un-minified) source blobs a JS source map embeds in
+    `sourcesContent` — far richer for endpoint/param extraction than the shipped
+    minified bundle (real route strings, comments, internal hosts). `[]` on a
+    body that isn't a source map."""
+    try:
+        d = json.loads(body)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return []
+    if not isinstance(d, dict) or "mappings" not in d:
+        return []
+    return [c.encode("utf-8", "replace")
+            for c in (d.get("sourcesContent") or []) if isinstance(c, str) and c]
+
+
 def extract_paths(body: bytes, base_url: str) -> set[str]:
-    """Return same-host candidate paths (relative to base) found in `body`."""
+    """Return same-host candidate paths (relative to base) found in `body`.
+
+    A JS **source map** is transparently reconstructed: its `sourcesContent`
+    (the original, un-minified source) is mined too, so `app.min.js.map` yields
+    the routes the minified bundle buried."""
     host = urlparse(base_url).netloc
     found: set[str] = set()
+    if _looks_sourcemap(body):
+        for blob in parse_sourcemap(body):
+            found |= extract_paths(blob, base_url)
 
     def consider(s: str) -> None:
         s = _clean(s)
@@ -163,8 +191,12 @@ def extract_paths(body: bytes, base_url: str) -> set[str]:
 
 def extract_params(body: bytes) -> set[str]:
     """Harvest query parameter names from quoted URL-query strings — input
-    surface for the pentester, not JS-token noise."""
+    surface for the pentester, not JS-token noise. Source maps are reconstructed
+    (params mined from the original source too)."""
     out: set[str] = set()
+    if _looks_sourcemap(body):
+        for blob in parse_sourcemap(body):
+            out |= extract_params(blob)
     for q in _QUERY.findall(body):
         for pair in q.split(b"&"):
             name = pair.split(b"=")[0].decode("latin-1").strip().lower()
