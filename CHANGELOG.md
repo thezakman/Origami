@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.81.1] — Base wordlist: second enrichment pass
+- Grew `base.txt` to ~530 with more universal, high-hit-rate names (stack-specific
+  paths still stay the overlay's job): CRUD/action route names (`list`, `edit`,
+  `create`, `delete`, `view`, `browse` — high-yield under discovered dirs on recursion),
+  blog/content (`posts`, `article`, `page`, `tag`, `author`), app sections (`overview`,
+  `summary`, `activity`, `explore`), monitoring (`stats`, `monitor`), localization
+  (`lang`, `locale`, `i18n`, `translations`), and commonly-exposed webmail/remote/hosting
+  panels (`webmail`, `roundcube`, `owa`, `vpn`, `plesk`, `whm`). De-duplicated.
+
 ## [0.81.0] — `-u`/`--url` target flag
 - The target URL can now be passed as `-u`/`--url` (repeatable) in addition to the
   positional argument — so you can keep the URL last and swap only it between runs
