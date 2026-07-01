@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.79.0] — Four adaptive discovery folds
+- **API version pivot**: a confirmed `/api/v1/…` endpoint pivots to its adjacent versions
+  (`v0`, `v2`, `v3`) — the legacy/next surface still wired in the backend. On-host, bounded.
+- **Feeds & sitemap variants**: robots/sitemap discovery now also probes RSS/Atom feeds and
+  sitemap-index variants (`/feed`, `/rss`, `/atom.xml`, `sitemap_index.xml`…) and parses their
+  content URLs.
+- **Broader body harvesting**: any `text/*` response (plain dumps, CSV) is now mined for
+  endpoints, not just files with a known extension — config/secret files stay with the secrets fold.
+- **Naming-convention mutation**: a confirmed `/user` → `/users`, `report1` → `report2`,
+  `data.json` → `data.xml` — high-signal siblings from a developer's naming habit, not blind brute.
+
 ## [0.78.0] — More passive URL sources
 - `--wayback` now unions **urlscan.io** and **AlienVault OTX** (both keyless) with the
   Wayback CDX + Common Crawl sources — all four fetched concurrently, best-effort, so a
