@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.74.0] — VCS/metadata tree reconstruction
+- A leaked `.git/`, `.svn/` or `.DS_Store` is no longer just reported — it's **enumerated**:
+  Origami parses `.git/index` (DIRC v2–v4), a macOS `.DS_Store`, or a `.svn/wc.db` (SQLite)
+  and fetches every file it lists from the webroot. One leak becomes the whole repo/tree
+  (source, configs, `.env`, backups). On-host only, capped at 300 files, honours `--exclude`;
+  part of the backups family (off under `--no-backups`).
+
 ## [0.73.0] — Richer 405 probes + memory case hygiene
 - `--probe-405` now reports the **response-body hint** and the **content-type that
   worked**: `POST (json) reached (400): {"message":"username is required"}` — the
