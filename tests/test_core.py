@@ -3500,5 +3500,24 @@ class TestDiscoveryAdds(unittest.TestCase):
         self.assertIn("http://h/api/users", {f.url for f in result.findings})   # plural sibling found
 
 
+class TestCLIUrlFlag(unittest.TestCase):
+    def _run(self, *argv):
+        import subprocess, sys
+        return subprocess.run([sys.executable, "-m", "origami", *argv],
+                              capture_output=True, text=True)
+
+    def test_url_flag_supplies_target(self):
+        # -u/--url provide the target, so the "give a URL" check passes and the run
+        # fails later on the bad --list path instead → proves the flag was accepted.
+        for flag in ("-u", "--url"):
+            r = self._run(flag, "https://x/", "-l", "/no/such/file")
+            self.assertIn("target list not found", r.stderr)
+            self.assertNotIn("give at least one target", r.stderr)
+
+    def test_missing_target_still_errors(self):
+        r = self._run("-F")
+        self.assertIn("give at least one target", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

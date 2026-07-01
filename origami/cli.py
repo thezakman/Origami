@@ -382,6 +382,9 @@ def main() -> None:
     ap.add_argument("-V", "--version", action="version",
                     version=f"origami {__version__}")
     ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
+    ap.add_argument("-u", "--url", dest="url_opt", action="append", metavar="URL",
+                    help="target base URL as a flag (repeatable) — lets you keep the URL "
+                         "last and swap only it between runs: origami -F --gau -u https://…")
     ap.add_argument("-l", "--list", metavar="FILE",
                     help="file with target URLs, one per line (# comments allowed)")
     ap.add_argument("-c", "--concurrency", type=int, default=20)
@@ -541,6 +544,10 @@ def main() -> None:
     ap.add_argument("-v", "--verbose", action="count", default=0,
                     help="-v: phases, calibration, fingerprint, hits; -vv: every request")
     args = ap.parse_args()
+    # -u/--url merges into the positional target list, so everything downstream
+    # (which reads args.url) works unchanged whichever form the user used.
+    if args.url_opt:
+        args.url = list(args.url or []) + args.url_opt
 
     if args.update:
         from origami.brain.ingest import wappalyzer

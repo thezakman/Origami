@@ -57,12 +57,14 @@ This installs the `origami` command into the venv (with `rich` for the live dash
 origami https://example.com                 # scan one target
 origami https://example.com/app/            # scan under a base path
 origami -l targets.txt --out results/       # scan a list, artifacts per host
+origami -F --gau --bypass-403 -u https://…  # -u/--url keeps the target last, swap only it between runs
 ```
 
 Common flags:
 
 | flag | meaning |
 |---|---|
+| `-u`/`--url URL` | target base URL as a flag (repeatable) — lets you keep the URL last and swap only it between runs; same as the positional argument |
 | `-w FILE` | wordlist (default: curated ~480-word builtin; point at SecLists/Assetnote for exhaustive runs) |
 | `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
@@ -224,7 +226,7 @@ python tests/benchmark/bench_adaptive.py                        # adaptive vs bl
 
 The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS, OpenAPI/Swagger/JSON:API + `.well-known`/GraphQL), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
 
-On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **method discovery** (`--probe-405`: a 405 surfaces its `Allow` header free, then opt-in POST/PATCH probing reveals the accepted write method), **memory hygiene** (www/apex normalization, content-hash bundle filtering + ≥2-host n-gram floor, `--forget`/`--forget-noise`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 265 unit tests + an end-to-end integration scan.
+On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **method discovery** (`--probe-405`: a 405 surfaces its `Allow` header free, then opt-in POST/PATCH probing reveals the accepted write method), **memory hygiene** (www/apex normalization, content-hash bundle filtering + ≥2-host n-gram floor, `--forget`/`--forget-noise`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 267 unit tests + an end-to-end integration scan.
 
 ### Request economy (contextual bandit)
 
