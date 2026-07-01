@@ -65,6 +65,7 @@ Common flags:
 | flag | meaning |
 |---|---|
 | `-u`/`--url URL` | target base URL as a flag (repeatable) — lets you keep the URL last and swap only it between runs; same as the positional argument |
+| `--deep` | aggressive-discovery preset: `--bypass-403 --cache-poison --probe-405 --buckets --params --wayback` at once (state-changing/off-host probes included). Just `origami --deep -u <url>` |
 | `-w FILE` | wordlist (default: curated ~530-word builtin; point at SecLists/Assetnote for exhaustive runs) |
 | `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |

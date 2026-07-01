@@ -5,6 +5,11 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.82.0] — `--deep` aggressive-discovery preset
+- One flag turns on the aggressive bundle at once: `--bypass-403 --cache-poison --probe-405
+  --buckets --params --wayback`. Just `origami --deep -u <url>` instead of typing the whole
+  string. Includes the state-changing/off-host probes, so it's a knowing power-user opt-in.
+
 ## [0.81.2] — Backup fold: drop catch-all echoes
 - A "backup" whose response is **byte-identical** to the original file (same length +
   near-identical simhash) is no longer reported: it's a route/catch-all serving the same
