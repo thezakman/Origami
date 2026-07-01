@@ -47,9 +47,9 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
-from origami.modules.discovery import (apidocs, backups, buckets, clientapp, graphql,
-                                        js_parser, methods, robots, shortname, vcs,
-                                        wayback, wellknown)
+from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
+                                        graphql, js_parser, methods, mutate, robots,
+                                        shortname, vcs, wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -835,6 +835,16 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "buckets",
                  _bucket_fold(engine, profile, result, opts, observer), None)
 
+    # 7.2 API version pivot — a confirmed /api/vN/ endpoint → its adjacent versions
+    # (legacy/next surface still wired in the backend). On-host, bounded.
+    await _guard(observer, "apiver",
+                 _apiver_fold(engine, profile, result, opts, observer), None)
+
+    # 7.3 naming-convention mutation — confirmed /user → /users, report1 → report2,
+    # data.json → data.xml. High-signal siblings, not blind brute. On-host, bounded.
+    await _guard(observer, "mutate",
+                 _mutate_fold(engine, profile, result, opts, observer), None)
+
     # 7.5 parameter discovery — fire harvested + common param names at dynamic
     # endpoints; a reflected canary is a real input (XSS/SSTI/redirect lead). Opt-in.
     if opts.param_fuzz:
@@ -1149,7 +1159,7 @@ def _wordlist_path(opts: ScanOptions):
 
 _HARVEST_EXT = (".js", ".mjs", ".map", ".json", ".xml", ".html", ".htm", ".txt", ".csv")
 _HARVEST_CODE = (".js", ".mjs", ".map", ".json")
-MAX_HARVEST_FILES = 30    # discovered files we re-read for endpoints
+MAX_HARVEST_FILES = 40    # discovered text responses we re-read for endpoints
 MAX_HARVEST_NEW = 400     # new candidate paths a harvest pass may add
 MAX_DISCOVERY_ROUNDS = 3  # walk → harvest → recurse new dirs → harvest → … (cap)
 _HARVEST_DEPTH_BONUS = 3  # harvested dirs are evidence-based, so recurse them past the blind depth cap
@@ -1161,16 +1171,31 @@ _INDEX_HIDDEN = (".htaccess", ".htpasswd", ".git/", ".git/config", ".svn/", ".en
                  ".bash_history", ".npmrc", "config.php.bak")
 
 
+# Config/secret files (often served text/plain) belong to the SECRETS fold, not
+# harvest — kept out of _harvestable so the partition routes them there.
+_SECRET_CFG_EXT = (".env", ".ini", ".conf", ".cfg", ".yml", ".yaml", ".properties",
+                   ".toml", ".pem", ".key", ".log", ".bak", ".old", ".htpasswd")
+
+
 def _harvestable(f) -> bool:
-    """A confirmed 2xx text file whose body likely holds more endpoints."""
+    """A confirmed 2xx **text** response whose body likely holds more endpoints.
+
+    Any `text/*` type qualifies (so a plain app route, a `text/plain` API dump or
+    a CSV is mined, not just files with a known extension); JSON/XML/JS by content
+    type too. Vendor libraries, binary/asset responses, and config/secret files
+    (which the secrets fold owns) are skipped."""
     if not (200 <= f.status < 300):
         return False
     if js_parser._is_vendor(f.url):           # jquery/bootstrap/etc. — not the app's own code
         return False
     path = urlparse(f.url).path.lower()
+    base = path.rstrip("/").rsplit("/", 1)[-1]
+    if path.endswith(_SECRET_CFG_EXT) or base.startswith("."):   # config/dotfile → secrets fold
+        return False
     ct = (f.content_type or "").lower()
     return (path.endswith(_HARVEST_EXT)
-            or any(t in ct for t in ("javascript", "ecmascript", "json", "xml", "html")))
+            or ct.startswith("text/")         # text/html, text/plain, text/csv, …
+            or any(t in ct for t in ("javascript", "ecmascript", "json", "xml")))
 
 
 async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
@@ -1751,6 +1776,82 @@ async def _probe_405_finding(engine, finding, opts, observer) -> bool:
     finding.note = ((finding.note + " · " if finding.note else "")
                     + f"{method} ({label}) {verdict}" + (f": {hint}" if hint else ""))
     return True
+
+
+MAX_APIVER_TARGETS = 15   # cap versioned endpoints we pivot around
+MAX_MUTATE_TARGETS = 15   # cap confirmed resources we mutate siblings around
+
+
+async def _mutate_fold(engine, profile, result, opts, observer) -> None:
+    """Turn each confirmed resource into its convention-based siblings (plural,
+    trailing-number, format twin) and probe them — a developer's naming habit
+    makes these likely where blind brute wouldn't. On-host, bounded, honours
+    `--exclude`."""
+    targets = [f for f in result.findings if 200 <= f.status < 300
+               and urlparse(f.url).path.rstrip("/").rsplit("/", 1)[-1]]
+    if not targets:
+        return
+    targets = sorted(targets, key=lambda f: (-f.confidence, len(f.url)))[:MAX_MUTATE_TARGETS]
+    observer.phase("mutate")
+    total = sum(len(mutate.siblings(urlparse(f.url).path)) for f in targets)
+    if not total:
+        return
+    observer.log(f"mutate: probing convention siblings of {len(targets)} confirmed resource(s)",
+                 0, style="cyan")
+    observer.start_prefix("mutate", total)
+    host = _host_root(profile.base_url)
+    for f in targets:
+        path = urlparse(f.url).path
+        prefix = path.rsplit("/", 1)[0] + "/"
+        for sib in mutate.siblings(path):
+            if opts.max_requests and engine.spent >= opts.max_requests:
+                return
+            url = urljoin(host, sib.lstrip("/"))
+            if url in result.seen_urls or _excluded(urlparse(url).path, opts):
+                observer.tick(hit=False)
+                continue
+            probe = await engine.fetch(url)
+            finding = await _confirm(engine, profile, prefix, probe, "mutate")
+            if finding is None:
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
+            _report(observer, result, opts, finding, url)
+
+
+async def _apiver_fold(engine, profile, result, opts, observer) -> None:
+    """Pivot each confirmed versioned endpoint (`/api/v1/…`) to its adjacent API
+    versions — the legacy/next versions still wired in the backend. On-host,
+    bounded, honours `--exclude`."""
+    targets = [f for f in result.findings
+               if f.status in (200, 204, 301, 302, 401, 403, 405)
+               and apiver.has_version(urlparse(f.url).path)]
+    if not targets:
+        return
+    targets = sorted(targets, key=lambda f: (-f.confidence, len(f.url)))[:MAX_APIVER_TARGETS]
+    observer.phase("apiver")
+    total = sum(len(apiver.version_variants(urlparse(f.url).path)) for f in targets)
+    observer.log(f"apiver: pivoting {len(targets)} versioned endpoint(s) to adjacent versions",
+                 0, style="cyan")
+    observer.start_prefix("apiver", total)
+    host = _host_root(profile.base_url)
+    for f in targets:
+        path = urlparse(f.url).path
+        prefix = path.rsplit("/", 1)[0] + "/"
+        for var in apiver.version_variants(path):
+            if opts.max_requests and engine.spent >= opts.max_requests:
+                return
+            url = urljoin(host, var.lstrip("/"))
+            if url in result.seen_urls or _excluded(urlparse(url).path, opts):
+                observer.tick(hit=False)
+                continue
+            probe = await engine.fetch(url)
+            finding = await _confirm(engine, profile, prefix, probe, "apiver")
+            if finding is None:
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
+            _report(observer, result, opts, finding, url)
 
 
 async def _bucket_fold(engine, profile, result, opts, observer) -> None:

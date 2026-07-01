@@ -3410,5 +3410,95 @@ class TestConfigSeeds(unittest.TestCase):
         self.assertIn("s3:co-backups", {r.label for r in p.bucket_refs})  # bucket ref captured
 
 
+class TestDiscoveryAdds(unittest.TestCase):
+    # --- #2 API version pivot -------------------------------------------------
+    def test_version_variants(self):
+        from origami.modules.discovery import apiver
+        self.assertEqual(apiver.version_variants("/api/v1/users"),
+                         ["/api/v0/users", "/api/v2/users", "/api/v3/users"])
+        self.assertEqual(apiver.version_variants("/no/version"), [])
+
+    def test_apiver_fold(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _apiver_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:
+            spent = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                p = urlparse(url).path
+                if p in ("/api/v2/users", "/api/v3/users"):
+                    return make_probe(200, b"users", url=url, ctype="application/json")
+                return make_probe(404, b"no", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/api/v1/users", 200, 5, "application/json", 0.9, "apidocs"))
+        asyncio.run(_apiver_fold(FakeEngine(), p, result, ScanOptions(), NullObserver()))
+        urls = {f.url for f in result.findings}
+        self.assertIn("http://h/api/v2/users", urls)     # pivoted to the next version
+        self.assertIn("http://h/api/v3/users", urls)
+
+    # --- #3 feeds / sitemap variants -----------------------------------------
+    def test_feed_content_urls(self):
+        from origami.modules.discovery import robots
+        rss = b'<rss><item><link>https://h/post-1</link><guid>https://h/g/2</guid></item></rss>'
+        atom = b'<feed><entry><link href="https://h/atom-x"/></entry></feed>'
+        self.assertEqual(set(robots._content_urls(rss)), {"https://h/post-1", "https://h/g/2"})
+        self.assertEqual(robots._content_urls(atom), ["https://h/atom-x"])
+
+    def test_harvest_parses_feeds(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.modules.discovery import robots
+        rss = b'<rss><channel><item><link>https://h/article-42</link></item></channel></rss>'
+        class FakeEngine:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                if urlparse(url).path == "/feed":
+                    return make_probe(200, rss, url=url, ctype="application/rss+xml")
+                return make_probe(404, b"", url=url)
+        paths = asyncio.run(robots.harvest(FakeEngine(), "http://h/"))
+        self.assertIn("/article-42", paths)
+
+    # --- #4 broader harvest ---------------------------------------------------
+    def test_harvestable_includes_text_types(self):
+        from origami.core.scanner import _harvestable
+        from origami.core.response_classifier import Finding
+        self.assertTrue(_harvestable(Finding("http://h/api/dump", 200, 9, "text/plain", 0.9, "x")))
+        self.assertFalse(_harvestable(Finding("http://h/logo.png", 200, 9, "image/png", 0.9, "x")))
+
+    # --- #5 naming-convention mutation ---------------------------------------
+    def test_mutate_siblings(self):
+        from origami.modules.discovery import mutate
+        self.assertIn("/api/users", mutate.siblings("/api/user"))
+        self.assertIn("/report2", mutate.siblings("/report1"))
+        self.assertIn("/data.xml", mutate.siblings("/data.json"))
+        self.assertEqual(mutate.siblings("/"), [])
+
+    def test_mutate_fold(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _mutate_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:
+            spent = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                if urlparse(url).path == "/api/users":
+                    return make_probe(200, b"users", url=url, ctype="application/json")
+                return make_probe(404, b"no", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/api/user", 200, 5, "application/json", 0.9, "wordlist"))
+        asyncio.run(_mutate_fold(FakeEngine(), p, result, ScanOptions(), NullObserver()))
+        self.assertIn("http://h/api/users", {f.url for f in result.findings})   # plural sibling found
+
+
 if __name__ == "__main__":
     unittest.main()
