@@ -5,6 +5,11 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.78.0] — More passive URL sources
+- `--wayback` now unions **urlscan.io** and **AlienVault OTX** (both keyless) with the
+  Wayback CDX + Common Crawl sources — all four fetched concurrently, best-effort, so a
+  slow/down source can't hold up the rest. More historical/indexed URLs → more seeds.
+
 ## [0.77.0] — Config files → new seeds
 - Config/`.env`/`appsettings` bodies (already read for secrets) are now mined for the
   **same-host paths they reference** — a leaked config names `/internal/...` endpoints

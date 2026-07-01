@@ -560,11 +560,13 @@ class TestWayback(unittest.TestCase):
     def test_harvest_native_union_and_never_raises(self):
         import asyncio
         from origami.modules.discovery import wayback as W
-        orig_cdx, orig_cc, orig_gau = W.from_cdx, W.from_commoncrawl, W.from_gau
+        orig = (W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx)
         try:
             async def cdx(host, cap=0, subs=False): return {"http://h/a?p=1"}
             async def cc(host, cap=0, subs=False): return {"http://h/b"}
+            async def none(host, cap=0, subs=False): return set()
             W.from_cdx, W.from_commoncrawl = cdx, cc
+            W.from_urlscan, W.from_otx = none, none
             paths, params, src = asyncio.run(W.harvest("h"))
             self.assertEqual(paths, {"/a", "/b"})
             self.assertEqual(params, {"p"})
@@ -574,16 +576,17 @@ class TestWayback(unittest.TestCase):
             W.from_cdx = W.from_commoncrawl = boom
             self.assertEqual(asyncio.run(W.harvest("h")), (set(), set(), "none"))
         finally:
-            W.from_cdx, W.from_commoncrawl, W.from_gau = orig_cdx, orig_cc, orig_gau
+            W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx = orig
 
     def test_harvest_gau_preferred_with_native_fallback(self):
         import asyncio
         from origami.modules.discovery import wayback as W
-        orig_cdx, orig_cc, orig_gau = W.from_cdx, W.from_commoncrawl, W.from_gau
+        orig = (W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx)
         try:
             async def cdx(host, cap=0, subs=False): return {"http://h/native"}
-            async def cc(host, cap=0, subs=False): return set()
-            W.from_cdx, W.from_commoncrawl = cdx, cc
+            async def none(host, cap=0, subs=False): return set()
+            W.from_cdx, W.from_commoncrawl = cdx, none
+            W.from_urlscan, W.from_otx = none, none
             async def gau_ok(host, **k): return {"http://h/fromgau"}
             W.from_gau = gau_ok
             paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
@@ -593,7 +596,7 @@ class TestWayback(unittest.TestCase):
             paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
             self.assertEqual((paths, src), ({"/native"}, "wayback"))   # fell back to native
         finally:
-            W.from_cdx, W.from_commoncrawl, W.from_gau = orig_cdx, orig_cc, orig_gau
+            W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx = orig
 
     def test_from_gau_timeout_reaps_child(self):
         # a hung gau must hit its own timeout, be reaped, and return empty fast —
@@ -615,16 +618,44 @@ class TestWayback(unittest.TestCase):
     def test_harvest_caps_paths(self):
         import asyncio
         from origami.modules.discovery import wayback as W
-        orig_cdx, orig_cc = W.from_cdx, W.from_commoncrawl
+        orig = (W.from_cdx, W.from_commoncrawl, W.from_urlscan, W.from_otx)
         try:
             async def many(host, cap=0, subs=False):
                 return {f"http://h/p{i}" for i in range(50)}
             async def none(host, cap=0, subs=False): return set()
             W.from_cdx, W.from_commoncrawl = many, none
-            paths, _, _ = asyncio.run(W.harvest("h", cap=10))
+            W.from_urlscan, W.from_otx = none, none        # stub the extra sources (no network)
+            paths, _, src = asyncio.run(W.harvest("h", cap=10))
             self.assertEqual(len(paths), 10)
+            self.assertIn("wayback", src)
         finally:
-            W.from_cdx, W.from_commoncrawl = orig_cdx, orig_cc
+            W.from_cdx, W.from_commoncrawl, W.from_urlscan, W.from_otx = orig
+
+    def test_harvest_unions_all_passive_sources(self):
+        import asyncio
+        from origami.modules.discovery import wayback as W
+        orig = (W.from_cdx, W.from_commoncrawl, W.from_urlscan, W.from_otx)
+        try:
+            async def cdx(host, cap=0, subs=False): return {"http://h/a"}
+            async def cc(host, cap=0, subs=False): return set()
+            async def us(host, cap=0, subs=False): return {"http://h/b"}
+            async def otx(host, cap=0, subs=False): return {"http://h/c"}
+            W.from_cdx, W.from_commoncrawl, W.from_urlscan, W.from_otx = cdx, cc, us, otx
+            paths, _, src = asyncio.run(W.harvest("h"))
+            self.assertEqual(paths, {"/a", "/b", "/c"})    # all sources merged
+            self.assertIn("urlscan", src)
+            self.assertIn("otx", src)
+        finally:
+            W.from_cdx, W.from_commoncrawl, W.from_urlscan, W.from_otx = orig
+
+    def test_parse_urlscan_and_otx(self):
+        from origami.modules.discovery import wayback as W
+        us = '{"results":[{"page":{"url":"https://h/x"},"task":{"url":"https://h/y"}}]}'
+        self.assertEqual(W.parse_urlscan(us), {"https://h/x", "https://h/y"})
+        otx = '{"url_list":[{"url":"https://h/z"},{"url":"http://h/w"}]}'
+        self.assertEqual(W.parse_otx(otx), {"https://h/z", "http://h/w"})
+        self.assertEqual(W.parse_urlscan("not json"), set())
+        self.assertEqual(W.parse_otx("{}"), set())
 
 
 class TestSessionAuthWall(unittest.TestCase):
