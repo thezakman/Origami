@@ -78,6 +78,49 @@ def parse_cc_json(text: str) -> set[str]:
     return out
 
 
+def urlscan_query_url(host: str) -> str:
+    """urlscan.io search — URLs seen on the host (keyless, rate-limited)."""
+    return f"https://urlscan.io/api/v1/search/?q=domain:{host}&size=1000"
+
+
+def parse_urlscan(text: str) -> set[str]:
+    """urlscan.io search JSON → the page/task URLs of each result."""
+    out: set[str] = set()
+    try:
+        d = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return out
+    for r in (d.get("results") or []) if isinstance(d, dict) else []:
+        if not isinstance(r, dict):
+            continue
+        for key in ("page", "task"):
+            sub = r.get(key)
+            u = sub.get("url") if isinstance(sub, dict) else None
+            if isinstance(u, str) and u.startswith(("http://", "https://")):
+                out.add(u)
+    return out
+
+
+def otx_query_url(host: str) -> str:
+    """AlienVault OTX passive URL list for the hostname (keyless)."""
+    return (f"https://otx.alienvault.com/api/v1/indicators/hostname/{host}"
+            "/url_list?limit=500&page=1")
+
+
+def parse_otx(text: str) -> set[str]:
+    """OTX `url_list` JSON → the archived URLs."""
+    out: set[str] = set()
+    try:
+        d = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return out
+    for r in (d.get("url_list") or []) if isinstance(d, dict) else []:
+        u = r.get("url") if isinstance(r, dict) else None
+        if isinstance(u, str) and u.startswith(("http://", "https://")):
+            out.add(u)
+    return out
+
+
 def extract_paths_and_params(urls, host: str, subs: bool = False) -> tuple[set[str], set[str]]:
     """From raw archived URLs → (root-absolute same-host paths, query param names).
 
@@ -133,6 +176,20 @@ async def from_commoncrawl(host: str, cap: int = _FETCH_ROWS, subs: bool = False
         if not api:
             return set()
         return parse_cc_json(await _get(c, cc_index_url(api, host, cap, subs)))
+
+
+async def from_urlscan(host: str, cap: int = _FETCH_ROWS, subs: bool = False) -> set[str]:
+    """urlscan.io — keyless search for URLs seen on the host."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True,
+                                 headers={"User-Agent": _UA}) as c:
+        return parse_urlscan(await _get(c, urlscan_query_url(host)))
+
+
+async def from_otx(host: str, cap: int = _FETCH_ROWS, subs: bool = False) -> set[str]:
+    """AlienVault OTX — keyless passive URL list for the hostname."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True,
+                                 headers={"User-Agent": _UA}) as c:
+        return parse_otx(await _get(c, otx_query_url(host)))
 
 
 _GAU_TIMEOUT = 25.0
@@ -198,10 +255,17 @@ async def harvest(host: str, *, use_gau: bool = False, cap: int = DEFAULT_CAP,
             urls = gau
             source = "gau"
     if not urls:                                 # native (default, or gau fallback)
-        cdx = await _safe(from_cdx(host, cap=_FETCH_ROWS, subs=subs)) or set()
-        cc = await _safe(from_commoncrawl(host, cap=_FETCH_ROWS, subs=subs)) or set()
-        urls = cdx | cc
-        source = "wayback+cc" if (cdx and cc) else "wayback" if cdx else "commoncrawl" if cc else "none"
+        # all four passive sources concurrently — a slow/down one can't hold up the rest
+        cdx, cc, us, otx = await asyncio.gather(
+            _safe(from_cdx(host, cap=_FETCH_ROWS, subs=subs)),
+            _safe(from_commoncrawl(host, cap=_FETCH_ROWS, subs=subs)),
+            _safe(from_urlscan(host, cap=_FETCH_ROWS, subs=subs)),
+            _safe(from_otx(host, cap=_FETCH_ROWS, subs=subs)))
+        cdx, cc, us, otx = cdx or set(), cc or set(), us or set(), otx or set()
+        urls = cdx | cc | us | otx
+        parts = [n for n, s in (("wayback", cdx), ("cc", cc),
+                                ("urlscan", us), ("otx", otx)) if s]
+        source = "+".join(parts) or "none"
     paths, params = extract_paths_and_params(urls, host, subs=subs)
     if len(paths) > cap:
         paths = set(sorted(paths)[:cap])
