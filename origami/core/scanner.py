@@ -47,8 +47,9 @@ from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlist, target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
-from origami.modules.discovery import (apidocs, backups, clientapp, graphql, js_parser,
-                                        methods, robots, shortname, vcs, wayback, wellknown)
+from origami.modules.discovery import (apidocs, backups, buckets, clientapp, graphql,
+                                        js_parser, methods, robots, shortname, vcs,
+                                        wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -205,6 +206,7 @@ class ScanOptions:
     cache_poison: str = ""         # "" = off; "light"|"auto"|"full" — probe unkeyed inputs for cache poisoning (--cache-poison)
     cache_headers: str | None = None  # custom unkeyed-header wordlist for --cache-poison (None → bundled set)
     probe_405: bool = False        # on each 405, replay with POST/PATCH (empty & {} body) to find the accepted method (--probe-405)
+    buckets: bool = False          # probe referenced S3/GCS/Azure buckets for public listability (--buckets)
     wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
     gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
@@ -275,6 +277,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # Passive cache-layer fingerprint (free — reads headers we already captured).
     # Always on; just enriches the profile and gates the active --cache-poison fold.
+    if root.body:
+        profile.bucket_refs |= buckets.find_bucket_refs(root.body)  # cloud refs in the homepage
     profile.cache_layer = cache_poison.detect_cache_layer(root.headers)
     if profile.cache_layer:
         cs = cache_poison.cache_status(root.headers)
@@ -826,6 +830,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "secrets",
                  _secrets_fold(engine, profile, result, opts, observer), None)
 
+    # 7.1 cloud buckets — report S3/GCS/Azure refs seen in the bodies; with
+    # --buckets, probe each for public listability (read-only GET, off-host).
+    await _guard(observer, "buckets",
+                 _bucket_fold(engine, profile, result, opts, observer), None)
+
     # 7.5 parameter discovery — fire harvested + common param names at dynamic
     # endpoints; a reflected canary is a real input (XSS/SSTI/redirect lead). Opt-in.
     if opts.param_fuzz:
@@ -1198,7 +1207,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
         pr = await engine.fetch(f.url, keep_body=True)
         if not (pr.ok and pr.body):
             continue
-        _scan_body(f, pr.body, observer, opts.finding_sink)   # body's here — scan creds + leaks too
+        _scan_body(f, pr.body, observer, opts.finding_sink, profile.bucket_refs)
         extracted = js_parser.extract_paths(pr.body, f.url)
         if is_dir_listing(pr.body):               # autoindex → read its TRUE contents, don't guess
             extracted |= js_parser.parse_listing(pr.body, f.url)
@@ -1281,11 +1290,14 @@ def _note_leaks(finding, body, observer) -> int:
     return len(hits)
 
 
-def _scan_body(finding, body, observer, sink=None) -> int:
+def _scan_body(finding, body, observer, sink=None, bucket_refs=None) -> int:
     """Run all body-content analyzers (secrets + content-intel leaks) on a body
     we already have in hand, then re-emit the now-enriched finding ONCE via `sink`
     (opts.finding_sink) so a JSONL consumer sees the secret/leak tags even though
-    detection happens post-confirm. Returns the total number of hits."""
+    detection happens post-confirm. Returns the total number of hits. Cloud
+    storage references are accumulated into `bucket_refs` for the bucket fold."""
+    if bucket_refs is not None:
+        bucket_refs |= buckets.find_bucket_refs(body)
     n = _note_secrets(finding, body, observer) + _note_leaks(finding, body, observer)
     if n and sink is not None:
         sink(finding)
@@ -1335,7 +1347,7 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
-            total += _scan_body(f, pr.body, observer, opts.finding_sink)
+            total += _scan_body(f, pr.body, observer, opts.finding_sink, profile.bucket_refs)
     if total:
         observer.log(f"content: {total} secret/disclosure hit(s) flagged — see the 'secret'/'leak' tags",
                      0, style="bold yellow")
@@ -1706,6 +1718,36 @@ async def _probe_405_finding(engine, finding, opts, observer) -> bool:
     finding.note = ((finding.note + " · " if finding.note else "")
                     + f"{method} ({label}) {verdict}" + (f": {hint}" if hint else ""))
     return True
+
+
+async def _bucket_fold(engine, profile, result, opts, observer) -> None:
+    """Report cloud-storage references seen in the target's bodies, and — under
+    `--buckets` — probe each bucket's read-only listing endpoint to flag the
+    publicly-listable ones (with a sample of the objects they expose)."""
+    refs = profile.bucket_refs
+    if not refs:
+        return
+    observer.phase("buckets")
+    mode = "probing" if opts.buckets else "found"
+    observer.log(f"buckets: {len(refs)} cloud-storage reference(s) {mode}", 0, style="cyan")
+    observer.start_prefix("buckets", len(refs))
+    for ref in sorted(refs, key=lambda r: r.label):
+        url = buckets.public_url(ref)
+        note = f"cloud bucket referenced: {ref.label}"
+        conf, tags = 0.5, ["bucket"]
+        if opts.buckets:
+            if opts.max_requests and engine.spent >= opts.max_requests:
+                break
+            pr = await engine.fetch(buckets.list_url(ref), keep_body=True)
+            observer.request(pr.url, pr.status, False)
+            if buckets.is_listable(pr.status, pr.body):
+                keys = buckets.parse_keys(pr.body)
+                sample = ", ".join(keys[:5]) + (f" (+{len(keys) - 5})" if len(keys) > 5 else "")
+                note = f"PUBLIC bucket {ref.label} — listable: {sample}"
+                conf, tags = 0.95, ["bucket", "listing", "disclosure"]
+                observer.log(f"bucket: {ref.label} is PUBLIC/listable → {sample}", 0, style="bold red")
+        f = Finding(url, 200, 0, "", conf, "bucket", note=note, tags=tags)
+        _report(observer, result, opts, f, url)
 
 
 async def _backup_fold(engine, profile, result, opts, observer) -> None:

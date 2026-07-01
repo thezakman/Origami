@@ -3288,5 +3288,61 @@ class TestSourceMap(unittest.TestCase):
         self.assertEqual(J.parse_sourcemap(b"not json"), [])
 
 
+class TestBuckets(unittest.TestCase):
+    def test_find_bucket_refs(self):
+        from origami.modules.discovery import buckets as B
+        body = (b'cdn "https://my-assets.s3.amazonaws.com/x.js" '
+                b'p "https://storage.googleapis.com/company-backups/db.sql" '
+                b'vh "https://reports.storage.googleapis.com/q.csv" '
+                b'az "https://acct1.blob.core.windows.net/private/f" '
+                b's3://legacy-dumps/2020.zip')
+        labels = sorted(r.label for r in B.find_bucket_refs(body))
+        self.assertEqual(labels, ["azure:acct1/private", "gcs:company-backups",
+                                  "gcs:reports", "s3:legacy-dumps", "s3:my-assets"])
+        self.assertNotIn("s3:x.js", labels)             # object key of a vhost URL, not a bucket
+
+    def test_list_url_and_listing_parse(self):
+        from origami.modules.discovery import buckets as B
+        r = B.BucketRef("s3", "b")
+        self.assertEqual(B.list_url(r), "https://b.s3.amazonaws.com/?list-type=2")
+        xml = b'<ListBucketResult><Contents><Key>a/db.sql</Key></Contents>' \
+              b'<Contents><Key>backup.zip</Key></Contents></ListBucketResult>'
+        self.assertTrue(B.is_listable(200, xml))
+        self.assertFalse(B.is_listable(403, b'<Error><Code>AccessDenied</Code></Error>'))
+        self.assertEqual(B.parse_keys(xml), ["a/db.sql", "backup.zip"])
+
+    def test_bucket_fold_surfaces_and_probes(self):
+        import asyncio
+        from origami.core.scanner import _bucket_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.modules.discovery.buckets import BucketRef
+        from origami.output.ui import NullObserver
+
+        xml = b'<ListBucketResult><Contents><Key>secret/db.sql</Key></Contents></ListBucketResult>'
+
+        class FakeEngine:
+            spent = 0
+            def __init__(self): self.calls = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                self.calls += 1
+                return make_probe(200, xml, url=url, ctype="application/xml")
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        p.bucket_refs = {BucketRef("s3", "my-bucket")}
+
+        # without --buckets: reference surfaced for free, no probe fired
+        r1, e1 = ScanResult(profile=p), FakeEngine()
+        asyncio.run(_bucket_fold(e1, p, r1, ScanOptions(buckets=False), NullObserver()))
+        self.assertTrue(any("referenced: s3:my-bucket" in (f.note or "") for f in r1.findings))
+        self.assertEqual(e1.calls, 0)                   # off-host GET only under --buckets
+
+        # with --buckets: probes listability, flags PUBLIC + sample keys
+        r2, e2 = ScanResult(profile=p), FakeEngine()
+        asyncio.run(_bucket_fold(e2, p, r2, ScanOptions(buckets=True), NullObserver()))
+        pub = [f for f in r2.findings if "listing" in f.tags]
+        self.assertTrue(pub)
+        self.assertIn("secret/db.sql", pub[0].note)
+
+
 if __name__ == "__main__":
     unittest.main()

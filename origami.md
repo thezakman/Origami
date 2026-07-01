@@ -203,7 +203,7 @@ origami/
   modules/
     waf.py  secrets.py  leaks.py  paramfuzz.py  vhost.py  bypass403.py  cache_poison.py  session.py
     discovery/   robots.py  js_parser.py  backups.py  shortname.py  apidocs.py
-                 wellknown.py  graphql.py  clientapp.py  methods.py  wayback.py  vcs.py
+                 wellknown.py  graphql.py  clientapp.py  methods.py  wayback.py  vcs.py  buckets.py
   brain/
     overlay.yaml              # curated KB
     memory.py                 # SQLite corpus, k-NN, association, host-normalized

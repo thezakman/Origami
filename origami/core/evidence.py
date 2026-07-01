@@ -60,6 +60,7 @@ class TargetProfile:
     cache_layer: str = ""                  # detected CDN/cache layer (cloudflare/fastly/varnish/…), if any
     enabled_extensions: set[str] = field(default_factory=set)
     parameters: set[str] = field(default_factory=set)  # harvested param names (pentest intel)
+    bucket_refs: set = field(default_factory=set)      # cloud storage refs (S3/GCS/Azure) seen in bodies
     evidence: list[Evidence] = field(default_factory=list)
 
     # ---- evidence bus (list + reducer) -------------------------------------
