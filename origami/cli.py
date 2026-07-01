@@ -159,14 +159,15 @@ async def run(args: argparse.Namespace) -> int:
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
         extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
-        bypass403=(args.bypass_403 is not None) or (args.bypass_headers is not None),
-        bypass_intensity=args.bypass_403 or "auto",   # bare flag / --bypass-headers → auto
+        bypass403=(args.bypass_403 is not None) or (args.bypass_headers is not None) or args.deep,
+        bypass_intensity=args.bypass_403 or "auto",   # bare flag / --bypass-headers / --deep → auto
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
-        openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
-        wayback=args.wayback or args.gau, gau=args.gau,
-        cache_poison=(args.cache_poison or ("auto" if args.cache_headers else "")),
-        cache_headers=args.cache_headers, probe_405=args.probe_405, buckets=args.buckets,
+        openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params or args.deep,
+        wayback=args.wayback or args.gau or args.deep, gau=args.gau,
+        cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
+        cache_headers=args.cache_headers,
+        probe_405=args.probe_405 or args.deep, buckets=args.buckets or args.deep,
         filters=_build_filters(args),
     )
 
@@ -205,6 +206,8 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
                   + (" (only)" if args.ext_only else " (+ auto)"))
         print(f"  filters  : codes {fdesc}")
+        if args.deep:
+            print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback")
         if args.header:
             print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
         if args.user_agent:
@@ -498,6 +501,10 @@ def main() -> None:
     ap.add_argument("--cache-headers", metavar="FILE",
                     help="custom unkeyed-header wordlist for --cache-poison ('Header: value' "
                          "lines), added to the built-in set (implies --cache-poison)")
+    ap.add_argument("--deep", action="store_true",
+                    help="aggressive discovery preset: turns on --bypass-403, --cache-poison, "
+                         "--probe-405, --buckets, --params and --wayback at once (state-changing "
+                         "probes and off-host bucket GETs included). Just: origami --deep -u <url>")
     ap.add_argument("--buckets", action="store_true",
                     help="probe S3/GCS/Azure buckets referenced in the target's code for public "
                          "listability (read-only GET, off-host) and enumerate exposed objects; "

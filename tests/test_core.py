@@ -3576,6 +3576,16 @@ class TestCLIUrlFlag(unittest.TestCase):
         r = self._run("-F")
         self.assertIn("give at least one target", r.stderr)
 
+    def test_deep_preset_announced(self):
+        # --deep bundles the aggressive folds; the preamble announces them (the
+        # dead-port target fails fast at the root fetch, so no real scan runs).
+        import subprocess, sys
+        r = subprocess.run([sys.executable, "-m", "origami", "--deep",
+                            "-u", "https://127.0.0.1:9/", "-t", "1", "--no-ui"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertIn("deep", r.stdout.lower())
+        self.assertIn("bypass-403", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
