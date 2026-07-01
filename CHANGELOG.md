@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.81.2] — Backup fold: drop catch-all echoes
+- A "backup" whose response is **byte-identical** to the original file (same length +
+  near-identical simhash) is no longer reported: it's a route/catch-all serving the same
+  content for any suffix (`swagger.json.bak` == `swagger.json.qualquercoisa` == the file),
+  not a real backup disclosure. A genuinely distinct backup (different content/length) is
+  still flagged. Kills the `.bak/.old/.copy/.1/.2/.swp` false-positive flood on such routes.
+
 ## [0.81.1] — Base wordlist: second enrichment pass
 - Grew `base.txt` to ~530 with more universal, high-hit-rate names (stack-specific
   paths still stay the overlay's job): CRUD/action route names (`list`, `edit`,

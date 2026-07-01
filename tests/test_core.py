@@ -1675,6 +1675,64 @@ class TestBackups(unittest.TestCase):
         self.assertFalse(backups.is_file_hit("http://t/a/", 200))
         self.assertFalse(backups.is_file_hit("http://t/a/x.php", 403))
 
+    def test_backup_fold_drops_catchall_echo(self):
+        # a route that serves the SAME body for any suffix (swagger.json.bak ==
+        # swagger.json) must NOT be reported as a backup disclosure.
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _backup_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        original = b'{"swagger":"2.0","paths":{"/a":{}}}'
+        class FakeEngine:
+            spent = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                if "swagger" in urlparse(url).path:          # catch-all echo
+                    return make_probe(200, original, url=url, ctype="application/json")
+                return make_probe(404, b"not found", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/api/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/api/", "none")] = cb
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/api/swagger.json", 200, len(original),
+                                       "application/json", 0.95, "memory", simhash=simhash(original)))
+        import asyncio as _a
+        _a.run(_backup_fold(FakeEngine(), p, result, ScanOptions(), NullObserver()))
+        self.assertEqual([f for f in result.findings if f.origin == "backup"], [])
+
+    def test_backup_fold_keeps_distinct_backup(self):
+        # a real backup whose body DIFFERS from the original IS reported.
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _backup_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        original = b'<?php $x = render(); ?>'
+        source = b'<?php $db_password = "s3cr3t"; $x = render(); ?>'   # the leaked source
+        class FakeEngine:
+            spent = 0
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                if urlparse(url).path.endswith(".php.bak"):
+                    return make_probe(200, source, url=url, ctype="text/plain")
+                return make_probe(404, b"not found", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/app.php", 200, len(original),
+                                       "text/html", 0.95, "wordlist", simhash=simhash(original)))
+        asyncio.run(_backup_fold(FakeEngine(), p, result, ScanOptions(), NullObserver()))
+        self.assertTrue(any(f.origin == "backup" and f.url.endswith(".php.bak")
+                            for f in result.findings))
+
 
 class TestVocabulary(unittest.TestCase):
     def test_derive(self):
