@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.83.0] — Throttle-aware folds
+- When the target is throttling us (sustained 429/503) or we're asked to conserve
+  (`--economy on`, or `auto` + a detected WAF), the speculative amplifier folds
+  (API version pivot, naming mutation) are **skipped**, and the biggest enumerators
+  (backups, VCS tree) tighten their caps — so low-value guesswork doesn't wake a
+  WAF/rate-limit block on the exact targets that need care.
+
 ## [0.82.0] — `--deep` aggressive-discovery preset
 - One flag turns on the aggressive bundle at once: `--bypass-403 --cache-poison --probe-405
   --buckets --params --wayback`. Just `origami --deep -u <url>` instead of typing the whole

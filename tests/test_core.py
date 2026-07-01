@@ -3558,6 +3558,27 @@ class TestDiscoveryAdds(unittest.TestCase):
         self.assertIn("http://h/api/users", {f.url for f in result.findings})   # plural sibling found
 
 
+class TestThrottleAwareFolds(unittest.TestCase):
+    def _eng(self, pushback):
+        return type("E", (), {"pushback_events": pushback})()
+
+    def test_throttled_signal(self):
+        from origami.core.scanner import _throttled, ScanOptions
+        from origami.core.evidence import TargetProfile
+        p = TargetProfile(host="h", base_url="http://h/")
+        # economy forced on → always conserve
+        self.assertTrue(_throttled(self._eng(0), p, ScanOptions(economy="on")))
+        # sustained 429/503 → conserve regardless of economy
+        self.assertTrue(_throttled(self._eng(5), p, ScanOptions(economy="off")))
+        # economy auto + WAF detected → conserve
+        p.waf = "cloudflare"
+        self.assertTrue(_throttled(self._eng(0), p, ScanOptions(economy="auto")))
+        # clean target, no WAF, no pushback → run everything
+        clean = TargetProfile(host="h", base_url="http://h/")
+        self.assertFalse(_throttled(self._eng(0), clean, ScanOptions(economy="off")))
+        self.assertFalse(_throttled(self._eng(0), clean, ScanOptions(economy="auto")))
+
+
 class TestCLIUrlFlag(unittest.TestCase):
     def _run(self, *argv):
         import subprocess, sys

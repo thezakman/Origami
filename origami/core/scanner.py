@@ -835,15 +835,17 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "buckets",
                  _bucket_fold(engine, profile, result, opts, observer), None)
 
-    # 7.2 API version pivot — a confirmed /api/vN/ endpoint → its adjacent versions
-    # (legacy/next surface still wired in the backend). On-host, bounded.
-    await _guard(observer, "apiver",
-                 _apiver_fold(engine, profile, result, opts, observer), None)
-
-    # 7.3 naming-convention mutation — confirmed /user → /users, report1 → report2,
-    # data.json → data.xml. High-signal siblings, not blind brute. On-host, bounded.
-    await _guard(observer, "mutate",
-                 _mutate_fold(engine, profile, result, opts, observer), None)
+    # 7.2/7.3 speculative amplifier folds — API version pivot (/api/vN → v0/v2/v3)
+    # and naming-convention mutation (/user → /users, data.json → data.xml). Pure
+    # guesswork multipliers, so they're skipped when the target is throttling us.
+    if _throttled(engine, profile, opts):
+        observer.log("apiver/mutate: skipped — target throttling (conserving budget)",
+                     1, style="yellow")
+    else:
+        await _guard(observer, "apiver",
+                     _apiver_fold(engine, profile, result, opts, observer), None)
+        await _guard(observer, "mutate",
+                     _mutate_fold(engine, profile, result, opts, observer), None)
 
     # 7.5 parameter discovery — fire harvested + common param names at dynamic
     # endpoints; a reflected canary is a real input (XSS/SSTI/redirect lead). Opt-in.
@@ -1782,6 +1784,18 @@ MAX_APIVER_TARGETS = 15   # cap versioned endpoints we pivot around
 MAX_MUTATE_TARGETS = 15   # cap confirmed resources we mutate siblings around
 
 
+def _throttled(engine, profile, opts) -> bool:
+    """The target is throttling us (or we're asked to conserve). When true, the
+    speculative amplifier folds (apiver, mutate) are skipped and the enumeration
+    caps tighten — so a WAF/rate-limit isn't woken by low-value guesswork."""
+    pushback = getattr(engine, "pushback_events", 0)
+    if opts.economy == "on":
+        return True
+    if pushback >= 5:                                        # sustained 429/503
+        return True
+    return opts.economy == "auto" and (bool(profile.waf) or pushback >= 3)
+
+
 async def _mutate_fold(engine, profile, result, opts, observer) -> None:
     """Turn each confirmed resource into its convention-based siblings (plural,
     trailing-number, format twin) and probe them — a developer's naming habit
@@ -1889,8 +1903,10 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
     file_hits = [f for f in result.findings if backups.is_file_hit(f.url, f.status)]
     if not file_hits:
         return
-    # cap: expand backups around the most confident files only (avoid blow-up).
-    file_hits = sorted(file_hits, key=lambda f: -f.confidence)[:MAX_BACKUP_FILES]
+    # cap: expand backups around the most confident files only (avoid blow-up);
+    # tighten hard when the target is throttling (backups is the biggest amplifier).
+    cap = 20 if _throttled(engine, profile, opts) else MAX_BACKUP_FILES
+    file_hits = sorted(file_hits, key=lambda f: -f.confidence)[:cap]
     observer.phase("backups")
     total = sum(len(backups.variations(urlparse(f.url).path)) for f in file_hits)
     observer.start_prefix("backups", total)   # own progress total (don't overflow)
@@ -1979,10 +1995,11 @@ async def _vcs_fold(engine, profile, result, opts, observer) -> None:
         if p not in seen:
             seen.add(p)
             uniq.append(p)
-    if len(uniq) > MAX_VCS_FILES:
-        observer.log(f"vcs: {len(uniq)} files enumerated — capping fetch at {MAX_VCS_FILES}",
+    vcs_cap = MAX_VCS_FILES // 4 if _throttled(engine, profile, opts) else MAX_VCS_FILES
+    if len(uniq) > vcs_cap:
+        observer.log(f"vcs: {len(uniq)} files enumerated — capping fetch at {vcs_cap}",
                      0, style="yellow")
-        uniq = uniq[:MAX_VCS_FILES]
+        uniq = uniq[:vcs_cap]
     observer.start_prefix("vcs", len(uniq))
     for p in uniq:
         if opts.max_requests and engine.spent >= opts.max_requests:
