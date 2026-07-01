@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.75.0] — Source-map reconstruction
+- A JS `.map` is no longer just regexed as text: Origami parses its `sourcesContent`
+  and mines the **original, un-minified source** for endpoints and parameter names —
+  the routes/paths/internal hosts the shipped bundle buried. Transparent (every
+  `extract_paths`/`extract_params` over a source map benefits); broken JSON falls
+  back to the regex path safely.
+
 ## [0.74.0] — VCS/metadata tree reconstruction
 - A leaked `.git/`, `.svn/` or `.DS_Store` is no longer just reported — it's **enumerated**:
   Origami parses `.git/index` (DIRC v2–v4), a macOS `.DS_Store`, or a `.svn/wc.db` (SQLite)

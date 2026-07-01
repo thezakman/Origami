@@ -3263,5 +3263,30 @@ class TestVCS(unittest.TestCase):
         self.assertNotIn("/logout.php", eng.fetched)     # excluded path never fetched
 
 
+class TestSourceMap(unittest.TestCase):
+    def _sourcemap(self, content):
+        import json
+        return json.dumps({"version": 3, "file": "app.min.js",
+                           "sources": ["webpack:///src/api/client.ts"],
+                           "sourcesContent": [content], "mappings": "AAAA"}).encode()
+
+    def test_reconstructs_endpoints_from_sourcescontent(self):
+        from origami.modules.discovery import js_parser as J
+        sm = self._sourcemap(
+            "const API='/api/v2/users'; fetch('/admin/secret-panel'); "
+            "axios.get('/internal/report?year=2024');")
+        paths = J.extract_paths(sm, "http://h/")
+        self.assertIn("/api/v2/users", paths)
+        self.assertIn("/admin/secret-panel", paths)      # buried in the minified bundle
+        self.assertIn("/internal/report", paths)
+        self.assertIn("year", J.extract_params(sm))
+
+    def test_non_sourcemap_and_broken_json_safe(self):
+        from origami.modules.discovery import js_parser as J
+        self.assertEqual(J.extract_paths(b'{"x":"/a/b"}', "http://h/"), {"/a/b"})   # plain JSON
+        self.assertEqual(J.extract_paths(b'{"sourcesContent": [broken', "http://h/"), set())
+        self.assertEqual(J.parse_sourcemap(b"not json"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
