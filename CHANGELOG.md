@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.80.0] — Base wordlist review + enrichment
+- Reviewed and grew the default `base.txt` from ~360 to ~480 curated names — filling the
+  modern high-value gaps while staying lean (stack-specific paths remain the overlay's job):
+  auth/identity endpoints (`authorize`, `userinfo`, `jwks`, `introspect`), API surface
+  (`v0`, `mobile`, `hasura`, `altair`, `graphql-playground`), commonly-exposed infra tools
+  (`pgadmin`, `portainer`, `sonarqube`, `nexus`, `vault`, `keycloak`, `sentry`, `rabbitmq`,
+  `minio`, `metabase`, `airflow`), devops files (`terraform`, `ansible`, `k8s`, `helm`,
+  `docker-compose`), commerce (`payment`, `invoice`, `billing`, `subscription`, `wallet`),
+  a few actuator-family (`jolokia`, `httptrace`, `readiness`/`liveness`), and generic PT-BR
+  business terms (`cliente`, `produto`, `pedido`, `venda`, `funcionario`, `fornecedor`).
+  Ordered by prevalence; still bare-name-only and de-duplicated.
+
 ## [0.79.0] — Four adaptive discovery folds
 - **API version pivot**: a confirmed `/api/v1/…` endpoint pivots to its adjacent versions
   (`v0`, `v2`, `v3`) — the legacy/next surface still wired in the backend. On-host, bounded.

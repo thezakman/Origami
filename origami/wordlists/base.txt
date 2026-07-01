@@ -2,6 +2,8 @@
 # Bare names only: the extension fold appends .php/.aspx/… and the backups/VCS
 # fold handles dotfiles (.git/.env), so they're not listed here. Ordered roughly
 # by prevalence so the highest-value names fire first under a tight budget.
+# Stack-SPECIFIC paths (Spring actuator sub-endpoints, WP internals, CMS dirs) are
+# folded per-prefix from the tech overlay, not carried here.
 # For exhaustive runs point -w at SecLists (raft/, Assetnote, dirsearch).
 
 # --- entry points ---
@@ -31,8 +33,13 @@ panel
 backend
 dashboard
 wp-admin
+wp-login
 phpmyadmin
 admincp
+admin-console
+adminpanel
+useradmin
+siteadmin
 moderator
 superadmin
 root
@@ -50,12 +57,22 @@ registration
 auth
 authenticate
 authentication
+authorize
 oauth
+oauth2
+oidc
 sso
 saml
 session
 sessions
 token
+tokens
+introspect
+userinfo
+jwks
+identity
+connect
+impersonate
 password
 passwords
 forgot
@@ -71,11 +88,11 @@ users
 member
 members
 credentials
+credential
 verify
 activate
 confirm
 callback
-oauth2
 otp
 mfa
 2fa
@@ -90,7 +107,13 @@ apis
 rest
 graphql
 graphiql
+graphql-playground
+altair
+voyager
+hasura
 swagger
+swagger-ui
+swagger-resources
 openapi
 api-docs
 soap
@@ -101,14 +124,20 @@ webhook
 webhooks
 ws
 wsdl
+v0
 v1
 v2
 v3
 v4
+v5
 endpoint
 endpoints
-swagger-ui
 playground
+mobile
+internal-api
+admin-api
+public-api
+partner
 external
 
 # --- config / setup / disclosure ---
@@ -128,13 +157,23 @@ status
 health
 healthz
 healthcheck
+readiness
+liveness
 ping
 version
 build
 metrics
 actuator
+jolokia
+httptrace
+auditevents
+scheduledtasks
+caches
+flyway
 server-status
 server-info
+sysinfo
+systeminfo
 heapdump
 threaddump
 loggers
@@ -156,8 +195,12 @@ tests
 dev
 development
 staging
+stage
 prod
 production
+preprod
+uat
+local
 demo
 sample
 samples
@@ -172,6 +215,8 @@ qa
 # --- files / storage ---
 files
 file
+filemanager
+fileupload
 upload
 uploads
 uploaded
@@ -213,6 +258,11 @@ exports
 import
 imports
 attachments
+blob
+bucket
+objects
+resources
+output
 tmp
 temp
 cache
@@ -229,6 +279,8 @@ public_html
 # --- backup / source / archive ---
 backup
 backups
+snapshot
+snapshots
 old
 new
 archive
@@ -244,6 +296,7 @@ bak
 
 # --- devops / source-leak (bare names; the empty-ext probe catches Dockerfile etc) ---
 dockerfile
+docker-compose
 makefile
 jenkinsfile
 gulpfile
@@ -252,9 +305,19 @@ webpack
 composer
 gemfile
 requirements
+pipfile
 package
+pom
 node_modules
 bundle
+terraform
+ansible
+kubernetes
+k8s
+helm
+serverless
+procfile
+vagrantfile
 cgi-bin
 bin
 conf
@@ -266,12 +329,17 @@ contact
 help
 support
 faq
+feedback
+survey
+newsletter
 terms
 privacy
 news
 blog
 forum
 forums
+comments
+reviews
 shop
 cart
 checkout
@@ -292,6 +360,20 @@ inbox
 calendar
 events
 tasks
+payment
+payments
+invoice
+invoices
+billing
+subscription
+subscriptions
+transaction
+transactions
+wallet
+coupon
+coupons
+pricing
+plans
 
 # --- security-sensitive ---
 private
@@ -305,6 +387,12 @@ secure
 security
 key
 keys
+apikey
+api-key
+access
+permissions
+roles
+acl
 cert
 certs
 ssl
@@ -312,15 +400,38 @@ ssl
 # --- infra / tooling (often left exposed) ---
 jenkins
 gitlab
+gitea
 grafana
 kibana
 prometheus
+sentry
+zabbix
 nginx
 apache
 tomcat
 solr
 elasticsearch
 redis
+pgadmin
+phppgadmin
+mongo-express
+portainer
+sonarqube
+sonar
+nexus
+artifactory
+vault
+consul
+keycloak
+rabbitmq
+minio
+webmin
+metabase
+airflow
+jupyter
+harbor
+argocd
+mailhog
 
 # --- common framework / CMS dirs ---
 wp-content
@@ -339,6 +450,13 @@ theme
 templates
 template
 views
+joomla
+typo3
+umbraco
+sitecore
+strapi
+directus
+ghost
 
 # --- PT-BR high-value (Brazilian targets; vocabulary folding adds the rest) ---
 entrar
@@ -347,6 +465,7 @@ usuario
 usuarios
 senha
 cadastro
+cadastros
 conta
 painel
 administrador
@@ -355,10 +474,13 @@ relatorios
 arquivo
 arquivos
 configuracao
+configuracoes
 sistema
 area
 busca
 pesquisa
+consulta
+consultas
 sobre
 contato
 ajuda
@@ -370,7 +492,24 @@ boleto
 boletos
 nota
 notas
+nfe
 documento
 documentos
-configuracoes
 servicos
+cliente
+clientes
+fornecedor
+fornecedores
+produto
+produtos
+pedido
+pedidos
+venda
+vendas
+funcionario
+funcionarios
+colaborador
+empresa
+empresas
+unidade
+unidades
