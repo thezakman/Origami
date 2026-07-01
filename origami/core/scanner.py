@@ -1910,6 +1910,16 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
                 observer.tick(hit=False)
                 observer.request(url, probe.status, False)
                 continue
+            # A "backup" byte-identical to the original file isn't a disclosure —
+            # it's a route/catch-all serving the same content for ANY suffix
+            # (e.g. swagger.json.bak == swagger.json.qualquercoisa == swagger.json).
+            # Require the same LENGTH too, so a real backup that merely resembles
+            # the original (a slightly older copy) is still kept.
+            if (f.simhash and probe.length == f.length
+                    and hamming(probe.body_simhash, f.simhash) <= bl.SIMHASH_MISS_DISTANCE):
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
             _report(observer, result, opts, finding, url)
 
 
