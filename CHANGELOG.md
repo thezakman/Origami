@@ -5,6 +5,11 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.81.0] — `-u`/`--url` target flag
+- The target URL can now be passed as `-u`/`--url` (repeatable) in addition to the
+  positional argument — so you can keep the URL last and swap only it between runs
+  (`origami -F --gau --bypass-403 -u https://…`). Merges with the positional/`--list`.
+
 ## [0.80.0] — Base wordlist review + enrichment
 - Reviewed and grew the default `base.txt` from ~360 to ~480 curated names — filling the
   modern high-value gaps while staying lean (stack-specific paths remain the overlay's job):
