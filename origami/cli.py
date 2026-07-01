@@ -166,7 +166,7 @@ async def run(args: argparse.Namespace) -> int:
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params,
         wayback=args.wayback or args.gau, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if args.cache_headers else "")),
-        cache_headers=args.cache_headers, probe_405=args.probe_405,
+        cache_headers=args.cache_headers, probe_405=args.probe_405, buckets=args.buckets,
         filters=_build_filters(args),
     )
 
@@ -495,6 +495,10 @@ def main() -> None:
     ap.add_argument("--cache-headers", metavar="FILE",
                     help="custom unkeyed-header wordlist for --cache-poison ('Header: value' "
                          "lines), added to the built-in set (implies --cache-poison)")
+    ap.add_argument("--buckets", action="store_true",
+                    help="probe S3/GCS/Azure buckets referenced in the target's code for public "
+                         "listability (read-only GET, off-host) and enumerate exposed objects; "
+                         "the references themselves are surfaced for free without this flag")
     ap.add_argument("--probe-405", action="store_true",
                     help="on each 405 (method-not-allowed), replay with POST (and PATCH if the "
                          "Allow header lists it — never PUT/DELETE) using an empty and a {} body "

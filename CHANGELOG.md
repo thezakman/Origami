@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.76.0] — Cloud bucket discovery
+- S3/GCS/Azure bucket references in the target's own code/configs are now recognized
+  and surfaced for free (on-host, reads bodies already fetched). With `--buckets`,
+  each is probed at its read-only listing endpoint: publicly-listable buckets are
+  flagged `bucket`/`listing`/`disclosure` with a sample of the objects they expose.
+  Distinguishes virtual-hosted from path-style URLs (an object key isn't a bucket).
+
 ## [0.75.0] — Source-map reconstruction
 - A JS `.map` is no longer just regexed as text: Origami parses its `sourcesContent`
   and mines the **original, un-minified source** for endpoints and parameter names —
