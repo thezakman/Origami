@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.77.0] — Config files → new seeds
+- Config/`.env`/`appsettings` bodies (already read for secrets) are now mined for the
+  **same-host paths they reference** — a leaked config names `/internal/...` endpoints
+  no wordlist would guess, and those become scanned seeds (origin `config`). Off-host
+  refs are left to the bucket fold / not scanned; bounded and de-duped. This completes
+  the "mine the structural leaks you already find" roadmap (VCS · source maps · buckets · configs).
+
 ## [0.76.0] — Cloud bucket discovery
 - S3/GCS/Azure bucket references in the target's own code/configs are now recognized
   and surfaced for free (on-host, reads bodies already fetched). With `--buckets`,

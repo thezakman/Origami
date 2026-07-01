@@ -1342,17 +1342,50 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
     cands = cands[:MAX_SECRET_FILES]
     observer.log(f"content: scanning {len(cands)} files for secrets + disclosure", 0, style="cyan")
     total = 0
+    cfg_seeds: set[str] = set()          # same-host paths referenced inside configs → new seeds
     for f in cands:
         if opts.max_requests and engine.spent >= opts.max_requests:
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
             total += _scan_body(f, pr.body, observer, opts.finding_sink, profile.bucket_refs)
+            cfg_seeds |= _scope_paths(js_parser.extract_paths(pr.body, f.url),
+                                      profile.host, opts.scope)
     if total:
         observer.log(f"content: {total} secret/disclosure hit(s) flagged — see the 'secret'/'leak' tags",
                      0, style="bold yellow")
 
+    # Config-referenced same-host paths become new seeds (a leaked .env/appsettings
+    # names /internal endpoints no wordlist would guess). Off-host refs are left to
+    # the bucket fold / not scanned. Bounded + de-duped against what's already found.
+    host = _host_root(profile.base_url)
+    fresh = []
+    for p in sorted(cfg_seeds):
+        if "://" in p and not p.startswith(("http://", "https://")):
+            continue                     # s3://, gs://, mailto: … — not a scannable path
+        url = _join_candidate(host, "/", p)
+        if url in result.seen_urls or _excluded(urlparse(url).path, opts):
+            continue
+        fresh.append(url)
+    fresh = fresh[:MAX_CONFIG_SEEDS]
+    if fresh:
+        observer.log(f"config: probing {len(fresh)} path(s) referenced inside config files",
+                     0, style="cyan")
+        observer.start_prefix("config", len(fresh))
+        for url in fresh:
+            if opts.max_requests and engine.spent >= opts.max_requests:
+                break
+            probe = await engine.fetch(url)
+            prefix = urlparse(url).path.rsplit("/", 1)[0] + "/"
+            finding = await _confirm(engine, profile, prefix, probe, "config")
+            if finding is None:
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
+            _report(observer, result, opts, finding, url)
 
+
+MAX_CONFIG_SEEDS = 60   # cap paths enumerated from config-file references
 MAX_VHOSTS = 60   # cap Host-header candidates probed
 
 
