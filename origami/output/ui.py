@@ -100,7 +100,7 @@ ORIGIN_STYLE = {
     "header": "blue", "methods": "bold red", "bypass403": "bold green",
     "harvest": "bright_blue", "vhost": "bold cyan", "wayback": "bright_green",
     "cache-poison": "bold magenta", "vcs": "bold red", "bucket": "bold yellow",
-    "index-hidden": "yellow",
+    "config": "bright_cyan", "index-hidden": "yellow",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.

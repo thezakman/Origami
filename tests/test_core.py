@@ -3344,5 +3344,40 @@ class TestBuckets(unittest.TestCase):
         self.assertIn("secret/db.sql", pub[0].note)
 
 
+class TestConfigSeeds(unittest.TestCase):
+    def test_config_refs_become_onhost_seeds(self):
+        import asyncio
+        from urllib.parse import urlparse
+        from origami.core.scanner import _secrets_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        env = (b'DB=db\nAPI="/internal/admin-api"\nEXT="https://evil.com/x"\n'
+               b'BUCKET="s3://co-backups/x"')
+
+        class FakeEngine:
+            spent = 0
+            def __init__(self): self.hosts = []
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                u = urlparse(url)
+                self.hosts.append(u.netloc)
+                if u.path == "/.env":
+                    return make_probe(200, env, url=url, ctype="text/plain")
+                if u.path == "/internal/admin-api":
+                    return make_probe(200, b"admin api ok", url=url)
+                return make_probe(404, b"no", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        result = ScanResult(profile=p)
+        result.findings.append(Finding("http://h/.env", 200, len(env), "text/plain", 0.9, "wordlist"))
+        eng = FakeEngine()
+        asyncio.run(_secrets_fold(eng, p, result, ScanOptions(), NullObserver()))
+        urls = {f.url for f in result.findings}
+        self.assertIn("http://h/internal/admin-api", urls)   # same-host ref → seed → found
+        self.assertNotIn("evil.com", eng.hosts)              # off-host ref never fetched
+        self.assertIn("s3:co-backups", {r.label for r in p.bucket_refs})  # bucket ref captured
+
+
 if __name__ == "__main__":
     unittest.main()
