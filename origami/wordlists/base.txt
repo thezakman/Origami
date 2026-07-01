@@ -163,6 +163,10 @@ ping
 version
 build
 metrics
+stats
+statistics
+monitor
+monitoring
 actuator
 jolokia
 httptrace
@@ -211,6 +215,9 @@ trace
 sandbox
 beta
 qa
+legacy
+preview
+deprecated
 
 # --- files / storage ---
 files
@@ -334,8 +341,24 @@ survey
 newsletter
 terms
 privacy
+overview
+summary
+activity
+explore
+discover
+preferences
 news
 blog
+posts
+post
+articles
+article
+pages
+page
+tag
+tags
+author
+authors
 forum
 forums
 comments
@@ -374,6 +397,41 @@ coupon
 coupons
 pricing
 plans
+
+# --- action / CRUD route names (common under discovered dirs) ---
+list
+view
+detail
+details
+create
+add
+edit
+update
+delete
+remove
+submit
+browse
+
+# --- localization ---
+lang
+locale
+i18n
+translations
+languages
+
+# --- webmail / remote / hosting panels (often exposed) ---
+webmail
+mail
+email
+roundcube
+owa
+autodiscover
+exchange
+vpn
+remote
+citrix
+plesk
+whm
 
 # --- security-sensitive ---
 private
