@@ -102,6 +102,21 @@ def load_wordlist(path: Path | None = None) -> list[str]:
     return out
 
 
+def load_wordlists(names) -> list[str]:
+    """Load and MERGE one or more wordlists (file paths or bundled names), de-
+    duplicated and order-preserving. An empty/None list → the default base list.
+    Lets `-w` be repeatable (e.g. `--deep` implies base, `-w custom` adds to it)."""
+    if not names:
+        return load_wordlist()
+    out, seen = [], set()
+    for n in names:
+        for w in load_wordlist(Path(n)):
+            if w not in seen:
+                seen.add(w)
+                out.append(w)
+    return out
+
+
 def build_candidates(
     priority_paths: list[str],
     words: list[str],

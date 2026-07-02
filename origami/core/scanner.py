@@ -45,7 +45,8 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
                                                classify, is_dir_listing, resolve_baseline)
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
-                                     derive_vocabulary, load_wordlist, target_tokens)
+                                     derive_vocabulary, load_wordlist, load_wordlists,
+                                     target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
                                         graphql, js_parser, methods, mutate, robots,
@@ -184,7 +185,7 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
 class ScanOptions:
     max_depth: int = 1            # 0 = root only
     max_requests: int = 0         # hard cap per run (§3.11); 0 = unlimited (default)
-    wordlist_path: str | None = None
+    wordlist_paths: list[str] = field(default_factory=list)  # -w (repeatable); merged. Empty = builtin base
     shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
     apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
@@ -560,7 +561,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                      f"{'soft-404' if cb.is_soft404 else cb.status} · "
                      f"len {cb.length_lo}..{cb.length_hi} · sigs {len(cb.simhashes)}", 2)
 
-    words = load_wordlist(_wordlist_path(opts))
+    words = load_wordlists(opts.wordlist_paths)
     # fold the learned vocabulary in: target's own names tried first, in every dir.
     if learned_names:
         wset = set(words)
@@ -569,7 +570,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         observer.log(f"vocabulary: folded +{len(fresh)} names and "
                      f"+{len(learned_exts)} extensions learned from target references "
                      f"(--max-folds {opts.max_folds})", 0, style="cyan")
-    wl_name = opts.wordlist_path or "builtin base.txt"
+    wl_name = " + ".join(opts.wordlist_paths) or "builtin base.txt"
     observer.log(f"wordlist: {wl_name} ({len(words)} words) · "
                  f"extensions {len(exts) or 0} folded", 0)
     recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
@@ -1155,11 +1156,6 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     if first_hit_path:
         await bl.probe_case_sensitivity(engine, profile, first_hit_path)
     return confirmed_dirs, ancestor_dirs, consumed, hit_cap
-
-
-def _wordlist_path(opts: ScanOptions):
-    from pathlib import Path
-    return Path(opts.wordlist_path) if opts.wordlist_path else None
 
 
 _HARVEST_EXT = (".js", ".mjs", ".map", ".json", ".xml", ".html", ".htm", ".txt", ".csv")
