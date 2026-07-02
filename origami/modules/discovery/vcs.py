@@ -82,18 +82,6 @@ def parse_git_index(body: bytes) -> list[str]:
     return out
 
 
-def parse_git_config(body: bytes) -> list[str]:
-    """Remote URLs declared in a `.git/config` — context (where the repo lives)."""
-    out = []
-    for line in body.decode("utf-8", "replace").splitlines():
-        line = line.strip()
-        if line.lower().startswith("url ") or line.lower().startswith("url="):
-            url = line.split("=", 1)[-1].strip()
-            if url:
-                out.append(url)
-    return out
-
-
 # ---- .DS_Store ----------------------------------------------------------------
 
 # The data-type codes that terminate a .DS_Store record (validates a candidate).

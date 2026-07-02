@@ -28,9 +28,11 @@ try:
     from rich.text import Text
     HAS_RICH = True
     console = Console()
-except ImportError:  # rich is optional; NullObserver works without it
+except ImportError:  # rich is optional; NullObserver / plain-text observer work without it
     HAS_RICH = False
     console = None
+    ProgressColumn = object   # so the rich-only classes below still DEFINE at import
+    #                          (they're never instantiated unless HAS_RICH — see make_observer)
 
 
 class NullObserver:

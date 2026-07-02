@@ -5,12 +5,32 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.84.0] — Full-app review: correctness & robustness fixes
+- **Calibration soft-404 coverage** (`baseline.py`): stopped fuzzy-deduping the miss
+  simhashes — a near-but-distinct shape was being dropped, which let real soft-404s
+  near it slip through as findings. Now keeps every distinct miss shape (exact-dedup).
+- **Budget guarantee** (`scanner.py`): the surprising-hit soft-verification (a sibling
+  fetch per finding) is skipped once `--max-requests` is spent, instead of overrunning it.
+- **Association fold** (`scanner.py`): skips URLs already discovered — no more re-fetch
+  and re-calibration of paths another source already confirmed.
+- **Source-map recursion** (`js_parser.py`): capped so a crafted sourcemap-in-sourcesContent
+  can't recurse into a `RecursionError`.
+- **`ui.py` imports without rich**: the "dependency-free fallback" is now real — a rich-only
+  base class no longer breaks the import when rich is absent (`make_observer` → NullObserver).
+- Removed dead code (`vcs.parse_git_config`). Reviewed html_report/graph — confirmed
+  XSS-safe (`html.escape` throughout).
+
 ## [0.83.0] — Throttle-aware folds
 - When the target is throttling us (sustained 429/503) or we're asked to conserve
   (`--economy on`, or `auto` + a detected WAF), the speculative amplifier folds
   (API version pivot, naming mutation) are **skipped**, and the biggest enumerators
   (backups, VCS tree) tighten their caps — so low-value guesswork doesn't wake a
   WAF/rate-limit block on the exact targets that need care.
+
+## [0.82.1] — Design-doc sync
+- `origami.md` (design doc / PyPI long-description) brought current with the recent
+  discovery folds (VCS tree, source maps, API version pivot, naming mutation, cloud
+  buckets, config→seeds, method discovery, urlscan/OTX sources, `--deep`, `-u/--url`).
 
 ## [0.82.0] — `--deep` aggressive-discovery preset
 - One flag turns on the aggressive bundle at once: `--bypass-403 --cache-poison --probe-405
