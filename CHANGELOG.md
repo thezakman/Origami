@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.85.0] — New `big` wordlist + name resolver
+- New bundled **`big.txt`** (~1250 curated names) — a superset of `base.txt` (which fires
+  first, prevalence-ordered) with a broad high-value tail across admin/auth/api/config/
+  files/backups/devops/infra/monitoring/db-tools/cms/security/business/content/i18n/actions.
+  Select it with **`-w big`** (bundled-name resolver: `-w base`/`-w big` work without a path).
+- `base.txt` grown to ~540 (`redoc`, `apidoc`, `whoami`, `echo`, `nodeinfo`, `debugbar`,
+  `serviceworker`, `manifest`, `webmanifest`, `humans`).
+- `clientapp.py`: a service worker served with an empty content-type but an HTML body
+  (catch-all) is no longer parsed as JS.
+
 ## [0.84.0] — Full-app review: correctness & robustness fixes
 - **Calibration soft-404 coverage** (`baseline.py`): stopped fuzzy-deduping the miss
   simhashes — a near-but-distinct shape was being dropped, which let real soft-404s

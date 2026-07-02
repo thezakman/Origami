@@ -22,6 +22,7 @@ from origami.core import resume as resume_mod
 from origami.core.httpclient import _UA_POOL, Engine, EngineConfig
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
+from origami.core.scheduler import resolve_wordlist
 from origami.output import artifacts, graph, html_report, json_report, ui
 
 
@@ -400,7 +401,9 @@ def main() -> None:
                     help="fixed delay before every request (stealth / rate-sensitive "
                          "targets); on top of the adaptive backoff")
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
-    ap.add_argument("-w", "--wordlist", help="path to wordlist (default: builtin base.txt)")
+    ap.add_argument("-w", "--wordlist",
+                    help="wordlist: a file path, or a bundled name — 'base' (~540, default) or "
+                         "'big' (~1250, exhaustive). Point at SecLists for the widest coverage")
     ap.add_argument("-X", "--ext", "--extensions", action="append", metavar="LIST",
                     help="extensions to brute-force, comma list and/or repeatable "
                          "(e.g. -X php,asp,bak); ADDED to the fingerprint-detected ones")
@@ -574,8 +577,8 @@ def main() -> None:
         ap.error("give at least one target URL or --list FILE")
     if args.ext_only and not args.ext:
         ap.error("--ext-only requires -X/--ext (the extensions to use)")
-    if args.wordlist and not Path(args.wordlist).is_file():
-        ap.error(f"wordlist not found: {args.wordlist}")
+    if args.wordlist and not resolve_wordlist(Path(args.wordlist)).is_file():
+        ap.error(f"wordlist not found: {args.wordlist} (a path, or a bundled name: base / big)")
     if args.list and not Path(args.list).is_file():
         ap.error(f"target list not found: {args.list}")
 
