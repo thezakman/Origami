@@ -132,6 +132,8 @@ v4
 v5
 endpoint
 endpoints
+redoc
+apidoc
 playground
 mobile
 internal-api
@@ -188,6 +190,10 @@ readme
 changelog
 license
 todo
+whoami
+echo
+nodeinfo
+debugbar
 error
 errors
 maintenance
@@ -282,6 +288,10 @@ webroot
 wwwroot
 htdocs
 public_html
+serviceworker
+manifest
+webmanifest
+humans
 
 # --- backup / source / archive ---
 backup

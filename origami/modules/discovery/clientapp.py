@@ -86,8 +86,11 @@ async def harvest(engine, base_url: str) -> tuple[set[str], list[tuple[str, str]
         if not (p.ok and p.status == 200 and p.body):
             continue
         ct = p.content_type
-        if "javascript" not in ct and "ecmascript" not in ct and ct:
-            continue                                # not a real SW (HTML catch-all etc.)
+        if ct:
+            if "javascript" not in ct and "ecmascript" not in ct:
+                continue                            # ct set but not JS → not a real SW
+        elif p.body[:64].lstrip()[:1] == b"<":      # no ct + HTML-shaped → catch-all, skip
+            continue                                # (a real SW without a ct is still parsed)
         sw = extract_paths(p.body, base_url)
         paths.add(cand)
         paths |= sw

@@ -1484,6 +1484,29 @@ class TestBaseWordlist(unittest.TestCase):
         for must in ("admin", "login", "api", "config", "backup", "upload"):
             self.assertIn(must, w)
 
+    def test_big_wordlist_clean_and_superset(self):
+        from pathlib import Path
+        from origami.core.scheduler import load_wordlist, resolve_wordlist, WORDLIST_DIR
+        base = load_wordlist()
+        big = load_wordlist(WORDLIST_DIR / "big.txt")
+        self.assertGreater(len(big), len(base) + 400)         # meaningfully bigger
+        self.assertEqual(len(big), len(set(big)), "no duplicate entries")
+        self.assertTrue(set(base).issubset(set(big)), "big must contain base")
+        for x in big:                                          # same bare-name rules as base
+            self.assertEqual(x, x.lower())
+            self.assertNotIn(".", x)
+            self.assertFalse(any(c in x for c in "/ \t"))
+            self.assertTrue(x.replace("_", "").replace("-", "").isalnum())
+
+    def test_wordlist_name_resolves(self):
+        from pathlib import Path
+        from origami.core.scheduler import resolve_wordlist
+        self.assertEqual(resolve_wordlist(Path("big")).name, "big.txt")     # -w big
+        self.assertEqual(resolve_wordlist(Path("base")).name, "base.txt")   # -w base
+        self.assertEqual(resolve_wordlist(Path("big.txt")).name, "big.txt")
+        self.assertEqual(resolve_wordlist(Path("/no/such.txt")).name, "such.txt")  # passthrough
+        self.assertEqual(resolve_wordlist(None).name, "base.txt")           # default
+
 
 class TestTagging(unittest.TestCase):
     def tags(self, path, status=200):

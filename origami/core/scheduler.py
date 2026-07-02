@@ -79,8 +79,21 @@ def derive_vocabulary(paths) -> tuple[Counter, Counter]:
     return names, exts
 
 
+def resolve_wordlist(path: Path | None) -> Path:
+    """A `-w` value that isn't an existing file but matches a bundled list name
+    (`base`, `big`, with or without `.txt`) resolves to the bundled wordlist —
+    so `-w big` just works. Otherwise the path is returned as-is."""
+    if path is None:
+        return WORDLIST_DIR / "base.txt"
+    if path.exists():
+        return path
+    name = path.name if path.name.endswith(".txt") else path.name + ".txt"
+    bundled = WORDLIST_DIR / name
+    return bundled if bundled.exists() else path
+
+
 def load_wordlist(path: Path | None = None) -> list[str]:
-    p = path or (WORDLIST_DIR / "base.txt")
+    p = resolve_wordlist(path)
     out = []
     for line in p.read_text().splitlines():
         line = line.strip()

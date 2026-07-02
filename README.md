@@ -58,6 +58,7 @@ origami https://example.com                 # scan one target
 origami https://example.com/app/            # scan under a base path
 origami -l targets.txt --out results/       # scan a list, artifacts per host
 origami -F --gau --bypass-403 -u https://…  # -u/--url keeps the target last, swap only it between runs
+origami --deep -w big -u https://…          # maximal: aggressive folds + the big wordlist
 ```
 
 Common flags:
@@ -66,7 +67,7 @@ Common flags:
 |---|---|
 | `-u`/`--url URL` | target base URL as a flag (repeatable) — lets you keep the URL last and swap only it between runs; same as the positional argument |
 | `--deep` | aggressive-discovery preset: `--bypass-403 --cache-poison --probe-405 --buckets --params --wayback` at once (state-changing/off-host probes included). Just `origami --deep -u <url>` |
-| `-w FILE` | wordlist (default: curated ~530-word builtin; point at SecLists/Assetnote for exhaustive runs) |
+| `-w NAME\|FILE` | wordlist: a file path, or a bundled name — `base` (~540, default) or `big` (~1250, exhaustive). Point at SecLists/Assetnote for the widest coverage |
 | `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
 | `-d N` | recursion depth (default 1) |
@@ -227,7 +228,7 @@ python tests/benchmark/bench_adaptive.py                        # adaptive vs bl
 
 The full roadmap is implemented and tested: core engine + discovery folds (IIS shortscan, JS/HTML, robots/sitemap, backups/VCS, OpenAPI/Swagger/JSON:API + `.well-known`/GraphQL), vocabulary folding, WAF detection, SQLite memory, the n-gram completer, k-NN over fingerprint vectors, association mining, multi-source KB ingestion (`--update`, Wappalyzer catalog), mid-scan resume (`--resume`) and a contextual bandit for request economy under WAFs (`--economy`).
 
-On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **method discovery** (`--probe-405`: a 405 surfaces its `Allow` header free, then opt-in POST/PATCH probing reveals the accepted write method), **memory hygiene** (www/apex normalization, content-hash bundle filtering + ≥2-host n-gram floor, `--forget`/`--forget-noise`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 272 unit tests + an end-to-end integration scan.
+On top of that core: **content intelligence** (secrets — incl. modern provider tokens — plus stack-trace/debug-page/internal-infra disclosure), **parameter discovery** (`--params`), **web cache poisoning** (`--cache-poison` — passive cache-layer fingerprint + safe unkeyed-input probing with throwaway cache-busters), **historical-URL sourcing** (`--wayback`/`--gau`), **virtual-host discovery** (`--vhost`), **403/401 bypass** (`--bypass-403` with fingerprint-gated `light|auto|full` intensity, incl. hop-by-hop / encoded-separator / API-prefix families; `--bypass-headers`), **directory-listing–aware harvesting**, an **endpoint graph** (`--graph`), explicit **OpenAPI ingest** (`--openapi`), **authenticated-scan session detection** (invalid-at-start + expired-mid-scan), **method discovery** (`--probe-405`: a 405 surfaces its `Allow` header free, then opt-in POST/PATCH probing reveals the accepted write method), **memory hygiene** (www/apex normalization, content-hash bundle filtering + ≥2-host n-gram floor, `--forget`/`--forget-noise`), public-suffix-aware scope, and full anti-WAF realism (`Retry-After` honoring, `--rotate-ua`, `--proxy-file` rotation, `--http2`). 274 unit tests + an end-to-end integration scan.
 
 ### Request economy (contextual bandit)
 
