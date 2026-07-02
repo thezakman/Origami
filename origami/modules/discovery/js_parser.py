@@ -147,17 +147,18 @@ def parse_sourcemap(body: bytes) -> list[bytes]:
             for c in (d.get("sourcesContent") or []) if isinstance(c, str) and c]
 
 
-def extract_paths(body: bytes, base_url: str) -> set[str]:
+def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
     """Return same-host candidate paths (relative to base) found in `body`.
 
     A JS **source map** is transparently reconstructed: its `sourcesContent`
     (the original, un-minified source) is mined too, so `app.min.js.map` yields
-    the routes the minified bundle buried."""
+    the routes the minified bundle buried. `_depth` caps that reconstruction so a
+    crafted sourcemap-inside-sourcesContent can't recurse into a RecursionError."""
     host = urlparse(base_url).netloc
     found: set[str] = set()
-    if _looks_sourcemap(body):
+    if _depth < 2 and _looks_sourcemap(body):
         for blob in parse_sourcemap(body):
-            found |= extract_paths(blob, base_url)
+            found |= extract_paths(blob, base_url, _depth + 1)
 
     def consider(s: str) -> None:
         s = _clean(s)
@@ -196,7 +197,8 @@ def extract_params(body: bytes) -> set[str]:
     out: set[str] = set()
     if _looks_sourcemap(body):
         for blob in parse_sourcemap(body):
-            out |= extract_params(blob)
+            if not _looks_sourcemap(blob):          # one level only — no nested-map recursion
+                out |= extract_params(blob)
     for q in _QUERY.findall(body):
         for pair in q.split(b"&"):
             name = pair.split(b"=")[0].decode("latin-1").strip().lower()

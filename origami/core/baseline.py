@@ -72,7 +72,12 @@ async def calibrate_context(
 
     statuses = [p.status for p in probes]
     cb.status = max(set(statuses), key=statuses.count)  # modal status of a miss
-    cb.simhashes = _dedupe_simhashes([p.body_simhash for p in probes])
+    # Keep EVERY distinct miss shape (exact-dedup only). Fuzzy-deduping here would
+    # shrink the miss set and open a coverage gap: looks_like_miss() uses
+    # `<= SIMHASH_MISS_DISTANCE`, so dropping a near-but-distinct shape lets a real
+    # soft-404 near that dropped shape slip through as a finding. Only ~4 probes,
+    # so the set is tiny anyway.
+    cb.simhashes = list(dict.fromkeys(p.body_simhash for p in probes))
     cb.length_lo = min(p.length for p in probes)
     cb.length_hi = max(p.length for p in probes)
     cb.content_type = max(
@@ -89,15 +94,6 @@ async def calibrate_context(
             cb.redirect_to = next(iter(kinds))
             cb.is_soft404 = True
     return cb
-
-
-def _dedupe_simhashes(hashes: list[int]) -> list[int]:
-    """Keep one representative per cluster of near-identical bodies."""
-    reps: list[int] = []
-    for h in hashes:
-        if all(hamming(h, r) > SIMHASH_MISS_DISTANCE for r in reps):
-            reps.append(h)
-    return reps
 
 
 def _generalize_location(req_url: str, location: str) -> str:

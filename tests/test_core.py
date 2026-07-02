@@ -3597,6 +3597,18 @@ class TestCLIUrlFlag(unittest.TestCase):
         r = self._run("-F")
         self.assertIn("give at least one target", r.stderr)
 
+    def test_ui_imports_and_falls_back_without_rich(self):
+        # the "dependency-free fallback" claim: origami.output.ui must import even
+        # when rich is absent, and make_observer must degrade to NullObserver.
+        import subprocess, sys
+        code = ("import sys; sys.modules['rich'] = None;"
+                "import origami.output.ui as u;"
+                "assert u.HAS_RICH is False, 'HAS_RICH should be False';"
+                "assert type(u.make_observer('t', True)).__name__ == 'NullObserver';"
+                "print('ok')")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "ok", r.stderr)
+
     def test_deep_preset_announced(self):
         # --deep bundles the aggressive folds; the preamble announces them (the
         # dead-port target fails fast at the root fetch, so no real scan runs).

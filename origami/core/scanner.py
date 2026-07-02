@@ -1119,8 +1119,11 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
                 listed_dirs.add(dpath)        # autoindex → harvest it, don't blind-brute
 
         # soft-verify a surprising hit with a same-shape random sibling — a
-        # blanket 403/200 wall is recursed (above) but NOT reported.
-        if await _is_soft(engine, profile, prefix, probe):
+        # blanket 403/200 wall is recursed (above) but NOT reported. The sibling
+        # fetch is skipped once the request budget is spent (report unverified
+        # rather than overrun --max-requests by one probe per finding).
+        over_budget = bool(opts.max_requests and engine.spent >= opts.max_requests)
+        if not over_budget and await _is_soft(engine, profile, prefix, probe):
             if ranker is not None:
                 ranker.observe(cand.path, hit=False)
             observer.tick(hit=False)
@@ -2140,11 +2143,16 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
     observer.log(f"associations: {len(assoc)} paths from corpus rules", 0, style="cyan")
     observer.start_prefix("associations", len(assoc))
     root = _host_root(profile.base_url)
+    ci = profile.case_sensitive is False
     for path in assoc:
         if opts.max_requests and engine.spent >= opts.max_requests:
             break
         p = "/" + path.lstrip("/")
+        url = urljoin(root, p.lstrip("/"))
         if _excluded(p, opts):
+            continue
+        # already discovered by another source → don't re-probe/re-calibrate it.
+        if (url.lower() in result.seen_urls_lc) if ci else (url in result.seen_urls):
             continue
         prefix = p.rsplit("/", 1)[0] + "/"
         observer.substep(p.rstrip("/").rsplit("/", 1)[-1] or p)   # associations: <path>
