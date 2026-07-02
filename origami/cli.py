@@ -152,9 +152,14 @@ async def run(args: argparse.Namespace) -> int:
         return 2
 
     shortscan = "on" if args.shortscan else "off" if args.no_shortscan else "auto"
+    # -w is repeatable (merged, deduped). Under --deep the base list is always
+    # included, so `--deep -w custom` runs base + custom (bare --deep = base).
+    wordlists = list(args.wordlist or [])
+    if args.deep:
+        wordlists = ["base"] + wordlists
     opts = ScanOptions(
         max_depth=args.depth, max_requests=args.max_requests,
-        wordlist_path=args.wordlist, shortscan=shortscan,
+        wordlist_paths=wordlists, shortscan=shortscan,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
@@ -201,7 +206,7 @@ async def run(args: argparse.Namespace) -> int:
                  else f"drop {sorted(filt.filter_codes)}" if filt.filter_codes else "none")
         print(f"  targets  : {len(targets)}" + (f"  (list: {args.list})" if args.list else ""))
         print(f"  started  : {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"  wordlist : {args.wordlist or 'builtin base.txt'}")
+        print(f"  wordlist : {' + '.join(wordlists) or 'builtin base.txt'}")
         exts = _ext_list(args.ext)
         if exts:
             print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
@@ -401,9 +406,11 @@ def main() -> None:
                     help="fixed delay before every request (stealth / rate-sensitive "
                          "targets); on top of the adaptive backoff")
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
-    ap.add_argument("-w", "--wordlist",
+    ap.add_argument("-w", "--wordlist", action="append", metavar="NAME|FILE",
                     help="wordlist: a file path, or a bundled name — 'base' (~540, default) or "
-                         "'big' (~1250, exhaustive). Point at SecLists for the widest coverage")
+                         "'big' (~1250, exhaustive). Repeatable to MERGE several. Under --deep "
+                         "the base list is always included, so `--deep -w custom` = base + custom. "
+                         "Point at SecLists for the widest coverage")
     ap.add_argument("-X", "--ext", "--extensions", action="append", metavar="LIST",
                     help="extensions to brute-force, comma list and/or repeatable "
                          "(e.g. -X php,asp,bak); ADDED to the fingerprint-detected ones")
@@ -577,8 +584,9 @@ def main() -> None:
         ap.error("give at least one target URL or --list FILE")
     if args.ext_only and not args.ext:
         ap.error("--ext-only requires -X/--ext (the extensions to use)")
-    if args.wordlist and not resolve_wordlist(Path(args.wordlist)).is_file():
-        ap.error(f"wordlist not found: {args.wordlist} (a path, or a bundled name: base / big)")
+    for wl in (args.wordlist or []):
+        if not resolve_wordlist(Path(wl)).is_file():
+            ap.error(f"wordlist not found: {wl} (a path, or a bundled name: base / big)")
     if args.list and not Path(args.list).is_file():
         ap.error(f"target list not found: {args.list}")
 

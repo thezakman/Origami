@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.86.0] — Repeatable `-w` (merge wordlists) + `--deep` always includes base
+- `-w`/`--wordlist` is now **repeatable** and the lists are **merged** (de-duplicated,
+  order-preserving): `-w base -w big -w custom.txt` runs all three.
+- Under `--deep`, the **base list is always included**, so `--deep -w custom` runs
+  `base + custom` (and bare `--deep` runs base, as before). Preamble shows `base + big`.
+
 ## [0.85.0] — New `big` wordlist + name resolver
 - New bundled **`big.txt`** (~1250 curated names) — a superset of `base.txt` (which fires
   first, prevalence-ordered) with a broad high-value tail across admin/auth/api/config/

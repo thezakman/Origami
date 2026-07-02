@@ -696,7 +696,7 @@ class TestSessionAuthWall(unittest.TestCase):
             def log(self, m, *a, **k): logs.append(m)
         async def main():
             await scan(engine, "https://h/", observer=L(), memory=None,
-                       opts=ScanOptions(max_depth=0, wordlist_path=wl, js=False,
+                       opts=ScanOptions(max_depth=0, wordlist_paths=[str(wl)], js=False,
                                         apidocs=False, backups=False, max_folds=0))
         try:
             asyncio.run(main())
@@ -1506,6 +1506,21 @@ class TestBaseWordlist(unittest.TestCase):
         self.assertEqual(resolve_wordlist(Path("big.txt")).name, "big.txt")
         self.assertEqual(resolve_wordlist(Path("/no/such.txt")).name, "such.txt")  # passthrough
         self.assertEqual(resolve_wordlist(None).name, "base.txt")           # default
+
+    def test_load_wordlists_merges_and_dedups(self):
+        import os, tempfile
+        from origami.core.scheduler import load_wordlists, load_wordlist
+        f = tempfile.mktemp(suffix=".txt")
+        with open(f, "w") as fh:
+            fh.write("uniqueone\nuniquetwo\nadmin\n")       # 'admin' collides with base
+        try:
+            merged = load_wordlists(["base", f])            # simulates --deep -w custom
+            self.assertIn("uniqueone", merged)              # custom folded in
+            self.assertIn("login", merged)                  # base preserved
+            self.assertEqual(merged.count("admin"), 1)      # de-duplicated across lists
+            self.assertEqual(load_wordlists([]), load_wordlist())   # empty → default base
+        finally:
+            os.unlink(f)
 
 
 class TestTagging(unittest.TestCase):
@@ -2973,7 +2988,7 @@ class TestEndToEndScan(unittest.TestCase):
                 # jitter off → fast against the loopback server
                 async with Engine(EngineConfig(concurrency=20, timeout=5, jitter=(0.0, 0.0))) as e:
                     return await scan(e, f"http://127.0.0.1:{port}/",
-                                      opts=ScanOptions(max_depth=1, wordlist_path=wl,
+                                      opts=ScanOptions(max_depth=1, wordlist_paths=[str(wl)],
                                                        bypass403=True, js=False, apidocs=False,
                                                        backups=False, max_folds=0),
                                       observer=quiet, memory=None)
@@ -3631,6 +3646,14 @@ class TestCLIUrlFlag(unittest.TestCase):
                 "print('ok')")
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "ok", r.stderr)
+
+    def test_deep_includes_base_wordlist(self):
+        # --deep always runs base; -w merges on top (preamble shows "base + big").
+        import subprocess, sys
+        r = subprocess.run([sys.executable, "-m", "origami", "--deep", "-w", "big",
+                            "-u", "https://127.0.0.1:9/", "-t", "1", "--no-ui"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertIn("base + big", r.stdout)
 
     def test_deep_preset_announced(self):
         # --deep bundles the aggressive folds; the preamble announces them (the
