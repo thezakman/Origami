@@ -988,6 +988,34 @@ class TestBypass403(unittest.TestCase):
         self.assertIn("https://h/admin", urls)
         self.assertIn("https://h/web.config", urls)
 
+    def test_matrix_management_bypass_gated_and_targeted(self):
+        from origami.modules import bypass403 as b
+        # management path detection
+        self.assertTrue(b.is_management_path("/actuator/env"))
+        self.assertTrue(b.is_management_path("/jolokia/list"))
+        self.assertFalse(b.is_management_path("/admin"))
+        # OFF by default — never inflates an ordinary 403's budget
+        self.assertFalse(any("matrix-bypass" in l for l, *_ in b.variants("/actuator/env")))
+        # ON when gated: emits the mapped-route + `;/` forms, incl. discovered routes
+        got = {rp for (l, m, rp, h) in b.variants(
+            "/actuator/env", mgmt=True, route_prefixes=("dashboard",)) if "matrix-bypass" in l}
+        self.assertIn("/;/actuator/env", got)              # bare-root form
+        self.assertIn("/rest/v1/;/actuator/env", got)      # curated Spring guess
+        self.assertIn("/dashboard/;/actuator/env", got)    # a real 2xx route we found
+        # discovered routes ALSO feed the api-prefix family (not just static seeds)
+        api = {rp for (l, m, rp, h) in b.variants(
+            "/admin", api=True, route_prefixes=("gateway",)) if l.startswith("api-prefix")}
+        self.assertIn("/gateway/admin", api)
+
+    def test_discovered_route_prefixes_skips_files_and_mgmt(self):
+        from origami.core.scanner import _discovered_route_prefixes
+        from origami.core.response_classifier import Finding
+        fs = [Finding("https://h/rest/v1", 200, 10, "", 0.9, "wordlist"),
+              Finding("https://h/app.js", 200, 10, "", 0.9, "wordlist"),      # file → skip
+              Finding("https://h/actuator", 200, 10, "", 0.9, "wordlist"),    # mgmt → skip
+              Finding("https://h/admin", 403, 10, "", 0.9, "wordlist")]       # non-2xx → skip
+        self.assertEqual(_discovered_route_prefixes(fs), ("rest/v1",))
+
 
 class TestBypassHeaderWordlist(unittest.TestCase):
     def test_load_header_pairs_parses_both_forms(self):

