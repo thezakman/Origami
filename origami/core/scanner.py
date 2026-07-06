@@ -2025,6 +2025,27 @@ _BYPASS_ENC_STACKS = {"iis", "tomcat", "java", "spring", "spring boot", "jetty",
                       "coldfusion", "jboss", "wildfly"}
 
 
+def _discovered_route_prefixes(findings, cap=6):
+    """Path prefixes from confirmed 2xx *directory-ish* routes — reused as the
+    `;/` matrix carrier for the management bypass (a real route the ACL already
+    lets through, so `<route>/;/actuator/env` is authorized then dispatched).
+    Skips files and management paths themselves; deduped, shortest-first, capped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for f in findings:
+        if not (200 <= f.status < 300):
+            continue
+        seg = urlparse(f.url).path.strip("/")
+        if not seg or "." in seg.rsplit("/", 1)[-1]:      # keep dir-ish routes, skip files
+            continue
+        if bypass403.is_management_path("/" + seg) or seg in seen:
+            continue
+        seen.add(seg)
+        out.append(seg)
+    out.sort(key=lambda s: (s.count("/"), len(s)))
+    return tuple(out[:cap])
+
+
 def _select_bypass_targets(findings, per_wall=BYPASS_PER_WALL, cap=MAX_BYPASS_TARGETS):
     """Pick the 403/401 resources worth bypassing → (targets, n_skipped).
 
@@ -2078,6 +2099,21 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
                 or any(s in path for s in ("/api/", "/api.", "/v1/", "/v2/", "/v3/"))
                 or "graphql" in techs)
 
+    # Real 2xx routes the scan confirmed → data-driven prefixes for BOTH the
+    # api-prefix family (`/<route>/blocked`) and the matrix management family
+    # (`/<route>/;/actuator/*`), so neither is limited to a static guess list; a
+    # route the ACL already lets through is the highest-signal carrier. The
+    # matrix family is additionally gated to Spring/Java/Tomcat/unknown stacks
+    # (same set as encoded-separator) and management-ish paths only.
+    route_prefixes = _discovered_route_prefixes(result.findings)
+
+    def _vars_for(f):
+        p = urlparse(f.url).path
+        return bypass403.variants(
+            p, case_insensitive=ci, header_pairs=header_pairs, intensity=intensity,
+            encoded=enc_stack, api=_api_gate(f),
+            mgmt=enc_stack and bypass403.is_management_path(p), route_prefixes=route_prefixes)
+
     observer.phase("403-bypass")
     msg = f"403-bypass: probing {len(blocked)} blocked resources ({intensity})"
     if header_pairs:
@@ -2086,18 +2122,14 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         msg += f" ({skipped} same-wall/over-cap 403s skipped)"
     observer.log(msg, 0, style="cyan")
     # count with the SAME gates/case as the firing loop, else the bar miscounts
-    total = sum(len(bypass403.variants(urlparse(f.url).path, case_insensitive=ci,
-                                       header_pairs=header_pairs, intensity=intensity,
-                                       encoded=enc_stack, api=_api_gate(f))) for f in blocked)
+    total = sum(len(_vars_for(f)) for f in blocked)
     observer.start_prefix("403-bypass", total)
     root = _host_root(profile.base_url)
     for f in blocked:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
-        for label, method, rpath, headers in bypass403.variants(
-                path, case_insensitive=ci, header_pairs=header_pairs,
-                intensity=intensity, encoded=enc_stack, api=_api_gate(f)):
+        for label, method, rpath, headers in _vars_for(f):
             if opts.max_requests and engine.spent >= opts.max_requests:
                 return
             url = urljoin(root, rpath.lstrip("/"))

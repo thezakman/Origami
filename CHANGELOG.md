@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.87.0] — Matrix-param management bypass + data-driven route prefixes
+- New **matrix-param management bypass** family in the 403 fold: reaches a blocked
+  actuator/JMX endpoint by carrying it on a mapped route + `;/` matrix segment
+  (`/rest/v1/;/actuator/env`), so a Spring Security rule matching `/actuator/**` —
+  evaluated *before* MVC strips the `;matrix` content — authorizes the route yet
+  still dispatches to the endpoint.
+- **Data-driven prefixes:** the api-prefix and matrix families no longer rely only
+  on static guess lists — every **real 2xx route the scan confirmed** is fed in as
+  a bypass carrier (`/<route>/blocked` and `/<route>/;/actuator/*`), so app-specific
+  mounts (`/gateway`, `/rest/v1`…) are covered from observed data, not guesswork.
+- **Gated** to Spring/Java/Tomcat/unknown stacks (same set as the encoded-separator
+  family) and management-ish paths only (`actuator`, `jolokia`, `gateway`, `heapdump`,
+  `env`, `metrics`…), so it never inflates an ordinary 403's request budget.
+
 ## [0.86.0] — Repeatable `-w` (merge wordlists) + `--deep` always includes base
 - `-w`/`--wordlist` is now **repeatable** and the lists are **merged** (de-duplicated,
   order-preserving): `-w base -w big -w custom.txt` runs all three.
