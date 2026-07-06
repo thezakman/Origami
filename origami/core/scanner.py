@@ -202,6 +202,7 @@ class ScanOptions:
     bypass_intensity: str = "auto" # "light" (core only) | "auto" (fingerprint-gated) | "full" (all)
     bypass_headers: bool = False   # use a header-bypass wordlist for the header axis (--bypass-headers)
     bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
+    bypass_prefixes_path: str | None = None  # custom route-prefix wordlist (--bypass-prefixes) for the api/matrix families
     openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
     param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
     cache_poison: str = ""         # "" = off; "light"|"auto"|"full" — probe unkeyed inputs for cache poisoning (--cache-poison)
@@ -2105,19 +2106,31 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     # route the ACL already lets through is the highest-signal carrier. The
     # matrix family is additionally gated to Spring/Java/Tomcat/unknown stacks
     # (same set as encoded-separator) and management-ish paths only.
-    route_prefixes = _discovered_route_prefixes(result.findings)
+    # Operator-supplied mounts (--bypass-prefixes) come FIRST — they're known-good,
+    # so they lead the carrier list — then the 2xx routes the scan confirmed.
+    custom_prefixes = (bypass403.load_prefixes(opts.bypass_prefixes_path)
+                       if opts.bypass_prefixes_path else ())
+    if opts.bypass_prefixes_path and not custom_prefixes:
+        observer.log(f"403-bypass: prefix wordlist {opts.bypass_prefixes_path} empty or "
+                     f"unreadable — using seeds + discovered routes only", 0, style="yellow")
+    route_prefixes = tuple(dict.fromkeys(custom_prefixes + _discovered_route_prefixes(result.findings)))
+    # "full" intensity fires the matrix-management family regardless of stack;
+    # "auto"/"light" keep it gated to Spring/Java/Tomcat/unknown stacks.
+    mgmt_stack = enc_stack or intensity == "full"
 
     def _vars_for(f):
         p = urlparse(f.url).path
         return bypass403.variants(
             p, case_insensitive=ci, header_pairs=header_pairs, intensity=intensity,
             encoded=enc_stack, api=_api_gate(f),
-            mgmt=enc_stack and bypass403.is_management_path(p), route_prefixes=route_prefixes)
+            mgmt=mgmt_stack and bypass403.is_management_path(p), route_prefixes=route_prefixes)
 
     observer.phase("403-bypass")
     msg = f"403-bypass: probing {len(blocked)} blocked resources ({intensity})"
     if header_pairs:
         msg += f" with {len(header_pairs)} bypass headers"
+    if custom_prefixes:
+        msg += f", {len(custom_prefixes)} custom route prefixes"
     if skipped:
         msg += f" ({skipped} same-wall/over-cap 403s skipped)"
     observer.log(msg, 0, style="cyan")
