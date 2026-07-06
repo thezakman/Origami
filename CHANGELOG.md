@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.88.0] — `--bypass-prefixes` (custom route carriers) + `full` ungates matrix
+- New **`--bypass-prefixes FILE`**: an operator route-prefix wordlist (one mount per
+  line, e.g. `rest/v1`, `/gateway`) fed to BOTH the api-prefix and matrix-management
+  families as extra `;/` carriers — on top of the curated seeds and the 2xx routes
+  discovered in-scan. Known-good mounts lead the carrier list. Implies `--bypass-403`.
+- **`--bypass-403 full`** now fires the matrix-management family regardless of the
+  detected stack (`auto`/`light` keep it gated to Spring/Java/Tomcat/unknown), so an
+  exhaustive run isn't held back when fingerprinting is inconclusive.
+
 ## [0.87.0] — Matrix-param management bypass + data-driven route prefixes
 - New **matrix-param management bypass** family in the 403 fold: reaches a blocked
   actuator/JMX endpoint by carrying it on a mapped route + `;/` matrix segment

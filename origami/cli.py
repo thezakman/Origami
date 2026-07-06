@@ -165,10 +165,12 @@ async def run(args: argparse.Namespace) -> int:
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),
         extensions=_ext_list(args.ext),
         ext_only=args.ext_only, graph=bool(args.graph or args.out),  # --out bundle includes the graph
-        bypass403=(args.bypass_403 is not None) or (args.bypass_headers is not None) or args.deep,
+        bypass403=(args.bypass_403 is not None) or (args.bypass_headers is not None)
+                  or (args.bypass_prefixes is not None) or args.deep,
         bypass_intensity=args.bypass_403 or "auto",   # bare flag / --bypass-headers / --deep → auto
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
+        bypass_prefixes_path=args.bypass_prefixes,
         openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params or args.deep,
         wayback=args.wayback or args.gau or args.deep, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
@@ -234,6 +236,8 @@ async def run(args: argparse.Namespace) -> int:
         if args.bypass_headers is not None:
             src = args.bypass_headers if isinstance(args.bypass_headers, str) else "bundled 403-headers.txt"
             print(f"  bypass-hdr: {src}")
+        if args.bypass_prefixes:
+            print(f"  bypass-pfx: {args.bypass_prefixes} (api-prefix + matrix carriers)")
         if args.params:
             print(f"  params   : reflection fuzzing on dynamic endpoints")
         if args.cache_poison or args.cache_headers:
@@ -495,6 +499,11 @@ def main() -> None:
                     help="403/401 header-bypass via a wordlist (implies --bypass-403): "
                          "bare flag uses the bundled 403-headers.txt, or pass FILE for "
                          "your own 'Header: value' list (replaces the built-in header axis)")
+    ap.add_argument("--bypass-prefixes", metavar="FILE",
+                    help="route-prefix wordlist for --bypass-403 (one mount per line, e.g. "
+                         "rest/v1): fed to the api-prefix and matrix-management (`/<route>/;/"
+                         "actuator/*`) families as extra carriers, on top of the curated seeds "
+                         "and discovered 2xx routes (implies --bypass-403)")
     ap.add_argument("--vhost", action="store_true",
                     help="virtual-host discovery: fuzz the Host header on the target IP "
                          "and report distinct vhosts (admin/staging/internal/… on the CDN)")

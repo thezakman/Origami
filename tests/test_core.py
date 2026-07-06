@@ -1007,6 +1007,18 @@ class TestBypass403(unittest.TestCase):
             "/admin", api=True, route_prefixes=("gateway",)) if l.startswith("api-prefix")}
         self.assertIn("/gateway/admin", api)
 
+    def test_load_prefixes_parses_and_dedups(self):
+        import tempfile, os
+        from origami.modules import bypass403 as b
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.write(fd, b"# routes\nrest/v1\n/gateway/\nrest/v1\n\n  services/api  \n")
+        os.close(fd)
+        try:
+            self.assertEqual(b.load_prefixes(path), ("rest/v1", "gateway", "services/api"))
+        finally:
+            os.unlink(path)
+        self.assertEqual(b.load_prefixes("/no/such/file"), ())
+
     def test_discovered_route_prefixes_skips_files_and_mgmt(self):
         from origami.core.scanner import _discovered_route_prefixes
         from origami.core.response_classifier import Finding

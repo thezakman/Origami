@@ -139,6 +139,29 @@ _MGMT_HINT = re.compile(
     r"configprops|mappings|loggers|env|metrics|gateway|prometheus)(?:/|$)", re.I)
 
 
+def load_prefixes(path: Path | str) -> tuple[str, ...]:
+    """Parse a route-prefix wordlist (one mount per line) for --bypass-prefixes.
+
+    Each line is a path prefix the operator knows the app mounts (`rest/v1`,
+    `/gateway`, `services/api`…); leading/trailing slashes are stripped, blank
+    lines and `#` comments skipped, order-preserving dedup. These feed BOTH the
+    api-prefix and matrix-management families as extra carriers, on top of the
+    curated seeds and any 2xx routes the scan discovered. Returns () on error."""
+    try:
+        lines = Path(path).expanduser().read_text(errors="replace").splitlines()
+    except OSError:
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        line = line.strip().strip("/")
+        if not line or line.startswith("#") or line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+    return tuple(out)
+
+
 def is_management_path(path: str) -> bool:
     """True when `path` looks like a Spring/JMX management endpoint — the class
     the matrix-param prefix bypass targets (actuator, jolokia, gateway…)."""
