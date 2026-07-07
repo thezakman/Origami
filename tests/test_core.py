@@ -1029,6 +1029,74 @@ class TestBypass403(unittest.TestCase):
         self.assertEqual(_discovered_route_prefixes(fs), ("rest/v1",))
 
 
+class TestFeroxParity(unittest.TestCase):
+    """--time-limit, body filters, replay-proxy, stdin (the feroxbuster-parity set)."""
+
+    def test_over_budget_requests_and_time(self):
+        import types, time
+        from origami.core.scanner import _over_budget, ScanOptions
+        eng = types.SimpleNamespace(spent=5, deadline=None)
+        self.assertFalse(_over_budget(eng, ScanOptions()))
+        self.assertTrue(_over_budget(eng, ScanOptions(max_requests=5)))       # request cap
+        past = types.SimpleNamespace(spent=0, deadline=time.monotonic() - 1)
+        self.assertTrue(_over_budget(past, ScanOptions(time_limit=1)))        # deadline passed
+        future = types.SimpleNamespace(spent=0, deadline=time.monotonic() + 100)
+        self.assertFalse(_over_budget(future, ScanOptions()))
+
+    def test_filters_body_word_line_regex_similar(self):
+        import re
+        f = Filters(filter_words={3})
+        self.assertFalse(f.accept_body(b"a b c"))        # 3 words → drop
+        self.assertTrue(f.accept_body(b"a b c d"))
+        self.assertFalse(Filters(filter_lines={2}).accept_body(b"x\ny"))
+        rf = Filters(filter_regex=re.compile("secret"))
+        self.assertFalse(rf.accept_body(b"has secret here"))
+        self.assertTrue(rf.accept_body(b"clean body"))
+        # similar-to fires on simhash alone — no body needed
+        sf = Filters(similar_hashes=(123,), similar_distance=0)
+        self.assertFalse(sf.accept_body(None, simhash=123))
+        self.assertTrue(sf.accept_body(None, simhash=~123 & 0xFFFFFFFF))
+        self.assertTrue(Filters().accept_body(None))     # no filters → accept
+        self.assertFalse(Filters().has_body_filters())
+        self.assertTrue(Filters(filter_words={1}).has_body_filters())
+
+    def test_parse_duration(self):
+        from origami.cli import _parse_duration
+        self.assertEqual(_parse_duration("30s"), 30.0)
+        self.assertEqual(_parse_duration("10m"), 600.0)
+        self.assertEqual(_parse_duration("1h"), 3600.0)
+        self.assertEqual(_parse_duration("90"), 90.0)
+        self.assertEqual(_parse_duration(None), 0.0)
+        with self.assertRaises(SystemExit):
+            _parse_duration("nope")
+
+    def test_read_url_lines_skips_comments_and_blanks(self):
+        from origami.cli import _read_url_lines
+        self.assertEqual(_read_url_lines("http://a\n# note\n\n  http://b \n"),
+                         ["http://a", "http://b"])
+
+    def test_replay_findings_filters_by_code(self):
+        import asyncio, types
+        from origami.core.scanner import _replay_findings, ScanOptions
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        sent = []
+
+        class FakeClient:
+            async def get(self, url): sent.append(url)
+            async def aclose(self): pass
+
+        class FakeEngine:
+            def replay_client(self, proxy): return FakeClient()
+
+        res = types.SimpleNamespace(findings=[
+            Finding("https://h/a", 200, 1, "", 0.9, "wordlist"),
+            Finding("https://h/b", 403, 1, "", 0.9, "wordlist")])
+        opts = ScanOptions(replay_proxy="http://127.0.0.1:8080", replay_codes=(200,))
+        asyncio.run(_replay_findings(FakeEngine(), res, opts, NullObserver()))
+        self.assertEqual(sent, ["https://h/a"])          # only the 200 replayed
+
+
 class TestBypassHeaderWordlist(unittest.TestCase):
     def test_load_header_pairs_parses_both_forms(self):
         import tempfile, os

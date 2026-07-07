@@ -138,6 +138,14 @@ class Filters:
     filter_codes: set[int] = field(default_factory=set)
     match_sizes: set[int] | None = None
     filter_sizes: set[int] | None = None
+    # Body-based filters (feroxbuster-style) — evaluated in accept_body() where the
+    # response body is available. Drop a finding whose body has one of these word
+    # or line counts, matches this regex, or is ~identical (simhash) to a reference.
+    filter_words: set[int] = field(default_factory=set)
+    filter_lines: set[int] = field(default_factory=set)
+    filter_regex: "re.Pattern[str] | None" = None
+    similar_hashes: tuple[int, ...] = ()
+    similar_distance: int = 4
 
     def accept(self, status: int, length: int) -> bool:
         if self.match_codes is not None:
@@ -147,6 +155,28 @@ class Filters:
         if self.match_sizes is not None and length not in self.match_sizes:
             return False
         if self.filter_sizes and length in self.filter_sizes:
+            return False
+        return True
+
+    def has_body_filters(self) -> bool:
+        return bool(self.filter_words or self.filter_lines
+                    or self.filter_regex is not None or self.similar_hashes)
+
+    def accept_body(self, body: bytes | None, simhash: int = 0) -> bool:
+        """Body-aware pass: False → drop. Simhash (similar-to) works even without a
+        body; word/line/regex need `body` and are skipped when it's unavailable."""
+        if self.similar_hashes and simhash:
+            if any(hamming(simhash, h) <= self.similar_distance for h in self.similar_hashes):
+                return False
+        if body is None or not (self.filter_words or self.filter_lines
+                                or self.filter_regex is not None):
+            return True
+        text = body.decode("utf-8", "replace")
+        if self.filter_words and len(text.split()) in self.filter_words:
+            return False
+        if self.filter_lines and text.count("\n") + 1 in self.filter_lines:
+            return False
+        if self.filter_regex is not None and self.filter_regex.search(text):
             return False
         return True
 
