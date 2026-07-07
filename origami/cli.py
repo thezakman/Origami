@@ -80,7 +80,28 @@ def _build_filters(args) -> Filters:
         f.filter_codes = _int_set(args.fc) or set()
     f.match_sizes = _int_set(args.ms)
     f.filter_sizes = _int_set(args.fs)
+    f.filter_words = _int_set(args.filter_word_count) or set()
+    f.filter_lines = _int_set(args.filter_line_count) or set()
+    if args.filter_regex:
+        try:
+            f.filter_regex = re.compile(args.filter_regex)
+        except re.error as e:
+            raise SystemExit(f"[!] bad --filter-regex: {e}")
+    # similar_hashes are resolved in the scanner (needs a live fetch); the URLs
+    # travel via ScanOptions.filter_similar_urls.
     return f
+
+
+def _parse_duration(s: str | None) -> float:
+    """'30s' / '10m' / '1h' / bare seconds → seconds. 0.0 when unset."""
+    if not s:
+        return 0.0
+    s = s.strip().lower()
+    mult = {"s": 1, "m": 60, "h": 3600}.get(s[-1:])
+    try:
+        return float(s[:-1]) * mult if mult else float(s)
+    except ValueError:
+        raise SystemExit(f"[!] bad --time-limit (use 30s/10m/1h or seconds): {s!r}")
 
 
 def _normalize_url(raw: str) -> str:
@@ -93,11 +114,17 @@ def _normalize_url(raw: str) -> str:
     return base + (p.path if p.path and p.path != "/" else "/")
 
 
+def _read_url_lines(text: str) -> list[str]:
+    return [ln.strip() for ln in text.splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+
+
 def _collect_targets(args) -> list[str]:
     raw = list(args.url or [])
-    if args.list:
-        raw += [ln.strip() for ln in Path(args.list).read_text().splitlines()
-                if ln.strip() and not ln.lstrip().startswith("#")]
+    # stdin targets were read once during validation (bare pipe or `-l -`).
+    raw += list(getattr(args, "_stdin_targets", None) or [])
+    if args.list and args.list != "-":
+        raw += _read_url_lines(Path(args.list).read_text())
     seen, out = set(), []
     for r in raw:
         u = _normalize_url(r)
@@ -177,6 +204,10 @@ async def run(args: argparse.Namespace) -> int:
         cache_headers=args.cache_headers,
         probe_405=args.probe_405 or args.deep, buckets=args.buckets or args.deep,
         filters=_build_filters(args),
+        time_limit=_parse_duration(args.time_limit),
+        replay_proxy=args.replay_proxy,
+        replay_codes=tuple(_int_set(args.replay_codes) or ()),
+        filter_similar_urls=tuple(args.filter_similar_to or ()),
     )
 
     # JSONL streaming: one record per confirmed finding, written live. `-` streams
@@ -225,6 +256,16 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  user-agent: rotating per request (pool of {len(_UA_POOL)} browsers)")
         if args.proxy:
             print(f"  proxy    : {args.proxy} (TLS verification off)")
+        if args.replay_proxy:
+            codes = f" (codes {args.replay_codes})" if args.replay_codes else ""
+            print(f"  replay   : {args.replay_proxy}{codes} — confirmed findings only")
+        if args.time_limit:
+            print(f"  time-limit: {args.time_limit}")
+        _bf = [n for n, v in (("word", args.filter_word_count), ("line", args.filter_line_count),
+                              ("regex", args.filter_regex),
+                              ("similar", args.filter_similar_to)) if v]
+        if _bf:
+            print(f"  filters+ : {', '.join(_bf)}")
         if args.exclude:
             print(f"  exclude  : {', '.join(args.exclude)}")
         if args.exclude_ext:
@@ -300,7 +341,8 @@ async def run(args: argparse.Namespace) -> int:
                                             log_stream=sys.stderr if jsonl_stdout else None)
                 cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                    delay=args.delay, rate=args.rate,
-                                   verify_tls=not (args.insecure or args.proxy or proxy_list),
+                                   verify_tls=not (args.insecure or args.proxy or proxy_list
+                                                   or args.replay_proxy),
                                    proxy=args.proxy or "", proxies=proxy_list,
                                    headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent,
@@ -424,6 +466,9 @@ def main() -> None:
     ap.add_argument("--max-requests", type=int, default=0,
                     help="request budget per target (default 0 = unlimited); set N to cap "
                          "a slow/throttled target, or stop with q and --resume later")
+    ap.add_argument("--time-limit", metavar="DURATION",
+                    help="wall-clock budget per target, e.g. 30s / 10m / 1h (or bare seconds); "
+                         "the scan stops cleanly when it's reached (like --max-requests, by time)")
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
     ap.add_argument("-H", "--header", action="append", metavar="'Name: Value'",
                     help="extra header sent on every request; repeatable "
@@ -440,6 +485,13 @@ def main() -> None:
     ap.add_argument("--proxy-file", metavar="FILE",
                     help="rotate egress across a list of proxies (one URL per line) — spreads "
                          "requests so a per-source rate-limit/ban can't pin the scan; implies -k")
+    ap.add_argument("--replay-proxy", metavar="URL",
+                    help="re-issue only CONFIRMED findings through this proxy at the end of the "
+                         "scan — Burp/ZAP gets a clean sitemap of just the hits, separate from "
+                         "--proxy (which sees every probe); implies -k")
+    ap.add_argument("--replay-codes", metavar="CODES",
+                    help="restrict --replay-proxy to these status codes (comma list; "
+                         "default = every reported finding)")
     ap.add_argument("--http2", action="store_true",
                     help="negotiate HTTP/2 (matches modern CDNs/WAFs; needs the 'h2' package — "
                          "pip install h2; silently falls back to HTTP/1.1 if absent)")
@@ -567,6 +619,15 @@ def main() -> None:
                     help="match only these body sizes in bytes (comma list)")
     ap.add_argument("-fs", "--fs", metavar="SIZES",
                     help="filter out these body sizes in bytes (comma list)")
+    ap.add_argument("--filter-word-count", metavar="N",
+                    help="filter out responses with these word counts (comma list)")
+    ap.add_argument("--filter-line-count", metavar="N",
+                    help="filter out responses with these line counts (comma list)")
+    ap.add_argument("--filter-regex", metavar="RE",
+                    help="filter out responses whose body matches this regex")
+    ap.add_argument("--filter-similar-to", action="append", metavar="URL",
+                    help="filter out responses whose body is ~identical (simhash) to this "
+                         "reference page; repeatable — great for a known soft-200/error page")
     ap.add_argument("-v", "--verbose", action="count", default=0,
                     help="-v: phases, calibration, fingerprint, hits; -vv: every request")
     args = ap.parse_args()
@@ -589,14 +650,19 @@ def main() -> None:
         sys.exit(_forget(args))
     if args.forget_noise:
         sys.exit(_forget_noise(args))
-    if not args.url and not args.list:
-        ap.error("give at least one target URL or --list FILE")
+    # stdin counts as a target source: `-l -`, or a bare pipe when nothing else
+    # given. Read it eagerly (once) so an empty pipe still hits the error below.
+    args._stdin_targets = []
+    if args.list == "-" or (not sys.stdin.isatty() and not args.url and not args.list):
+        args._stdin_targets = _read_url_lines(sys.stdin.read())
+    if not args.url and not args.list and not args._stdin_targets:
+        ap.error("give at least one target URL or --list FILE (or pipe URLs on stdin)")
     if args.ext_only and not args.ext:
         ap.error("--ext-only requires -X/--ext (the extensions to use)")
     for wl in (args.wordlist or []):
         if not resolve_wordlist(Path(wl)).is_file():
             ap.error(f"wordlist not found: {wl} (a path, or a bundled name: base / big)")
-    if args.list and not Path(args.list).is_file():
+    if args.list and args.list != "-" and not Path(args.list).is_file():
         ap.error(f"target list not found: {args.list}")
 
     if args.jsonl == "-":

@@ -184,6 +184,13 @@ class Engine:
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )
 
+    def replay_client(self, proxy: str) -> httpx.AsyncClient:
+        """A standalone client bound to a replay proxy (--replay-proxy): confirmed
+        findings are re-issued through it so only real hits reach Burp/ZAP, keeping
+        the intercept sitemap clean (separate from --proxy, which sees every probe).
+        The caller owns it and must aclose() it."""
+        return self._new_client(proxy)
+
     async def __aenter__(self) -> "Engine":
         # One client per proxy when --proxy-file gives a pool (requests spread
         # across egress IPs — a per-source rate-limit/ban can't pin the scan);

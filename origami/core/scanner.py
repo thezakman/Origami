@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import random
 import string
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -185,6 +186,10 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
 class ScanOptions:
     max_depth: int = 1            # 0 = root only
     max_requests: int = 0         # hard cap per run (§3.11); 0 = unlimited (default)
+    time_limit: float = 0.0       # wall-clock cap in seconds (--time-limit); 0 = unlimited
+    replay_proxy: str | None = None       # send confirmed findings through this proxy (--replay-proxy)
+    replay_codes: tuple[int, ...] = ()    # only replay these statuses (empty = all reported)
+    filter_similar_urls: tuple[str, ...] = ()  # --filter-similar-to: pages whose simhash drops look-alikes
     wordlist_paths: list[str] = field(default_factory=list)  # -w (repeatable); merged. Empty = builtin base
     shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
@@ -245,6 +250,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     opts = opts or ScanOptions()
     observer = observer or NullObserver()
     control = control or ScanControl()
+    engine.deadline = (time.monotonic() + opts.time_limit) if opts.time_limit else None
     kb = load_kb()
     host = urlparse(base_url).netloc
     profile = TargetProfile(host=host, base_url=base_url)
@@ -562,6 +568,18 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                      f"{'soft-404' if cb.is_soft404 else cb.status} · "
                      f"len {cb.length_lo}..{cb.length_hi} · sigs {len(cb.simhashes)}", 2)
 
+    # --filter-similar-to: fetch each reference page once, keep its body simhash so
+    # _report can drop look-alike findings (a noisy soft-200 the auto soft-404 misses).
+    if opts.filter_similar_urls and not opts.filters.similar_hashes:
+        hashes = []
+        for ref in opts.filter_similar_urls:
+            rp = await engine.fetch(urljoin(base_url, ref), keep_body=True)
+            if rp.ok:
+                hashes.append(rp.body_simhash)
+        opts.filters.similar_hashes = tuple(hashes)
+        observer.log(f"filter: dropping responses ~similar to {len(hashes)} reference "
+                     f"page(s) (simhash ≤ {opts.filters.similar_distance})", 0, style="cyan")
+
     words = load_wordlists(opts.wordlist_paths)
     # fold the learned vocabulary in: target's own names tried first, in every dir.
     if learned_names:
@@ -595,7 +613,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # wall, the session expired DURING the scan and later findings may be partial.
     # The root is a stable reference, so this is a false-positive-free signal.
     # Skipped if the request budget is already spent; counted toward requests_made.
-    if started_authed and not (opts.max_requests and engine.spent >= opts.max_requests):
+    if started_authed and not (_over_budget(engine, opts)):
         recheck = await engine.fetch(base_url, keep_body=True)
         result.requests_made = engine.spent              # count this extra probe
         reason = session.auth_wall_reason(recheck, base_url)
@@ -603,7 +621,39 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             observer.log(f"auth: session appears to have EXPIRED during the scan "
                          f"(root now {reason}) — results may be partially unauthenticated; "
                          f"re-run with fresh credentials", 0, style="bold red")
+
+    # --replay-proxy: re-issue confirmed findings through the replay proxy so only
+    # the real hits land in Burp/ZAP (a clean sitemap), separate from --proxy which
+    # sees every probe. --replay-codes narrows it to specific statuses.
+    if opts.replay_proxy:
+        await _replay_findings(engine, result, opts, observer)
+
     return result
+
+
+async def _replay_findings(engine, result, opts, observer) -> None:
+    """GET each reported finding (optionally filtered by --replay-codes) through the
+    replay proxy. Best-effort: a proxy that's down logs a warning, never crashes."""
+    codes = set(opts.replay_codes)
+    targets = [f for f in result.findings if not codes or f.status in codes]
+    if not targets:
+        return
+    observer.log(f"replay: sending {len(targets)} finding(s) to {opts.replay_proxy}"
+                 + (f" (codes {sorted(codes)})" if codes else ""), 0, style="cyan")
+    client = engine.replay_client(opts.replay_proxy)
+    sent = 0
+    try:
+        for f in targets:
+            try:
+                await client.get(f.url)
+                sent += 1
+            except Exception:
+                pass                              # a single unreachable URL never aborts the replay
+    finally:
+        await client.aclose()
+    if sent < len(targets):
+        observer.log(f"replay: {sent}/{len(targets)} delivered "
+                     f"(proxy {opts.replay_proxy} may be unreachable)", 0, style="yellow")
 
 
 async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=None,
@@ -616,6 +666,7 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
     """
     observer = observer or NullObserver()
     control = control or ScanControl()
+    engine.deadline = (time.monotonic() + opts.time_limit) if opts.time_limit else None
     profile = state["profile"]
     result = ScanResult(profile=profile, findings=list(state["findings"]),
                         folds=set(state.get("folds", [])),
@@ -786,9 +837,12 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         observer.pushback(engine.pushback_events)
         if control.quit:
             reason = "you pressed q"
-        else:
+        elif opts.max_requests and engine.spent >= opts.max_requests:
             reason = (f"hit the --max-requests {opts.max_requests} budget "
                       f"(raise it with --max-requests N)")
+        else:
+            reason = (f"hit the --time-limit {opts.time_limit:g}s "
+                      f"(raise it with --time-limit)")
         observer.log(f"scan: stopped — {reason}. {len(result.findings)} findings so far; "
                      f"checkpoint saved → continue with --resume", 0, style="yellow")
         return result
@@ -913,6 +967,16 @@ async def _is_soft(engine, profile, prefix, probe) -> bool:
     return False
 
 
+def _over_budget(engine, opts) -> bool:
+    """True when the run must stop firing — the request cap (--max-requests) or the
+    wall-clock deadline (--time-limit) is reached. Checked in every fold's hot loop
+    (the deadline lives on the engine, set once at scan start)."""
+    if opts.max_requests and engine.spent >= opts.max_requests:
+        return True
+    dl = getattr(engine, "deadline", None)
+    return dl is not None and time.monotonic() >= dl
+
+
 async def _confirm(engine, profile, prefix, probe, origin):
     """classify + soft-404 sibling verification. Returns a real Finding or None.
 
@@ -982,7 +1046,7 @@ def _dedupe_and_collapse(findings, observer, ci=False):
     return out
 
 
-def _report(observer, result, opts, finding, url) -> None:
+def _report(observer, result, opts, finding, url, body=None) -> None:
     """Report a finding if it passes presentation filters (recursion already
     decided upstream, filter-independent).
 
@@ -1002,7 +1066,8 @@ def _report(observer, result, opts, finding, url) -> None:
         observer.tick(hit=False)            # not a new resource — count the probe, don't re-list
         observer.request(url, finding.status, False)
         return
-    shown = opts.filters.accept(finding.status, finding.length)
+    shown = (opts.filters.accept(finding.status, finding.length)
+             and opts.filters.accept_body(body, finding.simhash))
     observer.tick(hit=shown)
     observer.request(url, finding.status, shown)
     if shown:
@@ -1059,7 +1124,7 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
     hit_cap = False
     for idx in range(skip, len(cands)):
         cand = cands[idx]
-        if (opts.max_requests and engine.spent >= opts.max_requests) or control.quit:
+        if (_over_budget(engine, opts)) or control.quit:
             consumed, hit_cap = idx, True       # stopped here — resume from idx (0 = unlimited)
             break
         if control.skip_prefix:
@@ -1084,7 +1149,9 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             observer.tick(hit=False)
             continue
         fired.add(ukey)
-        probe = await engine.fetch(url)
+        # keep the body only when a body-based filter (word/line/regex) needs it —
+        # otherwise the main scan stays body-light for speed/memory.
+        probe = await engine.fetch(url, keep_body=opts.filters.has_body_filters())
         path = urlparse(url).path
 
         # classify() = is this a REAL response (outside the calibrated miss
@@ -1124,7 +1191,7 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # blanket 403/200 wall is recursed (above) but NOT reported. The sibling
         # fetch is skipped once the request budget is spent (report unverified
         # rather than overrun --max-requests by one probe per finding).
-        over_budget = bool(opts.max_requests and engine.spent >= opts.max_requests)
+        over_budget = bool(_over_budget(engine, opts))
         if not over_budget and await _is_soft(engine, profile, prefix, probe):
             if ranker is not None:
                 ranker.observe(cand.path, hit=False)
@@ -1152,7 +1219,7 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             if not seen:
                 await _probe_405_finding(engine, finding, opts, observer)
 
-        _report(observer, result, opts, finding, url)
+        _report(observer, result, opts, finding, url, body=probe.body or None)
 
     if first_hit_path:
         await bl.probe_case_sensitivity(engine, profile, first_hit_path)
@@ -1228,7 +1295,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     # 1. read each file's body, extract referenced paths
     new_paths: dict[str, str] = {}            # path -> source file path (for graph edges)
     for f in files:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
         pr = await engine.fetch(f.url, keep_body=True)
@@ -1265,7 +1332,7 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
     observer.start_prefix("harvest", len(fresh))
     new_dirs: set[str] = set()                    # dirs the confirmed endpoints live in
     for p, src in fresh:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         pth = "/" + p.lstrip("/")
         if _excluded(pth, opts):
@@ -1371,7 +1438,7 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
     total = 0
     cfg_seeds: set[str] = set()          # same-host paths referenced inside configs → new seeds
     for f in cands:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         pr = await engine.fetch(f.url, keep_body=True)
         if pr.ok and pr.body:
@@ -1400,7 +1467,7 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
                      0, style="cyan")
         observer.start_prefix("config", len(fresh))
         for url in fresh:
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 break
             probe = await engine.fetch(url)
             prefix = urlparse(url).path.rsplit("/", 1)[0] + "/"
@@ -1434,7 +1501,7 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
     observer.start_prefix("vhost", len(cands))
     seen_sig: set[tuple] = set()
     for cand in cands:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         observer.substep(cand)
         pr = await engine.fetch(root, headers={"Host": cand})
@@ -1505,13 +1572,13 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
     observer.start_prefix("params", len(targets) * n_batches)
     total = 0
     for f in targets:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
         found: dict[str, str] = {}            # param -> reflection context (js/html/attr/json/body)
         echoes = False
         for qs, token_map, ctl in paramfuzz.build_batches(params, FUZZ_BATCH):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 break
             sep = "&" if urlparse(f.url).query else "?"
             url = f.url + sep + qs
@@ -1602,7 +1669,7 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
     observer.start_prefix("cache-poison", len(targets) * (1 + len(hdrs)))
     found = 0
     for f in targets:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         url = f.url
         observer.substep(urlparse(url).path.rsplit("/", 1)[-1] or url)
@@ -1625,7 +1692,7 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
         # that reflects AND survives the cache (it can't come from the query).
         echoes = f"{run}base".encode() in base.body.lower()
         for i, (name, tmpl) in enumerate(hdrs):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 return
             canary = f"{run}cp{i}"
             has_can = cache_poison.has_canary(tmpl)
@@ -1732,7 +1799,7 @@ async def _try_method(engine, url, method, opts, observer):
     progress bar — these are inline side-probes, not budgeted scan candidates."""
     best, best_label = None, ""
     for body, ctype, label in _METHOD_BODIES:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         kw = {"content": body}
         if ctype:
@@ -1818,7 +1885,7 @@ async def _mutate_fold(engine, profile, result, opts, observer) -> None:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         for sib in mutate.siblings(path):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 return
             url = urljoin(host, sib.lstrip("/"))
             if url in result.seen_urls or _excluded(urlparse(url).path, opts):
@@ -1853,7 +1920,7 @@ async def _apiver_fold(engine, profile, result, opts, observer) -> None:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         for var in apiver.version_variants(path):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 return
             url = urljoin(host, var.lstrip("/"))
             if url in result.seen_urls or _excluded(urlparse(url).path, opts):
@@ -1884,7 +1951,7 @@ async def _bucket_fold(engine, profile, result, opts, observer) -> None:
         note = f"cloud bucket referenced: {ref.label}"
         conf, tags = 0.5, ["bucket"]
         if opts.buckets:
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 break
             pr = await engine.fetch(buckets.list_url(ref), keep_body=True)
             observer.request(pr.url, pr.status, False)
@@ -1915,7 +1982,7 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rsplit("/", 1)[-1] or path)   # backups: <file>
         for var in backups.variations(path):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 break
             url = urljoin(_host_root(profile.base_url), var)
             if _excluded(urlparse(url).path, opts):
@@ -2002,7 +2069,7 @@ async def _vcs_fold(engine, profile, result, opts, observer) -> None:
         uniq = uniq[:vcs_cap]
     observer.start_prefix("vcs", len(uniq))
     for p in uniq:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         url = urljoin(host, p.lstrip("/"))
         if _excluded(urlparse(url).path, opts):
@@ -2143,7 +2210,7 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
         for label, method, rpath, headers in _vars_for(f):
-            if opts.max_requests and engine.spent >= opts.max_requests:
+            if _over_budget(engine, opts):
                 return
             url = urljoin(root, rpath.lstrip("/"))
             probe = await engine.fetch(url, method=method, headers=headers or None)
@@ -2186,7 +2253,7 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
     root = _host_root(profile.base_url)
     ci = profile.case_sensitive is False
     for path in assoc:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         p = "/" + path.lstrip("/")
         url = urljoin(root, p.lstrip("/"))
@@ -2304,7 +2371,7 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
 
     observer.start_prefix("shortscan", len(urls))
     for url, prefix in urls:
-        if opts.max_requests and engine.spent >= opts.max_requests:
+        if _over_budget(engine, opts):
             break
         pth = urlparse(url).path
         # drop malformed expansions: empty-filename segments (control/.ashx),

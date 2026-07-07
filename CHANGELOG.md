@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.89.0] — feroxbuster parity: replay-proxy, body filters, time-limit, stdin
+- **`--replay-proxy URL` + `--replay-codes CODES`**: at the end of a scan, re-issue only
+  the CONFIRMED findings through a replay proxy — Burp/ZAP gets a clean sitemap of just
+  the hits, separate from `--proxy` (which sees every probe). `--replay-codes` narrows it
+  to specific statuses. Best-effort: an unreachable proxy warns, never crashes. Implies `-k`.
+- **Body-based filters** (feroxbuster-style): `--filter-word-count`, `--filter-line-count`,
+  `--filter-regex` and `--filter-similar-to URL` (repeatable). word/line/regex apply to the
+  main wordlist scan (bodies are kept only when a body filter is active); `--filter-similar-to`
+  drops look-alikes by simhash across ALL findings — great for a known soft-200/error page.
+- **`--time-limit DURATION`** (`30s`/`10m`/`1h` or bare seconds): a wall-clock budget per
+  target alongside `--max-requests`; the scan stops cleanly and leaves a `--resume` checkpoint.
+- **stdin targets**: `cat urls | origami` (bare pipe) or `-l -` reads target URLs from stdin.
+
 ## [0.88.0] — `--bypass-prefixes` (custom route carriers) + `full` ungates matrix
 - New **`--bypass-prefixes FILE`**: an operator route-prefix wordlist (one mount per
   line, e.g. `rest/v1`, `/gateway`) fed to BOTH the api-prefix and matrix-management
