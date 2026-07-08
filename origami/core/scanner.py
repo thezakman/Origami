@@ -81,10 +81,6 @@ def _ext_excluded(path: str, patterns) -> bool:
 MAX_HARVEST_SEEDS = 2000
 MAX_WAYBACK_SEEDS = 2000   # cap historical (Wayback/gau) paths folded as candidates
 
-# Origins whose paths are root-absolute (joined from the host root, not the
-# current prefix) — harvested references point at app-root paths.
-_SEED_ORIGINS = {"memory", "js", "robots", "apidocs", "wellknown", "header", "wayback"}
-
 
 def _host_root(url: str) -> str:
     p = urlparse(url)
@@ -568,12 +564,15 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                      f"{'soft-404' if cb.is_soft404 else cb.status} · "
                      f"len {cb.length_lo}..{cb.length_hi} · sigs {len(cb.simhashes)}", 2)
 
-    # --filter-similar-to: fetch each reference page once, keep its body simhash so
-    # _report can drop look-alike findings (a noisy soft-200 the auto soft-404 misses).
-    if opts.filter_similar_urls and not opts.filters.similar_hashes:
+    # --filter-similar-to: fetch each reference page against THIS target, keep its
+    # body simhash so _report can drop look-alike findings (a noisy soft-200 the
+    # auto soft-404 misses). Resolved per target — the refs are relative to this
+    # host, and `opts` is shared across a multi-target run, so we must not cache
+    # target #1's hashes onto every subsequent host.
+    if opts.filter_similar_urls:
         hashes = []
         for ref in opts.filter_similar_urls:
-            rp = await engine.fetch(urljoin(base_url, ref), keep_body=True)
+            rp = await engine.fetch(urljoin(base_url, ref), keep_body=False)
             if rp.ok:
                 hashes.append(rp.body_simhash)
         opts.filters.similar_hashes = tuple(hashes)
@@ -640,7 +639,12 @@ async def _replay_findings(engine, result, opts, observer) -> None:
         return
     observer.log(f"replay: sending {len(targets)} finding(s) to {opts.replay_proxy}"
                  + (f" (codes {sorted(codes)})" if codes else ""), 0, style="cyan")
-    client = engine.replay_client(opts.replay_proxy)
+    try:
+        client = engine.replay_client(opts.replay_proxy)   # httpx validates the proxy URL here
+    except Exception as e:
+        observer.log(f"replay: cannot use proxy {opts.replay_proxy!r} ({e}) — skipped",
+                     0, style="yellow")
+        return
     sent = 0
     try:
         for f in targets:
@@ -2088,6 +2092,7 @@ async def _vcs_fold(engine, profile, result, opts, observer) -> None:
 
 MAX_BYPASS_TARGETS = 20   # cap blocked resources we attempt to bypass
 BYPASS_PER_WALL = 3       # …and at most this many per identical 403/401 wall
+MAX_BYPASS_PREFIXES = 12  # cap operator --bypass-prefixes carriers (they multiply per target)
 # Stacks whose normalizers decode overlong/fullwidth/%u slashes → enable the
 # encoded-separator bypass family under "auto" intensity (plus unknown stacks).
 _BYPASS_ENC_STACKS = {"iis", "tomcat", "java", "spring", "spring boot", "jetty",
@@ -2181,6 +2186,14 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     if opts.bypass_prefixes_path and not custom_prefixes:
         observer.log(f"403-bypass: prefix wordlist {opts.bypass_prefixes_path} empty or "
                      f"unreadable — using seeds + discovered routes only", 0, style="yellow")
+    # Cap custom carriers: each one multiplies across every blocked resource × 2
+    # families, so a huge prefix file would balloon the request count. Keep the
+    # first N (file order = operator priority) and say what was dropped.
+    if len(custom_prefixes) > MAX_BYPASS_PREFIXES:
+        observer.log(f"403-bypass: using the first {MAX_BYPASS_PREFIXES} of "
+                     f"{len(custom_prefixes)} --bypass-prefixes (raise --max-requests to widen)",
+                     0, style="yellow")
+        custom_prefixes = custom_prefixes[:MAX_BYPASS_PREFIXES]
     route_prefixes = tuple(dict.fromkeys(custom_prefixes + _discovered_route_prefixes(result.findings)))
     # "full" intensity fires the matrix-management family regardless of stack;
     # "auto"/"light" keep it gated to Spring/Java/Tomcat/unknown stacks.
