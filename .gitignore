@@ -31,6 +31,11 @@ leftovers/
 # private brainstorm — never commit
 work.md
 
+# API credentials / secrets — never commit (keys live in ~/.config/origami/ or env)
+credentials.toml
+*.credentials
+.env
+
 # old Feb-2024 prototype — kept local, not versioned
 legacy/
 

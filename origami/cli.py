@@ -201,7 +201,7 @@ async def run(args: argparse.Namespace) -> int:
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         bypass_prefixes_path=args.bypass_prefixes,
-        openapi_source=args.openapi, vhost=args.vhost, origin=args.origin,
+        openapi_source=args.openapi, vhost=args.vhost, origin=args.origin or args.deep,
         param_fuzz=args.params or args.deep,
         wayback=args.wayback or args.gau or args.deep, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
@@ -250,7 +250,7 @@ async def run(args: argparse.Namespace) -> int:
                   + (" (only)" if args.ext_only else " (+ auto)"))
         print(f"  filters  : codes {fdesc}")
         if args.deep:
-            print("  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback")
+            print("  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback + origin")
         if args.header:
             print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
         if args.user_agent:
@@ -592,8 +592,9 @@ def main() -> None:
                          "lines), added to the built-in set (implies --cache-poison)")
     ap.add_argument("--deep", action="store_true",
                     help="aggressive discovery preset: turns on --bypass-403, --cache-poison, "
-                         "--probe-405, --buckets, --params and --wayback at once (state-changing "
-                         "probes and off-host bucket GETs included). Just: origami --deep -u <url>")
+                         "--probe-405, --buckets, --params, --wayback and --origin at once "
+                         "(state-changing probes, off-host bucket GETs and origin-IP probing "
+                         "included). Just: origami --deep -u <url>")
     ap.add_argument("--buckets", action="store_true",
                     help="probe S3/GCS/Azure buckets referenced in the target's code for public "
                          "listability (read-only GET, off-host) and enumerate exposed objects; "

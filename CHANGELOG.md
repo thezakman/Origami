@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.92.0] — `--origin` in `--deep` + secure OSINT credential storage
+- **`--deep` now includes `--origin`** — the aggressive preset already makes off-host
+  (bucket) GETs and external (wayback) calls, so origin-IP probing fits; bare `--deep`
+  runs it keylessly (crt.sh), or with keys if configured.
+- **Secure credential resolution** (`origami/core/credentials.py`): OSINT API keys are
+  read **environment-variable first, then `~/.config/origami/credentials.toml`** (XDG-aware,
+  `tomllib`, no new dependency). Keys are never logged, never written to reports/checkpoints,
+  and never shown in the preamble (only source *names* are). A group/other-readable config
+  file triggers a `chmod 600` warning (bearer-secret hygiene). `.gitignore` now covers
+  `credentials.toml`/`.env`/`*.credentials`.
+
 ## [0.91.0] — `--origin`: origin-IP discovery + IP-based WAF bypass
 - New **`--origin`** fold (opt-in, off-host): behind a CDN/WAF the public DNS points at
   the edge — this resolves the host's A/AAAA records and gathers candidate **origin** IPs,
