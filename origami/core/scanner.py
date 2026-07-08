@@ -41,7 +41,7 @@ from origami.core import resume as resume_mod
 from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
 from origami.core.httpclient import Engine
-from origami.core.normalize import hamming
+from origami.core.normalize import hamming, simhash
 from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding,
                                                classify, is_dir_listing, resolve_baseline)
 from origami.core.scope import same_host, same_site
@@ -50,8 +50,8 @@ from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
-                                        graphql, js_parser, methods, mutate, robots,
-                                        shortname, vcs, wayback, wellknown)
+                                        graphql, js_parser, methods, mutate, originip,
+                                        robots, shortname, vcs, wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -213,6 +213,7 @@ class ScanOptions:
     wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
     gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
+    origin: bool = False           # origin-IP discovery + IP-based WAF bypass (--origin)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
 
@@ -929,6 +930,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         await _guard(observer, "vhost",
                      _vhost_fold(engine, profile, result, opts, observer, root_simhash), None)
 
+    # 9. origin-IP discovery + IP-based WAF bypass (opt-in, off-host connections).
+    if opts.origin:
+        await _guard(observer, "origin",
+                     _origin_fold(engine, profile, result, opts, observer, root_simhash), None)
+
     observer.pushback(engine.pushback_events)
     result.requests_made = prior_requests + engine.total_requests
     result.pushbacks = engine.pushback_events
@@ -1531,6 +1537,89 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
         _report(observer, result, opts, vf, url)
         observer.log(f"vhost: {cand} → {pr.status} ({pr.length}B) distinct response",
                      0, style="bold cyan")
+
+
+MAX_ORIGIN_IPS = 25       # cap candidate IPs we probe directly
+
+
+async def _origin_fold(engine, profile, result, opts, observer, root_simhash) -> None:
+    """Origin-IP discovery + IP-based WAF bypass. Resolve the host's own A/AAAA
+    records, gather OSINT candidate origin IPs (keyed sources, else crt.sh), then
+    request each IP directly with the target's `Host` header (TLS verify off). An
+    IP that serves distinct content — or opens a path the edge WAF blocks — is a
+    likely origin reachable behind the CDN, reported as a bypass lead."""
+    import httpx
+    observer.phase("origin")
+    host = profile.host.split(":")[0]
+    pu = urlparse(profile.base_url)
+    scheme = pu.scheme or "https"
+    port = pu.port or (443 if scheme == "https" else 80)
+
+    edge_ips = await originip.resolve_ips(host, port=port)
+    cands, source = await originip.candidate_origin_ips(host)
+    all_ips = list(dict.fromkeys(edge_ips + [ip for ip in cands if ip not in edge_ips]))
+    all_ips = all_ips[:MAX_ORIGIN_IPS]
+    if not all_ips:
+        observer.log("origin: no IPs resolved for the target", 0, style="yellow")
+        return
+    behind = profile.waf or profile.cache_layer
+    keyed = originip.configured_sources()
+    observer.log(f"origin: {len(edge_ips)} edge IP(s) + {len(cands)} candidate(s) via "
+                 f"{source}" + (f" (keyed: {'+'.join(keyed)})" if keyed else " (keyless)")
+                 + (f"; edge WAF/CDN: {behind}" if behind else ""), 0, style="cyan")
+    observer.start_prefix("origin", len(all_ips))
+
+    # a representative edge-blocked path — if it opens on an IP, that's a real bypass
+    blocked = next((urlparse(f.url).path for f in result.findings
+                    if f.status in (401, 403)), None)
+    seen_sig: set[tuple] = set()
+
+    async with httpx.AsyncClient(verify=False, timeout=engine.cfg.timeout,
+                                 follow_redirects=False,
+                                 headers={"User-Agent": engine.cfg.user_agent,
+                                          **engine.cfg.headers}) as c:
+        for ip in all_ips:
+            if _over_budget(engine, opts):
+                break
+            observer.substep(ip)
+            hp = f"[{ip}]" if ":" in ip else ip          # bracket IPv6 literals
+            root_url = f"{scheme}://{hp}:{port}/"
+            try:
+                pr = await c.get(root_url, headers={"Host": host})
+            except Exception:
+                observer.tick(hit=False); continue        # IP not reachable on this port
+            observer.request(root_url, pr.status_code, False)
+            body = pr.content or b""
+            sh = simhash(body)
+            edge_ip = ip in edge_ips
+            distinct = hamming(sh, root_simhash) > bl.SIMHASH_MISS_DISTANCE
+
+            bypass = False
+            if blocked and (behind or not edge_ip):       # test the WAF-bypass angle
+                try:
+                    bp = await c.get(f"{scheme}://{hp}:{port}{blocked}", headers={"Host": host})
+                    bypass = 200 <= bp.status_code < 300 and len(bp.content or b"") > 0
+                except Exception:
+                    pass
+
+            if not (distinct or bypass):                  # same as the edge → no lead
+                observer.tick(hit=False); continue
+            sig = (pr.status_code, sh)
+            if sig in seen_sig:                           # collapse load-balanced twins
+                observer.tick(hit=False); continue
+            seen_sig.add(sig)
+            role = "edge IP" if edge_ip else f"candidate via {source}"
+            note = (f"WAF bypass: edge-blocked {blocked} → 200 direct on {ip} (Host: {host})"
+                    if bypass else
+                    f"{ip} serves distinct content with Host: {host} — possible origin [{role}]")
+            url = f"{scheme}://{ip}/"
+            of = Finding(url, pr.status_code, len(body), pr.headers.get("content-type", ""),
+                         0.85 if bypass else 0.65, "origin", note=note,
+                         tags=sorted({"origin"} | ({"bypass"} if bypass else set())), simhash=sh)
+            _report(observer, result, opts, of, url)
+            observer.log(f"origin: {ip} → {'WAF BYPASS' if bypass else 'distinct content'} "
+                         f"({pr.status_code}, {len(body)}B) [{role}]", 0,
+                         style="bold green" if bypass else "bold cyan")
 
 
 MAX_FUZZ_ENDPOINTS = 15   # cap dynamic endpoints we fuzz params on

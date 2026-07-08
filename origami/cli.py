@@ -201,7 +201,8 @@ async def run(args: argparse.Namespace) -> int:
         bypass_headers=args.bypass_headers is not None,
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         bypass_prefixes_path=args.bypass_prefixes,
-        openapi_source=args.openapi, vhost=args.vhost, param_fuzz=args.params or args.deep,
+        openapi_source=args.openapi, vhost=args.vhost, origin=args.origin,
+        param_fuzz=args.params or args.deep,
         wayback=args.wayback or args.gau or args.deep, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
         cache_headers=args.cache_headers,
@@ -264,6 +265,10 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  replay   : {args.replay_proxy}{codes} — confirmed findings only")
         if args.time_limit:
             print(f"  time-limit: {args.time_limit}")
+        if args.origin:
+            import origami.modules.discovery.originip as _oip
+            src = "+".join(_oip.configured_sources()) or "crt.sh (keyless)"
+            print(f"  origin   : IP bypass via {src}")
         _bf = [n for n, v in (("word", args.filter_word_count), ("line", args.filter_line_count),
                               ("regex", args.filter_regex),
                               ("similar", args.filter_similar_to)) if v]
@@ -566,6 +571,12 @@ def main() -> None:
     ap.add_argument("--vhost", action="store_true",
                     help="virtual-host discovery: fuzz the Host header on the target IP "
                          "and report distinct vhosts (admin/staging/internal/… on the CDN)")
+    ap.add_argument("--origin", action="store_true",
+                    help="origin-IP discovery + IP-based WAF bypass: resolve A/AAAA, gather "
+                         "candidate origin IPs (Shodan/SecurityTrails/Censys if their env keys "
+                         "are set, else crt.sh), and request each IP directly with the target "
+                         "Host — an IP that opens an edge-blocked path is a real bypass "
+                         "(off-host connections; opt-in)")
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
