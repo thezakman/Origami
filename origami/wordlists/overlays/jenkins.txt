@@ -1,0 +1,13 @@
+# Jenkins — additive path pack
+/login
+/script
+/manage
+/systemInfo
+/api/json
+/credentials/
+/computer/
+/asynchPeople/
+/view/all/
+/cli
+/whoAmI/
+/securityRealm/

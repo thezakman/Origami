@@ -1,0 +1,13 @@
+# Laravel — additive path pack
+/telescope/
+/telescope/requests
+/horizon/
+/horizon/api/stats
+/_ignition/health-check
+/_ignition/execute-solution
+/storage/logs/laravel.log
+/log/laravel.log
+/.env
+/.env.backup
+/api/documentation
+/vendor/phpunit/phpunit/phpunit.xml

@@ -1,0 +1,11 @@
+# Apache Tomcat / JBoss — additive path pack
+/manager/html
+/manager/status
+/manager/text/list
+/host-manager/html
+/manager/
+/examples/
+/examples/servlets/
+/examples/jsp/
+/examples/websocket/
+/docs/

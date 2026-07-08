@@ -1127,6 +1127,38 @@ class TestFeroxParity(unittest.TestCase):
             _int_set("200,foo")
 
 
+class TestOverlays(unittest.TestCase):
+    """Tech-overlay wordlists: confirmed fingerprint → additive stack path packs."""
+
+    def test_packs_for_matches_tech_keywords(self):
+        from origami.core import overlays as o
+        self.assertEqual(o.packs_for(["iis", "microsoft asp.net"]), ["aspnet"])
+        self.assertEqual(o.packs_for(["wordpress", "php"]), ["wordpress"])
+        self.assertEqual(o.packs_for(["spring boot", "java"]), ["spring"])
+        self.assertEqual(o.packs_for(["nginx", "plone"]), [])          # no pack → nothing
+        # multiple confirmed techs → multiple packs, stable order
+        self.assertEqual(o.packs_for(["laravel", "wordpress"]), ["wordpress", "laravel"])
+
+    def test_overlay_words_are_additive_and_rooted(self):
+        from origami.core import overlays as o
+        words, packs = o.overlay_words(["wordpress"])
+        self.assertEqual(packs, ["wordpress"])
+        self.assertIn("/wp-login.php", words)
+        self.assertTrue(all(w.startswith("/") for w in words))         # root-absolute seeds
+        self.assertEqual(len(words), len(set(words)))                  # deduped
+        self.assertEqual(o.overlay_words(["nginx"]), ([], []))
+
+    def test_all_bundled_packs_load_clean(self):
+        from origami.core import overlays as o
+        packs = [p for _, p in o._TECH_TO_PACK]
+        for pack in packs:
+            words = o.load_pack(pack)
+            self.assertTrue(words, f"{pack} pack is empty/missing")
+            self.assertEqual(len(words), len(set(words)), f"{pack} has dupes")
+            self.assertTrue(all(w.startswith("/") and not w.startswith("#") for w in words),
+                            f"{pack} has a non-rooted or comment line")
+
+
 class TestOriginIP(unittest.TestCase):
     """Origin-IP discovery: DNS + crt.sh/keyed OSINT parsing + target gating."""
 

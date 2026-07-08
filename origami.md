@@ -28,7 +28,7 @@ origami http://www.example.com
 ## 1. Design principles
 
 1. **Calibrate before attacking.** No attack without confirming the channel. The baseline measures the real behavior of 404/403/401/500, and only then does the scan begin.
-2. **Additive, per-path-prefix fingerprint.** The real web is legacy + proxy + multiple apps on one host. `/api/` can be Node while `/portal/` is classic ASP. Fingerprint enriches, it doesn't segment, and it's kept **per prefix**.
+2. **Additive, per-path-prefix fingerprint.** The real web is legacy + proxy + multiple apps on one host. `/api/` can be Node while `/portal/` is classic ASP. Fingerprint enriches, it doesn't segment, and it's kept **per prefix**. A confirmed stack folds in a curated **tech-overlay path pack** (`overlays/<tech>.txt`: WordPress/Spring/Laravel/Rails/Django/Next.js/… — 15 stacks), root-anchored and additive — the wordlist effectively writes itself from the fingerprint (`--no-overlays` to disable).
 3. **Evidence bus.** Header, cookie, shortscan, JS, robots, sitemap, favicon, git leak — everything becomes `Evidence{source, evidence, confidence}` feeding the decision engine.
 4. **Interpretability > black box.** Most of the "adaptation" is deterministic rule, externalized in YAML (nuclei-style), not ML. ML only enters where rules can't, and always justifiable in a report.
 5. **Clean engine ↔ brain boundary.** Engine = fast request worker pool. Brain = orchestration + decision + learning. They exchange messages. If throughput becomes the bottleneck, rewrite only the engine (Go/Rust) without touching the brain.

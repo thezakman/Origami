@@ -1,0 +1,9 @@
+# Django — additive path pack
+/admin/
+/admin/login/
+/static/admin/
+/__debug__/
+/api-auth/
+/media/
+/settings.py
+/admin/auth/user/

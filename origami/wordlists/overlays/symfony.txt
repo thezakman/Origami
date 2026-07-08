@@ -1,0 +1,9 @@
+# Symfony — additive path pack
+/_profiler/
+/_profiler/phpinfo
+/app_dev.php
+/app_dev.php/_profiler
+/config.php
+/_fragment
+/app.php
+/_wdt

@@ -1,0 +1,11 @@
+# ASP.NET / IIS — additive path pack
+/trace.axd
+/elmah.axd
+/web.config
+/Global.asax
+/App_Data/
+/bin/
+/glimpse.axd
+/WebResource.axd
+/App_Data/aspnetdb.mdf
+/swagger/

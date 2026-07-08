@@ -1,0 +1,9 @@
+# Next.js — additive path pack
+/_next/static/
+/_next/data/
+/_next/webpack-hmr
+/_next/static/chunks/
+/_next/server/
+/.next/
+/api/
+/api/auth/session

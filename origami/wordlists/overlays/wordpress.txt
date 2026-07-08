@@ -1,0 +1,22 @@
+# WordPress — additive path pack (fired only when WordPress is confirmed)
+/wp-login.php
+/wp-admin/
+/wp-admin/install.php
+/wp-admin/upgrade.php
+/wp-cron.php
+/xmlrpc.php
+/wp-config.php.bak
+/wp-config.php.orig
+/wp-config.php.save
+/wp-config.php~
+/wp-content/debug.log
+/wp-content/uploads/
+/wp-content/plugins/
+/wp-content/themes/
+/wp-content/mu-plugins/
+/wp-json/
+/wp-json/wp/v2/users
+/wp-json/wp/v2/
+/wp-sitemap.xml
+/readme.html
+/license.txt

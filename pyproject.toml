@@ -53,4 +53,4 @@ version = {attr = "origami.__version__"}   # single source of truth (origami/__i
 include = ["origami*"]
 
 [tool.setuptools.package-data]
-origami = ["wordlists/*.txt", "brain/*.yaml", "py.typed"]
+origami = ["wordlists/*.txt", "wordlists/overlays/*.txt", "brain/*.yaml", "py.typed"]
