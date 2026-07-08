@@ -208,7 +208,7 @@ Findings (16)  ·  fingerprint: iis, asp.net
   api_id = "…"
   api_secret = "…"
   ```
-  The file is created **private (0600)** by construction; Origami re-warns if it later becomes group/other-readable (keys are bearer secrets). Environment variables always override the file.
+  The file is created **private (0600)** by construction; Origami re-warns if it later becomes group/other-readable (keys are bearer secrets). Environment variables always override the file. A committed [`credentials.example.toml`](credentials.example.toml) shows the exact format (copy it to `~/.config/origami/credentials.toml` if you prefer not to use `--init-credentials`).
 - **Vocabulary folding** — the org's own names/extensions (from references + host/subdomain/path) become scan vocabulary.
 
 **Analysis & content intelligence**
