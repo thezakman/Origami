@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.89.1] — Body filters use precomputed probe counts (apply to all findings)
+- Refinement of the 0.89.0 body filters: word/line counts and the body simhash are
+  already computed on **every** probe, so `--filter-word-count`/`--filter-line-count`/
+  `--filter-similar-to` now apply to **all findings** (main scan + every fold) at zero
+  extra cost — no body kept, no re-decoding. Only `--filter-regex` still keeps the body,
+  and only on the main scan. `Finding` now carries `words`/`lines` from the probe.
+
 ## [0.89.0] — feroxbuster parity: replay-proxy, body filters, time-limit, stdin
 - **`--replay-proxy URL` + `--replay-codes CODES`**: at the end of a scan, re-issue only
   the CONFIRMED findings through a replay proxy — Burp/ZAP gets a clean sitemap of just

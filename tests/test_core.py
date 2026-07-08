@@ -1059,6 +1059,14 @@ class TestFeroxParity(unittest.TestCase):
         self.assertTrue(Filters().accept_body(None))     # no filters → accept
         self.assertFalse(Filters().has_body_filters())
         self.assertTrue(Filters(filter_words={1}).has_body_filters())
+        # precomputed counts (from the probe) filter with NO body — the refinement
+        # that lets word/line/similar work on every finding, not just kept-body ones.
+        self.assertFalse(Filters(filter_words={5}).accept_body(None, words=5))
+        self.assertFalse(Filters(filter_lines={9}).accept_body(None, lines=9))
+        self.assertTrue(Filters(filter_words={5}).accept_body(None, words=6))
+        # only regex needs the raw body
+        self.assertFalse(Filters(filter_words={1}).needs_body())
+        self.assertTrue(Filters(filter_regex=re.compile("x")).needs_body())
 
     def test_parse_duration(self):
         from origami.cli import _parse_duration

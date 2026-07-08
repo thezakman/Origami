@@ -1067,7 +1067,7 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
         observer.request(url, finding.status, False)
         return
     shown = (opts.filters.accept(finding.status, finding.length)
-             and opts.filters.accept_body(body, finding.simhash))
+             and opts.filters.accept_body(body, finding.simhash, finding.words, finding.lines))
     observer.tick(hit=shown)
     observer.request(url, finding.status, shown)
     if shown:
@@ -1149,9 +1149,10 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             observer.tick(hit=False)
             continue
         fired.add(ukey)
-        # keep the body only when a body-based filter (word/line/regex) needs it —
-        # otherwise the main scan stays body-light for speed/memory.
-        probe = await engine.fetch(url, keep_body=opts.filters.has_body_filters())
+        # keep the body only when --filter-regex needs to match it — word/line
+        # counts and the simhash are already on every probe, so the main scan
+        # otherwise stays body-light for speed/memory.
+        probe = await engine.fetch(url, keep_body=opts.filters.needs_body())
         path = urlparse(url).path
 
         # classify() = is this a REAL response (outside the calibrated miss
