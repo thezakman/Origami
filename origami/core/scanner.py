@@ -34,7 +34,7 @@ MAX_BACKUP_FILES = 80   # cap files the backup fold expands around
 
 from origami.brain.bandit import Ranker as Bandit
 from origami.brain.bandit import word_of
-from origami.brain.kb import TechRule, load_kb
+from origami.brain.kb import load_kb
 from origami.brain.ngram import NGram
 from origami.core import baseline as bl
 from origami.core import resume as resume_mod
@@ -46,7 +46,7 @@ from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding
                                                classify, is_dir_listing, resolve_baseline)
 from origami.core.scope import same_host, same_site
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
-                                     derive_vocabulary, load_wordlist, load_wordlists,
+                                     derive_vocabulary, load_wordlists,
                                      target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
@@ -591,7 +591,6 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     wl_name = " + ".join(opts.wordlist_paths) or "builtin base.txt"
     observer.log(f"wordlist: {wl_name} ({len(words)} words) · "
                  f"extensions {len(exts) or 0} folded", 0)
-    recurse_exts = set(_BASE_CALIB_EXTS) | set(BASE_EXTS) | exts
 
     # 3. shortscan fold (IIS 8.3) — high-value seeds before the generic scan
     if _should_shortscan(opts, folds):
