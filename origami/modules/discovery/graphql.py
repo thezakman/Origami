@@ -10,7 +10,7 @@ single endpoint, so the value is the endpoint + the schema, not paths to brute.
 from __future__ import annotations
 
 import json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 # Common mount points, ordered by prevalence.
 GQL_PATHS = (

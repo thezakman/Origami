@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.90.1] — Lint clean: remove dead imports/locals, fix placeholder-less f-strings
+- Removed unused imports (`TechRule`, `load_wordlist`, `SIMHASH_MISS_DISTANCE`, `urlparse`
+  in html_report/graphql, `urljoin` in shortname) and a dead local (`recurse_exts` in
+  `scan()`, recomputed inside the loop). Converted three placeholder-less f-strings to plain
+  strings. `pyflakes origami/` is now clean.
+
 ## [0.90.0] — Polish pass: crash fixes, per-target similar-to, docs, dead code
 - **Fix crash:** `--proxy-file` errors called `ap.error()` from a scope where the parser
   wasn't defined (`NameError`); now a clean `SystemExit`. Same clean-exit treatment for

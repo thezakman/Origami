@@ -12,8 +12,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from origami.core.baseline import (SIMHASH_MISS_DISTANCE, _redirect_kind, ext_class,
-                                    looks_like_miss)
+from origami.core.baseline import _redirect_kind, ext_class, looks_like_miss
 from origami.core.evidence import ContextBaseline, TargetProfile
 from origami.core.httpclient import Probe
 from origami.core.normalize import hamming

@@ -10,7 +10,6 @@ from __future__ import annotations
 import html
 import time
 from collections import Counter
-from urllib.parse import urlparse
 
 _CSS = """
 :root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--card:#161b22;--bd:#30363d}

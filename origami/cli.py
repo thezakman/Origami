@@ -249,7 +249,7 @@ async def run(args: argparse.Namespace) -> int:
                   + (" (only)" if args.ext_only else " (+ auto)"))
         print(f"  filters  : codes {fdesc}")
         if args.deep:
-            print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback")
+            print("  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback")
         if args.header:
             print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
         if args.user_agent:
@@ -283,13 +283,13 @@ async def run(args: argparse.Namespace) -> int:
         if args.bypass_prefixes:
             print(f"  bypass-pfx: {args.bypass_prefixes} (api-prefix + matrix carriers)")
         if args.params:
-            print(f"  params   : reflection fuzzing on dynamic endpoints")
+            print("  params   : reflection fuzzing on dynamic endpoints")
         if args.cache_poison or args.cache_headers:
             lvl = args.cache_poison or "auto"
             extra = f" + {args.cache_headers}" if args.cache_headers else ""
             print(f"  cache    : poisoning probe ({lvl}{extra}) — throwaway cache-buster, never the real key")
         if args.probe_405:
-            print(f"  methods  : 405 → POST/PATCH (empty & {{}} body) — state-changing, never PUT/DELETE")
+            print("  methods  : 405 → POST/PATCH (empty & {} body) — state-changing, never PUT/DELETE")
         if args.wayback or args.gau:
             print(f"  history  : {'gau/waybackurls (native fallback)' if args.gau else 'Wayback CDX + Common Crawl'}")
         if args.rate:

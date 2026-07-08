@@ -22,7 +22,6 @@ import json
 import os
 import shutil
 from dataclasses import dataclass, field
-from urllib.parse import urljoin
 
 # 3-char truncated extension -> real extension family (lookup, not guesswork).
 EXT_FAMILY = {
