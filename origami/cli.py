@@ -29,7 +29,10 @@ from origami.output import artifacts, graph, html_report, json_report, ui
 def _int_set(s: str | None) -> set[int] | None:
     if not s:
         return None
-    return {int(x) for x in s.replace(" ", "").split(",") if x}
+    try:
+        return {int(x) for x in s.replace(" ", "").split(",") if x}
+    except ValueError:
+        raise SystemExit(f"[!] expected a comma list of integers, got: {s!r}")
 
 
 def _ext_list(items) -> list[str]:
@@ -307,9 +310,9 @@ async def run(args: argparse.Namespace) -> int:
                 if ln and not ln.startswith("#"):
                     proxy_list.append(ln)
         except OSError as e:
-            ap.error(f"--proxy-file unreadable: {e}")
+            raise SystemExit(f"[!] --proxy-file unreadable: {e}")
         if not proxy_list:
-            ap.error(f"--proxy-file {args.proxy_file} has no proxies")
+            raise SystemExit(f"[!] --proxy-file {args.proxy_file} has no proxies")
         if not jsonl_stdout:
             print(f"  proxies  : rotating across {len(proxy_list)} (from {args.proxy_file})",
                   file=_status_out)
@@ -442,8 +445,11 @@ def main() -> None:
                          "last and swap only it between runs: origami -F --gau -u https://…")
     ap.add_argument("-l", "--list", metavar="FILE",
                     help="file with target URLs, one per line (# comments allowed)")
-    ap.add_argument("-c", "--concurrency", type=int, default=20)
-    ap.add_argument("-t", "--timeout", type=float, default=10.0)
+    ap.add_argument("-c", "--concurrency", type=int, default=20,
+                    help="max parallel requests — the AIMD ceiling (default 20; adapts down "
+                         "on 429/503 pushback, ramps back on clean responses)")
+    ap.add_argument("-t", "--timeout", type=float, default=10.0,
+                    help="per-request timeout in seconds (default 10)")
     ap.add_argument("--rate", type=float, default=0.0, metavar="RPS",
                     help="cap the aggregate request rate (requests/sec across all "
                          "workers) — the knob for a WAF's req/s threshold; unlike "
@@ -501,7 +507,8 @@ def main() -> None:
                          "(use - for stdout, which implies --no-ui; pipe into nuclei/etc.)")
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
-                    help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt)")
+                    help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt, "
+                         "report.html, graph.html)")
     ap.add_argument("--graph", metavar="FILE",
                     help="write an endpoint graph (provenance + orphan/hidden endpoints) "
                          "to FILE.html, plus a Graphviz FILE.dot")

@@ -14,8 +14,6 @@ scope if we *scan* it.
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 # Multi-label public suffixes: the registrable domain is ONE label above these.
 # Two families, both needed for correct scope:
 #   * ccTLD second-levels (com.br, co.uk) — a normal org domain hangs off them;
@@ -62,7 +60,3 @@ def same_host(a: str, b: str) -> bool:
     a = a[4:] if a.startswith("www.") else a
     b = b[4:] if b.startswith("www.") else b
     return a == b
-
-
-def host_of(url: str) -> str:
-    return urlparse(url).netloc

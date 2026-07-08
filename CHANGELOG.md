@@ -5,6 +5,23 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.90.0] — Polish pass: crash fixes, per-target similar-to, docs, dead code
+- **Fix crash:** `--proxy-file` errors called `ap.error()` from a scope where the parser
+  wasn't defined (`NameError`); now a clean `SystemExit`. Same clean-exit treatment for
+  non-numeric filter/replay code lists (`_int_set`) instead of a bare `ValueError` traceback.
+- **Fix `--filter-similar-to` across targets:** the reference simhashes were resolved once
+  and cached on the shared options, so every target after the first reused target #1's page.
+  Now resolved **per target** against that host.
+- **Harden `--replay-proxy`:** a malformed proxy URL (e.g. missing scheme) is caught at
+  client construction and skipped with a warning — a bad proxy can't turn a finished scan
+  into a traceback.
+- **Cap `--bypass-prefixes`:** operator carriers are capped (12) since each multiplies across
+  every blocked resource × 2 families; the drop is logged.
+- Docs: `--bypass-prefixes`, `--replay-proxy`, body filters and `--time-limit` added to the
+  README flag table + bullets; matrix-management bypass documented; test count refreshed.
+- Removed dead code (`_SEED_ORIGINS`, `scope.host_of` + its now-unused import); added help
+  text to `-c/--concurrency` and `-t/--timeout`; `--out` help now lists all five artifacts.
+
 ## [0.89.1] — Body filters use precomputed probe counts (apply to all findings)
 - Refinement of the 0.89.0 body filters: word/line counts and the body simhash are
   already computed on **every** probe, so `--filter-word-count`/`--filter-line-count`/

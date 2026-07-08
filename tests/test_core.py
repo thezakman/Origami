@@ -1104,6 +1104,28 @@ class TestFeroxParity(unittest.TestCase):
         asyncio.run(_replay_findings(FakeEngine(), res, opts, NullObserver()))
         self.assertEqual(sent, ["https://h/a"])          # only the 200 replayed
 
+    def test_replay_bad_proxy_does_not_crash(self):
+        import asyncio, types
+        from origami.core.scanner import _replay_findings, ScanOptions
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:
+            def replay_client(self, proxy):
+                raise ValueError("invalid proxy URL")   # httpx rejects at construction
+
+        res = types.SimpleNamespace(findings=[Finding("https://h/a", 200, 1, "", 0.9, "wordlist")])
+        opts = ScanOptions(replay_proxy="127.0.0.1:8080")   # missing scheme
+        # must return cleanly, not raise — the whole scan can't die on a bad proxy
+        asyncio.run(_replay_findings(FakeEngine(), res, opts, NullObserver()))
+
+    def test_int_set_rejects_non_numeric(self):
+        from origami.cli import _int_set
+        self.assertEqual(_int_set("200,301"), {200, 301})
+        self.assertIsNone(_int_set(None))
+        with self.assertRaises(SystemExit):
+            _int_set("200,foo")
+
 
 class TestBypassHeaderWordlist(unittest.TestCase):
     def test_load_header_pairs_parses_both_forms(self):
