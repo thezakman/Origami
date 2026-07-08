@@ -303,6 +303,23 @@ class Memory:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def latest_run_findings(self, host: str):
+        """The most recent run's per-run snapshot for `host` → (run_id, ts,
+        {path: (status, length)}), or None when the host has no prior run. Unlike
+        `prior_findings` (the accumulated corpus), this is a single run's findings —
+        the baseline `--diff` compares the current scan against."""
+        host = _norm_host(host)
+        row = self.db.execute(
+            "SELECT id, ts FROM runs WHERE host = ? ORDER BY id DESC LIMIT 1", (host,)
+        ).fetchone()
+        if not row:
+            return None
+        run_id, ts = row
+        rows = self.db.execute(
+            "SELECT path, status, length FROM findings WHERE run_id = ?", (run_id,)
+        ).fetchall()
+        return run_id, ts, {r[0]: (r[1], r[2]) for r in rows}
+
     def recall_names(self, limit: int = 2000, min_hosts: int = 2) -> list[str]:
         """Distinct file/dir basenames (extension stripped) seen on at least
         `min_hosts` DISTINCT past hosts — the cross-target name corpus that lets

@@ -137,6 +137,20 @@ def _collect_targets(args) -> list[str]:
     return out
 
 
+def _print_diff(baseline, result, host: str, *, have_memory: bool, out) -> None:
+    """Render the --diff summary (current scan vs the last stored run for host)."""
+    from origami.output import diff as diffmod
+    if not have_memory:
+        print("[!] --diff needs the memory DB (drop --no-learn)", file=out)
+        return
+    if baseline is None:
+        print(f"diff [{host}]: no prior scan on record — this run is the baseline", file=out)
+        return
+    _run_id, ts, snap = baseline
+    d = diffmod.compute(snap, result.findings)
+    print(diffmod.render(d, host, ts), file=out)
+
+
 def _slug(url: str) -> str:
     p = urlparse(url)
     return re.sub(r"[^\w.-]", "_", (p.netloc + p.path).strip("/")) or "root"
@@ -361,6 +375,10 @@ async def run(args: argparse.Namespace) -> int:
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
                     print(f"[!] no checkpoint for {target} — scanning fresh", file=_status_out)
+                # --diff: snapshot the last stored run for this host BEFORE the scan
+                # records the new one, so we can diff current vs previous afterward.
+                diff_baseline = (memory.latest_run_findings(urlparse(target).netloc)
+                                 if (args.diff and memory) else None)
                 async with Engine(cfg) as engine:
                     engine.on_request = observer.on_request   # live heartbeat, every phase
                     observer.attach_engine(engine)            # live adaptive-throttle readout
@@ -383,6 +401,9 @@ async def run(args: argparse.Namespace) -> int:
                     streamed = getattr(observer, "streamed", False)
                     ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
                                     show_fingerprint=(not streamed) or args.fp)
+                    if args.diff:
+                        _print_diff(diff_baseline, result, urlparse(target).netloc,
+                                    have_memory=memory is not None, out=_status_out)
                 _write_outputs(args, result, target, multi=len(targets) > 1)
     finally:
         if memory is not None:
@@ -529,6 +550,10 @@ def main() -> None:
                     help="fetch the Wappalyzer fingerprint catalog into the KB and exit")
     ap.add_argument("--history", action="store_true",
                     help="show past scan history (optionally filtered by the given host) and exit")
+    ap.add_argument("--diff", action="store_true",
+                    help="after the scan, show what changed vs the last stored scan of this host "
+                         "— new / gone / newly-ACCESSIBLE endpoints (403→200 etc.); needs the "
+                         "memory DB (recon-over-time / attack-surface monitoring)")
     ap.add_argument("--forget", metavar="HOST|all",
                     help="erase cross-target memory for a host (www/apex together) or 'all', then exit")
     ap.add_argument("--forget-noise", action="store_true",
