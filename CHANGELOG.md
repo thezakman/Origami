@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.91.0] — `--origin`: origin-IP discovery + IP-based WAF bypass
+- New **`--origin`** fold (opt-in, off-host): behind a CDN/WAF the public DNS points at
+  the edge — this resolves the host's A/AAAA records and gathers candidate **origin** IPs,
+  then requests each IP **directly with the target `Host`**. An IP serving distinct content,
+  or opening a path the edge WAF blocks, is reported as a reachable origin / bypass lead.
+- **Layered candidate sourcing** (the "keyed, else crt.sh fallback" design): keyed OSINT —
+  Shodan (`SHODAN_API_KEY`), SecurityTrails historical-A (`SECURITYTRAILS_API_KEY`), Censys
+  (`CENSYS_API_ID`/`CENSYS_API_SECRET`) — is used when configured; otherwise keyless
+  **crt.sh** Certificate-Transparency siblings. IP-literal / localhost targets skip OSINT
+  (no domain to query) so the fold never stalls on them.
+- New module `origami/modules/discovery/originip.py` (pure URL-builders + parsers, unit-tested).
+
 ## [0.90.1] — Lint clean: remove dead imports/locals, fix placeholder-less f-strings
 - Removed unused imports (`TechRule`, `load_wordlist`, `SIMHASH_MISS_DISTANCE`, `urlparse`
   in html_report/graphql, `urljoin` in shortname) and a dead local (`recurse_exts` in

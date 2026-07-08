@@ -1127,6 +1127,68 @@ class TestFeroxParity(unittest.TestCase):
             _int_set("200,foo")
 
 
+class TestOriginIP(unittest.TestCase):
+    """Origin-IP discovery: DNS + crt.sh/keyed OSINT parsing + target gating."""
+
+    def test_parse_crtsh_multiline_wildcard_and_domain_filter(self):
+        import json
+        from origami.modules.discovery import originip as o
+        blob = json.dumps([{"name_value": "*.example.com\napi.example.com"},
+                           {"name_value": "origin.example.com"},
+                           {"name_value": "other.org"}])          # different domain → excluded
+        self.assertEqual(o.parse_crtsh(blob, "example.com"),
+                         {"example.com", "api.example.com", "origin.example.com"})
+        self.assertEqual(o.parse_crtsh("not json", "x"), set())   # robust to junk
+
+    def test_parse_keyed_sources(self):
+        import json
+        from origami.modules.discovery import originip as o
+        self.assertEqual(o.parse_shodan(json.dumps({"matches": [{"ip_str": "1.2.3.4"}]})), {"1.2.3.4"})
+        self.assertEqual(o.parse_securitytrails(
+            json.dumps({"records": [{"values": [{"ip": "9.9.9.9"}]}]})), {"9.9.9.9"})
+        self.assertEqual(o.parse_censys(
+            json.dumps({"result": {"hits": [{"ip": "8.8.8.8"}]}})), {"8.8.8.8"})
+        self.assertEqual(o.parse_shodan(""), set())               # robust to junk
+
+    def test_has_registrable_domain_gates_ip_and_local(self):
+        from origami.modules.discovery import originip as o
+        self.assertFalse(o.has_registrable_domain("127.0.0.1"))   # IPv4 literal
+        self.assertFalse(o.has_registrable_domain("::1"))         # IPv6 literal
+        self.assertFalse(o.has_registrable_domain("localhost"))
+        self.assertTrue(o.has_registrable_domain("sub.example.com"))
+
+    def test_configured_sources_reads_env(self):
+        import os
+        from origami.modules.discovery import originip as o
+        saved = {k: os.environ.pop(k, None) for k in
+                 ("SHODAN_API_KEY", "SECURITYTRAILS_API_KEY", "CENSYS_API_ID", "CENSYS_API_SECRET")}
+        try:
+            self.assertEqual(o.configured_sources(), [])
+            os.environ["SHODAN_API_KEY"] = "k"
+            self.assertEqual(o.configured_sources(), ["shodan"])
+            os.environ["CENSYS_API_ID"] = "a"                     # id without secret → not counted
+            self.assertEqual(o.configured_sources(), ["shodan"])
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+                else:
+                    os.environ.pop(k, None)
+
+    def test_candidate_ips_skips_osint_for_ip_target(self):
+        import asyncio
+        from origami.modules.discovery import originip as o
+        # an IP/local target has no CT/OSINT footprint → returns instantly, no network
+        ips, src = asyncio.run(o.candidate_origin_ips("127.0.0.1"))
+        self.assertEqual(ips, [])
+        self.assertIn("n/a", src)
+
+    def test_resolve_ips_localhost(self):
+        import asyncio
+        from origami.modules.discovery import originip as o
+        self.assertIn("127.0.0.1", asyncio.run(o.resolve_ips("localhost")))
+
+
 class TestBypassHeaderWordlist(unittest.TestCase):
     def test_load_header_pairs_parses_both_forms(self):
         import tempfile, os
