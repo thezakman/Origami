@@ -31,6 +31,8 @@ class Finding:
     note: str = ""
     tags: list[str] = field(default_factory=list)  # semantic: disclosure/config/auth/...
     simhash: int = 0     # body fingerprint — for same-content collision collapse
+    words: int = 0       # body word count (from the probe) — for --filter-word-count
+    lines: int = 0       # body line count (from the probe) — for --filter-line-count
 
 
 # needle → tag. A finding can carry several. Two needle kinds (see `_matches`):
@@ -162,21 +164,32 @@ class Filters:
         return bool(self.filter_words or self.filter_lines
                     or self.filter_regex is not None or self.similar_hashes)
 
-    def accept_body(self, body: bytes | None, simhash: int = 0) -> bool:
-        """Body-aware pass: False → drop. Simhash (similar-to) works even without a
-        body; word/line/regex need `body` and are skipped when it's unavailable."""
-        if self.similar_hashes and simhash:
-            if any(hamming(simhash, h) <= self.similar_distance for h in self.similar_hashes):
-                return False
-        if body is None or not (self.filter_words or self.filter_lines
-                                or self.filter_regex is not None):
+    def needs_body(self) -> bool:
+        """Only --filter-regex needs the raw body: word/line counts and the simhash
+        are computed on every probe already, so keeping the body is regex-only."""
+        return self.filter_regex is not None
+
+    def accept_body(self, body: bytes | None = None, simhash: int = 0,
+                    words: int | None = None, lines: int | None = None) -> bool:
+        """Body-aware pass: False → drop. `words`/`lines`/`simhash` come precomputed
+        from the probe (so they work on every finding, no body needed); `body` is
+        only required for the regex filter. Falls back to counting from `body` when
+        the counts aren't supplied (keeps the function usable from tests)."""
+        if self.similar_hashes and simhash and any(
+                hamming(simhash, h) <= self.similar_distance for h in self.similar_hashes):
+            return False
+        if not (self.filter_words or self.filter_lines or self.filter_regex is not None):
             return True
-        text = body.decode("utf-8", "replace")
-        if self.filter_words and len(text.split()) in self.filter_words:
-            return False
-        if self.filter_lines and text.count("\n") + 1 in self.filter_lines:
-            return False
-        if self.filter_regex is not None and self.filter_regex.search(text):
+        text = body.decode("utf-8", "replace") if body is not None else None
+        if self.filter_words:
+            w = words if words is not None else (len(text.split()) if text is not None else None)
+            if w is not None and w in self.filter_words:
+                return False
+        if self.filter_lines:
+            n = lines if lines is not None else (text.count("\n") + 1 if text is not None else None)
+            if n is not None and n in self.filter_lines:
+                return False
+        if self.filter_regex is not None and text is not None and self.filter_regex.search(text):
             return False
         return True
 
@@ -266,7 +279,8 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
                            0.5, origin,
                            note=(note405 + " · no-baseline") if note405 else "no-baseline",
-                           tags=tags, simhash=probe.body_simhash)
+                           tags=tags, simhash=probe.body_simhash,
+                           words=probe.words, lines=probe.lines)
         return None
 
     if looks_like_miss(probe, cb):
@@ -274,7 +288,8 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
 
     confidence = _confidence(probe, cb)
     return Finding(probe.url, probe.status, probe.length, probe.content_type,
-                   confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash)
+                   confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash,
+                   words=probe.words, lines=probe.lines)
 
 
 def _confidence(probe: Probe, cb: ContextBaseline) -> float:
