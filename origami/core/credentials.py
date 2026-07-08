@@ -93,6 +93,39 @@ def get(env_name: str) -> str | None:
     return None
 
 
+_TEMPLATE = """\
+# Origami OSINT API credentials — used by the --origin fold.
+# Fill in ONLY the sources you have; leave the rest commented out. With none set,
+# --origin falls back to keyless crt.sh. Environment variables override these.
+# Keep this file private (it is created mode 0600).
+
+# [shodan]              # SHODAN_API_KEY
+# api_key = ""
+
+# [securitytrails]      # SECURITYTRAILS_API_KEY  (historical A records)
+# api_key = ""
+
+# [censys]              # CENSYS_API_ID / CENSYS_API_SECRET
+# api_id = ""
+# api_secret = ""
+"""
+
+
+def scaffold() -> tuple[Path, bool]:
+    """Create the config dir (0700) and a template credentials file (0600) if it
+    doesn't exist; if it does, tighten it back to 0600. Returns (path, created).
+    Makes option B turnkey — no manual mkdir/chmod, secure perms by construction."""
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    created = not path.exists()
+    if created:
+        path.write_text(_TEMPLATE)
+    os.chmod(path, 0o600)
+    _reset_cache_for_tests()          # re-read on next get() (perms/content may have changed)
+    return path, created
+
+
 def _reset_cache_for_tests() -> None:
     global _cache, _warned
     _cache, _warned = None, False

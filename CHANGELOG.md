@@ -5,6 +5,11 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.92.1] — `--init-credentials`: turnkey secure setup for option B
+- New **`--init-credentials`**: scaffolds `~/.config/origami/credentials.toml` with a
+  template and **mode 0600 by construction** (dir 0700), then exits — no manual mkdir/chmod.
+  Idempotent (re-tightens perms if the file already exists).
+
 ## [0.92.0] — `--origin` in `--deep` + secure OSINT credential storage
 - **`--deep` now includes `--origin`** — the aggressive preset already makes off-host
   (bucket) GETs and external (wayback) calls, so origin-IP probing fits; bare `--deep`

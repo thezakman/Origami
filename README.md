@@ -196,8 +196,10 @@ Findings (16)  ·  fingerprint: iis, asp.net
   export SHODAN_API_KEY=…        export SECURITYTRAILS_API_KEY=…
   export CENSYS_API_ID=…         export CENSYS_API_SECRET=…
 
-  # option B — persistent config file (must be private: chmod 600)
-  # ~/.config/origami/credentials.toml   ($XDG_CONFIG_HOME honored)
+  # option B — persistent config file (recommended). Scaffold it (creates the
+  # file mode 0600 with a template), then fill in the keys you have:
+  origami --init-credentials
+  #   → ~/.config/origami/credentials.toml   ($XDG_CONFIG_HOME honored)
   [shodan]
   api_key = "…"
   [securitytrails]
@@ -206,7 +208,7 @@ Findings (16)  ·  fingerprint: iis, asp.net
   api_id = "…"
   api_secret = "…"
   ```
-  Origami warns if the config file is group/other-readable (keys are bearer secrets).
+  The file is created **private (0600)** by construction; Origami re-warns if it later becomes group/other-readable (keys are bearer secrets). Environment variables always override the file.
 - **Vocabulary folding** — the org's own names/extensions (from references + host/subdomain/path) become scan vocabulary.
 
 **Analysis & content intelligence**
