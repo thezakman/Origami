@@ -1194,6 +1194,27 @@ class TestOriginIP(unittest.TestCase):
         from origami.modules.discovery import originip as o
         self.assertIn("127.0.0.1", asyncio.run(o.resolve_ips("localhost")))
 
+    def test_credentials_scaffold_creates_private_file(self):
+        import os, stat, tempfile
+        from origami.core import credentials
+        saved = os.environ.pop("XDG_CONFIG_HOME", None)
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_CONFIG_HOME"] = d
+            credentials._reset_cache_for_tests()
+            try:
+                path, created = credentials.scaffold()
+                self.assertTrue(created and path.exists())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)   # private by construction
+                self.assertIn("[shodan]", path.read_text())
+                _, created2 = credentials.scaffold()                         # idempotent
+                self.assertFalse(created2)
+            finally:
+                if saved is not None:
+                    os.environ["XDG_CONFIG_HOME"] = saved
+                else:
+                    os.environ.pop("XDG_CONFIG_HOME", None)
+                credentials._reset_cache_for_tests()
+
     def test_credentials_env_then_file_precedence(self):
         import os, tempfile
         from pathlib import Path

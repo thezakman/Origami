@@ -573,10 +573,13 @@ def main() -> None:
                          "and report distinct vhosts (admin/staging/internal/… on the CDN)")
     ap.add_argument("--origin", action="store_true",
                     help="origin-IP discovery + IP-based WAF bypass: resolve A/AAAA, gather "
-                         "candidate origin IPs (Shodan/SecurityTrails/Censys if their env keys "
+                         "candidate origin IPs (Shodan/SecurityTrails/Censys if their keys "
                          "are set, else crt.sh), and request each IP directly with the target "
                          "Host — an IP that opens an edge-blocked path is a real bypass "
-                         "(off-host connections; opt-in)")
+                         "(off-host connections; opt-in; in --deep)")
+    ap.add_argument("--init-credentials", action="store_true",
+                    help="create ~/.config/origami/credentials.toml (mode 0600) with a template "
+                         "for the --origin OSINT keys, then exit")
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
@@ -663,6 +666,14 @@ def main() -> None:
         print(f"[+] wrote {n} ingested detection rules to {RULES_PATH}" if n
               else "[!] update failed (network?) — KB unchanged")
         sys.exit(0 if n else 2)
+    if args.init_credentials:
+        from origami.core import credentials
+        path, created = credentials.scaffold()
+        print(f"[+] {'created' if created else 'found'} {path} (mode 0600)")
+        print("    edit it to add your Shodan / SecurityTrails / Censys keys, then run "
+              "--origin.\n    (environment variables override the file; with none set, "
+              "--origin uses keyless crt.sh)")
+        sys.exit(0)
     if args.history:
         sys.exit(_show_history(args))
     if args.forget:
