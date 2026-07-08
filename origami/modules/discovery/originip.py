@@ -26,10 +26,11 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
-import os
 import socket
 
 import httpx
+
+from origami.core import credentials
 
 _TIMEOUT = 12.0
 _MAX_CANDIDATES = 40          # cap resolved candidate IPs we hand back to the fold
@@ -143,13 +144,13 @@ def parse_censys(text: str) -> set[str]:
 
 # env var → (present?) so the fold can announce which keyed sources are active.
 def configured_sources() -> list[str]:
-    """Keyed OSINT sources whose credentials are present in the environment."""
+    """Keyed OSINT sources whose credentials are available (env var or config file)."""
     out = []
-    if os.environ.get("SHODAN_API_KEY"):
+    if credentials.get("SHODAN_API_KEY"):
         out.append("shodan")
-    if os.environ.get("SECURITYTRAILS_API_KEY"):
+    if credentials.get("SECURITYTRAILS_API_KEY"):
         out.append("securitytrails")
-    if os.environ.get("CENSYS_API_ID") and os.environ.get("CENSYS_API_SECRET"):
+    if credentials.get("CENSYS_API_ID") and credentials.get("CENSYS_API_SECRET"):
         out.append("censys")
     return out
 
@@ -166,18 +167,18 @@ async def keyed_ips(domain: str) -> set[str]:
     ips: set[str] = set()
     async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True,
                                  headers={"User-Agent": "origami"}) as c:
-        if key := os.environ.get("SHODAN_API_KEY"):
+        if key := credentials.get("SHODAN_API_KEY"):
             try:
                 ips |= parse_shodan(await _get(c, shodan_search_url(domain, key)))
             except Exception:
                 pass
-        if key := os.environ.get("SECURITYTRAILS_API_KEY"):
+        if key := credentials.get("SECURITYTRAILS_API_KEY"):
             try:
                 ips |= parse_securitytrails(await _get(
                     c, securitytrails_url(domain), headers={"APIKEY": key}))
             except Exception:
                 pass
-        cid, csec = os.environ.get("CENSYS_API_ID"), os.environ.get("CENSYS_API_SECRET")
+        cid, csec = credentials.get("CENSYS_API_ID"), credentials.get("CENSYS_API_SECRET")
         if cid and csec:
             try:
                 r = await c.post(censys_search_url(), json=censys_query(domain),

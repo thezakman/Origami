@@ -1158,22 +1158,28 @@ class TestOriginIP(unittest.TestCase):
         self.assertTrue(o.has_registrable_domain("sub.example.com"))
 
     def test_configured_sources_reads_env(self):
-        import os
+        import os, tempfile
         from origami.modules.discovery import originip as o
-        saved = {k: os.environ.pop(k, None) for k in
-                 ("SHODAN_API_KEY", "SECURITYTRAILS_API_KEY", "CENSYS_API_ID", "CENSYS_API_SECRET")}
-        try:
-            self.assertEqual(o.configured_sources(), [])
-            os.environ["SHODAN_API_KEY"] = "k"
-            self.assertEqual(o.configured_sources(), ["shodan"])
-            os.environ["CENSYS_API_ID"] = "a"                     # id without secret → not counted
-            self.assertEqual(o.configured_sources(), ["shodan"])
-        finally:
-            for k, v in saved.items():
-                if v is not None:
-                    os.environ[k] = v
-                else:
-                    os.environ.pop(k, None)
+        from origami.core import credentials
+        names = ("SHODAN_API_KEY", "SECURITYTRAILS_API_KEY", "CENSYS_API_ID",
+                 "CENSYS_API_SECRET", "XDG_CONFIG_HOME")
+        saved = {k: os.environ.pop(k, None) for k in names}
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_CONFIG_HOME"] = d          # hermetic: no real credentials file
+            credentials._reset_cache_for_tests()
+            try:
+                self.assertEqual(o.configured_sources(), [])
+                os.environ["SHODAN_API_KEY"] = "k"
+                self.assertEqual(o.configured_sources(), ["shodan"])
+                os.environ["CENSYS_API_ID"] = "a"      # id without secret → not counted
+                self.assertEqual(o.configured_sources(), ["shodan"])
+            finally:
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                credentials._reset_cache_for_tests()
 
     def test_candidate_ips_skips_osint_for_ip_target(self):
         import asyncio
@@ -1187,6 +1193,33 @@ class TestOriginIP(unittest.TestCase):
         import asyncio
         from origami.modules.discovery import originip as o
         self.assertIn("127.0.0.1", asyncio.run(o.resolve_ips("localhost")))
+
+    def test_credentials_env_then_file_precedence(self):
+        import os, tempfile
+        from pathlib import Path
+        from origami.core import credentials
+        saved = {k: os.environ.pop(k, None) for k in ("SHODAN_API_KEY", "XDG_CONFIG_HOME")}
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_CONFIG_HOME"] = d
+            cfgdir = Path(d) / "origami"
+            cfgdir.mkdir(parents=True)
+            (cfgdir / "credentials.toml").write_text(
+                '[shodan]\napi_key = "from-file"\n[censys]\napi_id = "cid"\napi_secret = "csec"\n')
+            credentials._reset_cache_for_tests()
+            try:
+                self.assertEqual(credentials.config_path(), cfgdir / "credentials.toml")
+                self.assertEqual(credentials.get("SHODAN_API_KEY"), "from-file")   # from file
+                self.assertEqual(credentials.get("CENSYS_API_SECRET"), "csec")
+                self.assertIsNone(credentials.get("SECURITYTRAILS_API_KEY"))       # unset → None
+                os.environ["SHODAN_API_KEY"] = "from-env"
+                self.assertEqual(credentials.get("SHODAN_API_KEY"), "from-env")    # env wins
+            finally:
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                credentials._reset_cache_for_tests()
 
 
 class TestBypassHeaderWordlist(unittest.TestCase):

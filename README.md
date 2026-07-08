@@ -66,7 +66,7 @@ Common flags:
 | flag | meaning |
 |---|---|
 | `-u`/`--url URL` | target base URL as a flag (repeatable) — lets you keep the URL last and swap only it between runs; same as the positional argument |
-| `--deep` | aggressive-discovery preset: `--bypass-403 --cache-poison --probe-405 --buckets --params --wayback` at once (state-changing/off-host probes included). Just `origami --deep -u <url>` |
+| `--deep` | aggressive-discovery preset: `--bypass-403 --cache-poison --probe-405 --buckets --params --wayback --origin` at once (state-changing/off-host probes included). Just `origami --deep -u <url>` |
 | `-w NAME\|FILE` | wordlist: a file path or a bundled name — `base` (~540, default) or `big` (~1250, exhaustive). **Repeatable to merge** several. Under `--deep` the base list is always included (`--deep -w custom` = base + custom). Point at SecLists for the widest coverage |
 | `-X php,asp,bak` | extensions to brute-force, added to the fingerprint-detected ones (repeatable) |
 | `--ext-only` | use only the `-X` extensions (ignore fingerprint-detected + learned) |
@@ -187,7 +187,26 @@ Findings (16)  ·  fingerprint: iis, asp.net
 - **IIS 8.3 shortscan** — drives [`shortscan`](https://github.com/thezakman/shortscan), expands leaks in confidence tiers, and completes truncated names with an n-gram model (`APIINT~1` → `apiintegracao`).
 - **Historical URLs** (`--wayback` / `--gau`) — Wayback CDX + Common Crawl + urlscan.io + AlienVault OTX (or your `gau`/`waybackurls` binary), fetched in the background during fingerprint; old query strings also feed `--params`.
 - **Virtual-host discovery** (`--vhost`) — Host-header fuzzing on the target IP (registrable-domain + internal names, baseline-calibrated; `.com.br` etc. handled).
-- **Origin-IP discovery + IP-based WAF bypass** (`--origin`) — behind a CDN/WAF the public DNS points at the *edge*. Origami resolves the host's A/AAAA records and gathers candidate **origin** IPs (Shodan / SecurityTrails historical-A / Censys when their env keys are set, otherwise keyless **crt.sh** Certificate-Transparency siblings), then requests each IP **directly with the target `Host`**. An IP that serves distinct content — or opens a path the edge WAF blocks — is a reachable origin, reported as a bypass lead. Off-host connections, opt-in.
+- **Origin-IP discovery + IP-based WAF bypass** (`--origin`) — behind a CDN/WAF the public DNS points at the *edge*. Origami resolves the host's A/AAAA records and gathers candidate **origin** IPs (Shodan / SecurityTrails historical-A / Censys when their keys are set, otherwise keyless **crt.sh** Certificate-Transparency siblings), then requests each IP **directly with the target `Host`**. An IP that serves distinct content — or opens a path the edge WAF blocks — is a reachable origin, reported as a bypass lead. Off-host connections; included in `--deep`.
+
+  **OSINT credentials (optional).** The keyed sources are looked up **environment-variable first, then a private config file** — nothing is stored in the repo, logged, or written to reports. Set whichever you have; with none set, `--origin` falls back to keyless crt.sh.
+
+  ```bash
+  # option A — environment (CI / one-off)
+  export SHODAN_API_KEY=…        export SECURITYTRAILS_API_KEY=…
+  export CENSYS_API_ID=…         export CENSYS_API_SECRET=…
+
+  # option B — persistent config file (must be private: chmod 600)
+  # ~/.config/origami/credentials.toml   ($XDG_CONFIG_HOME honored)
+  [shodan]
+  api_key = "…"
+  [securitytrails]
+  api_key = "…"
+  [censys]
+  api_id = "…"
+  api_secret = "…"
+  ```
+  Origami warns if the config file is group/other-readable (keys are bearer secrets).
 - **Vocabulary folding** — the org's own names/extensions (from references + host/subdomain/path) become scan vocabulary.
 
 **Analysis & content intelligence**
