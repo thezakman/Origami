@@ -75,12 +75,14 @@ def _profile_from_dict(d: dict) -> TargetProfile:
 def _finding_to_dict(f: Finding) -> dict:
     return {"url": f.url, "status": f.status, "length": f.length,
             "content_type": f.content_type, "confidence": f.confidence,
-            "origin": f.origin, "note": f.note, "tags": f.tags, "simhash": f.simhash}
+            "origin": f.origin, "note": f.note, "tags": f.tags, "simhash": f.simhash,
+            "words": f.words, "lines": f.lines}
 
 
 def _finding_from_dict(d: dict) -> Finding:
     return Finding(d["url"], d["status"], d["length"], d["content_type"], d["confidence"],
-                   d["origin"], d.get("note", ""), d.get("tags", []), d.get("simhash", 0))
+                   d["origin"], d.get("note", ""), d.get("tags", []), d.get("simhash", 0),
+                   words=d.get("words", 0), lines=d.get("lines", 0))
 
 
 # ---- save / load --------------------------------------------------------------
