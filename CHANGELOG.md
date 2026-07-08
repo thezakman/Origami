@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.94.0] — `--diff`: recon-over-time / attack-surface change tracking
+- New **`--diff`**: after a scan, compares it against the **last stored run of the same host**
+  (the memory DB already keeps a per-run findings snapshot) and reports what **appeared**,
+  **disappeared**, or **changed** — with the headline being paths that became **newly
+  ACCESSIBLE** (`403/404/401 → 2xx`). Turns Origami into a recon-over-time / attack-surface
+  monitor, not just a one-shot buster. Needs the memory DB (not `--no-learn`).
+- New `origami/output/diff.py` (pure compare + render) and `Memory.latest_run_findings()`.
+
 ## [0.93.0] — Tech-overlay wordlists: the wordlist writes itself from the fingerprint
 - New **tech-overlay path packs** (`origami/wordlists/overlays/<tech>.txt`, 15 stacks):
   when a technology is *confirmed* by the fingerprint, its high-value paths are folded in
