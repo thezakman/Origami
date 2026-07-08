@@ -2768,7 +2768,8 @@ class TestResume(unittest.TestCase):
         cb.soft_signatures = [(200, 999)]
         p.baseline["/app/|.aspx"] = cb
         findings = [Finding("https://h.example/app/login.aspx", 200, 10, "text/html",
-                            0.9, "wordlist", note="x", tags=["auth"], simhash=42)]
+                            0.9, "wordlist", note="x", tags=["auth"], simhash=42,
+                            words=7, lines=3)]
         R.save(path, profile=p, findings=findings, requests_made=17, folds={"shortscan"},
                words=["a", "b"], exts={".aspx"}, priority_paths=["/p"],
                root_seeds=[("/x", "js")], base_prefix="/app/",
@@ -2792,6 +2793,7 @@ class TestResume(unittest.TestCase):
             self.assertEqual(len(st["findings"]), 1)
             self.assertEqual(st["findings"][0].url, "https://h.example/app/login.aspx")
             self.assertEqual(st["findings"][0].tags, ["auth"])
+            self.assertEqual((st["findings"][0].words, st["findings"][0].lines), (7, 3))
             self.assertEqual(st["requests_made"], 17)
             self.assertEqual(st["queue"], [("/app/sub/", 1)])
             self.assertEqual(st["scanned"], ["/app/"])
