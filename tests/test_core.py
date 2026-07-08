@@ -1257,6 +1257,18 @@ class TestOriginIP(unittest.TestCase):
         from origami.modules.discovery import originip as o
         self.assertIn("127.0.0.1", asyncio.run(o.resolve_ips("localhost")))
 
+    def test_origin_serve_rule_rejects_404_and_edge(self):
+        from origami.core.scanner import _is_origin_serve
+        # the reported bug: a sibling IP's 404 page must NOT be a "possible origin"
+        self.assertFalse(_is_origin_serve(404, 581, edge_ip=False))
+        self.assertFalse(_is_origin_serve(403, 200, edge_ip=False))   # blocked ≠ origin
+        self.assertFalse(_is_origin_serve(301, 0, edge_ip=False))     # redirect/empty
+        self.assertFalse(_is_origin_serve(200, 500, edge_ip=True))    # the edge itself
+        self.assertFalse(_is_origin_serve(200, 0, edge_ip=False))     # 2xx but empty body
+        # a non-edge IP serving 2xx with a body for the target Host → real lead
+        self.assertTrue(_is_origin_serve(200, 1200, edge_ip=False))
+        self.assertTrue(_is_origin_serve(204, 1, edge_ip=False))
+
     def test_credentials_scaffold_creates_private_file(self):
         import os, stat, tempfile
         from origami.core import credentials

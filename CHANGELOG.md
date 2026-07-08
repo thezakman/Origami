@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.94.1] — Fix `--origin` false positives (a sibling's 404 flagged as origin)
+- The origin heuristic flagged **any** IP whose response differed from the edge as a
+  "possible origin" — so an unrelated crt.sh sibling returning a `404` page (distinct
+  body) was wrongly reported. That's backwards: an exposed origin serves the **same**
+  app, while distinct content is usually an unrelated host.
+- An origin lead now requires a **non-edge IP that serves `2xx` with a real body** for
+  the target Host (`404`/`403`/`5xx`/redirect and the edge IP itself are rejected).
+  Confidence is graded: same-app-as-edge `2xx` = likely origin (0.8), distinct `2xx` =
+  weaker lead (0.55), edge-blocked-path-opens = confirmed bypass (0.85). New pure helper
+  `_is_origin_serve()` (unit-tested against the reported 404 case).
+
 ## [0.94.0] — `--diff`: recon-over-time / attack-surface change tracking
 - New **`--diff`**: after a scan, compares it against the **last stored run of the same host**
   (the memory DB already keeps a per-run findings snapshot) and reports what **appeared**,

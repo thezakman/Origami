@@ -1555,6 +1555,14 @@ async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> 
 MAX_ORIGIN_IPS = 25       # cap candidate IPs we probe directly
 
 
+def _is_origin_serve(status: int, body_len: int, edge_ip: bool) -> bool:
+    """A candidate IP is a possible origin only when it's a NON-edge box that
+    actually serves the target Host — a 2xx with a real body. A 404/403/5xx/
+    redirect (or the edge IP itself) is NOT a lead: that's what wrongly flagged an
+    unrelated sibling's 404 page as a 'possible origin'."""
+    return (not edge_ip) and 200 <= status < 300 and body_len > 0
+
+
 async def _origin_fold(engine, profile, result, opts, observer, root_simhash) -> None:
     """Origin-IP discovery + IP-based WAF bypass. Resolve the host's own A/AAAA
     records, gather OSINT candidate origin IPs (keyed sources, else crt.sh), then
@@ -1605,32 +1613,47 @@ async def _origin_fold(engine, profile, result, opts, observer, root_simhash) ->
             body = pr.content or b""
             sh = simhash(body)
             edge_ip = ip in edge_ips
-            distinct = hamming(sh, root_simhash) > bl.SIMHASH_MISS_DISTANCE
+            # An origin lead is a NON-edge IP that actually SERVES the target Host —
+            # a 2xx with a real body. It means the box is configured for this vhost,
+            # i.e. likely the origin reachable behind the CDN. A 404/403/5xx/redirect
+            # means the IP is NOT this app's origin (a sibling/unrelated server that
+            # merely resolved from crt.sh), so it's not a lead — this is the check
+            # that stops flagging every distinct 404 page as a "possible origin".
+            origin_serve = _is_origin_serve(pr.status_code, len(body), edge_ip)
 
             bypass = False
-            if blocked and (behind or not edge_ip):       # test the WAF-bypass angle
+            if blocked and not edge_ip:                   # WAF-bypass angle (only off the edge)
                 try:
                     bp = await c.get(f"{scheme}://{hp}:{port}{blocked}", headers={"Host": host})
                     bypass = 200 <= bp.status_code < 300 and len(bp.content or b"") > 0
                 except Exception:
                     pass
 
-            if not (distinct or bypass):                  # same as the edge → no lead
+            if not (origin_serve or bypass):
                 observer.tick(hit=False); continue
             sig = (pr.status_code, sh)
             if sig in seen_sig:                           # collapse load-balanced twins
                 observer.tick(hit=False); continue
             seen_sig.add(sig)
-            role = "edge IP" if edge_ip else f"candidate via {source}"
-            note = (f"WAF bypass: edge-blocked {blocked} → 200 direct on {ip} (Host: {host})"
-                    if bypass else
-                    f"{ip} serves distinct content with Host: {host} — possible origin [{role}]")
+            role = f"candidate via {source}"
+            # a 2xx body matching the edge's = the SAME app served directly (strong
+            # origin); a distinct 2xx is a weaker lead (could be an unrelated vhost).
+            same_app = origin_serve and hamming(sh, root_simhash) <= bl.SIMHASH_MISS_DISTANCE
+            if bypass:
+                note = f"WAF bypass: edge-blocked {blocked} → 200 direct on {ip} (Host: {host})"
+                conf = 0.85
+            elif same_app:
+                note = f"{ip} serves the SAME app as the edge directly (Host: {host}) — likely origin behind the CDN [{role}]"
+                conf = 0.8
+            else:
+                note = f"{ip} serves 200 for Host: {host} directly — possible origin/related vhost [{role}]"
+                conf = 0.55
             url = f"{scheme}://{ip}/"
             of = Finding(url, pr.status_code, len(body), pr.headers.get("content-type", ""),
-                         0.85 if bypass else 0.65, "origin", note=note,
+                         conf, "origin", note=note,
                          tags=sorted({"origin"} | ({"bypass"} if bypass else set())), simhash=sh)
             _report(observer, result, opts, of, url)
-            observer.log(f"origin: {ip} → {'WAF BYPASS' if bypass else 'distinct content'} "
+            observer.log(f"origin: {ip} → {'WAF BYPASS' if bypass else 'serves 200 (possible origin)'} "
                          f"({pr.status_code}, {len(body)}B) [{role}]", 0,
                          style="bold green" if bypass else "bold cyan")
 
