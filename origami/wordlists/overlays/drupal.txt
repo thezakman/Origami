@@ -1,0 +1,11 @@
+# Drupal — additive path pack
+/user/login
+/CHANGELOG.txt
+/core/CHANGELOG.txt
+/sites/default/settings.php
+/sites/default/files/
+/user/register
+/admin/reports/status
+/update.php
+/core/install.php
+/node/1

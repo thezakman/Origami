@@ -1,0 +1,22 @@
+# Spring Boot / Actuator — additive path pack
+/actuator/
+/actuator/env
+/actuator/health
+/actuator/heapdump
+/actuator/threaddump
+/actuator/mappings
+/actuator/beans
+/actuator/configprops
+/actuator/loggers
+/actuator/metrics
+/actuator/httptrace
+/actuator/httpexchanges
+/actuator/scheduledtasks
+/actuator/conditions
+/actuator/caches
+/actuator/shutdown
+/actuator/gateway/routes
+/actuator/jolokia
+/actuator/prometheus
+/v3/api-docs
+/swagger-ui/index.html

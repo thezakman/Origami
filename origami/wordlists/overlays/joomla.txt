@@ -1,0 +1,11 @@
+# Joomla — additive path pack
+/administrator/
+/administrator/index.php
+/configuration.php
+/configuration.php.bak
+/README.txt
+/administrator/logs/
+/api/index.php
+/joomla.xml
+/cache/
+/tmp/

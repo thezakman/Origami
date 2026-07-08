@@ -37,6 +37,7 @@ from origami.brain.bandit import word_of
 from origami.brain.kb import load_kb
 from origami.brain.ngram import NGram
 from origami.core import baseline as bl
+from origami.core import overlays
 from origami.core import resume as resume_mod
 from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
@@ -214,6 +215,7 @@ class ScanOptions:
     gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     origin: bool = False           # origin-IP discovery + IP-based WAF bypass (--origin)
+    overlays: bool = True          # fold tech-specific path packs from the fingerprint (--no-overlays off)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
 
@@ -538,6 +540,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]
+
+    # Tech-overlay: fold stack-specific path packs from the confirmed fingerprint
+    # (WordPress→wp-*, Spring→actuator/*, Laravel→telescope, …). Additive and
+    # root-anchored — fired as base-prefix seeds, never per-directory — so a
+    # confirmed stack gets its high-value paths without bloating every recursion.
+    if opts.overlays and confirmed:
+        ov_paths, ov_packs = overlays.overlay_words(confirmed)
+        if ov_paths:
+            root_seeds += [(p, "overlay") for p in ov_paths]
+            observer.log(f"overlay: folded {len(ov_paths)} stack-specific paths "
+                         f"from confirmed tech ({', '.join(ov_packs)})", 0, style="cyan")
 
     # THE origami fold: learn the target's own vocabulary (names + extensions)
     # from the references discovered above, and weave it into the scan — capped

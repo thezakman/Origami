@@ -1,0 +1,10 @@
+# Ruby on Rails — additive path pack
+/rails/info/properties
+/rails/info/routes
+/rails/mailers
+/config/database.yml
+/config/secrets.yml
+/sidekiq
+/cable
+/up
+/assets/

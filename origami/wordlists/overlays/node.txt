@@ -1,0 +1,11 @@
+# Node/Express — additive path pack
+/package.json
+/.env
+/server.js
+/config.js
+/.npmrc
+/node_modules/
+/debug
+/healthz
+/status
+/metrics

@@ -202,6 +202,7 @@ async def run(args: argparse.Namespace) -> int:
         bypass_headers_path=args.bypass_headers if isinstance(args.bypass_headers, str) else None,
         bypass_prefixes_path=args.bypass_prefixes,
         openapi_source=args.openapi, vhost=args.vhost, origin=args.origin or args.deep,
+        overlays=not args.no_overlays,
         param_fuzz=args.params or args.deep,
         wayback=args.wayback or args.gau or args.deep, gau=args.gau,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
@@ -580,6 +581,10 @@ def main() -> None:
     ap.add_argument("--init-credentials", action="store_true",
                     help="create ~/.config/origami/credentials.toml (mode 0600) with a template "
                          "for the --origin OSINT keys, then exit")
+    ap.add_argument("--no-overlays", action="store_true",
+                    help="disable tech-overlay path packs (on by default): when a stack is "
+                         "fingerprinted, Origami folds its high-value paths (wp-*, actuator/*, "
+                         "telescope, _next/*…) as root seeds — additive, never replacing the base")
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")

@@ -1,0 +1,11 @@
+# Grafana — additive path pack
+/login
+/api/health
+/api/datasources
+/api/admin/settings
+/api/org
+/api/dashboards/home
+/api/search
+/api/user
+/metrics
+/public/

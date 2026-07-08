@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.93.0] — Tech-overlay wordlists: the wordlist writes itself from the fingerprint
+- New **tech-overlay path packs** (`origami/wordlists/overlays/<tech>.txt`, 15 stacks):
+  when a technology is *confirmed* by the fingerprint, its high-value paths are folded in
+  as **root seeds** — WordPress (`wp-admin`, `wp-json`, `xmlrpc.php`), Spring
+  (`actuator/heapdump`/`env`/`gateway`), Laravel (`telescope`/`horizon`), Rails, Django,
+  Next.js (`_next/*`), Tomcat, Jenkins, Drupal, Joomla, Symfony, Node, ASP.NET, Grafana,
+  GitLab. **Additive** — never replaces the base list (real hosts are hybrid), root-anchored
+  (fired at the base prefix, not per-directory), and gated to confirmed techs only.
+- On by default; `--no-overlays` to disable. New module `origami/core/overlays.py`
+  (tech-name → pack mapping) + packs bundled in the wheel.
+
 ## [0.92.1] — `--init-credentials`: turnkey secure setup for option B
 - New **`--init-credentials`**: scaffolds `~/.config/origami/credentials.toml` with a
   template and **mode 0600 by construction** (dir 0700), then exits — no manual mkdir/chmod.
