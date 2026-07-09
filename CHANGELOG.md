@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.95.0] — Path regression: climb a deep target URL up to root
+- A deep/file target URL (`…/caminho/path/arquivo.pdf`) is now **climbed**: Origami scans
+  the file's **directory** (previously it treated the file as a folder and scanned *under*
+  it), fetches the file itself as a seed, and probes **every ancestor directory up to root**
+  (`/caminho/path/`, `/caminho/`, `/`) — existing ones get recursed by the normal directory
+  machinery. Each path segment (`caminho`, `path`, `arquivo`) folds into the dynamic
+  vocabulary. New pure helper `_path_climb()` (unit-tested).
+
 ## [0.94.1] — Fix `--origin` false positives (a sibling's 404 flagged as origin)
 - The origin heuristic flagged **any** IP whose response differed from the edge as a
   "possible origin" — so an unrelated crt.sh sibling returning a `404` page (distinct
