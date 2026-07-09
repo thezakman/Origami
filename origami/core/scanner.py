@@ -1708,13 +1708,17 @@ async def _origin_fold(engine, profile, result, opts, observer, root_simhash) ->
 MAX_FUZZ_ENDPOINTS = 15   # cap dynamic endpoints we fuzz params on
 MAX_FUZZ_PARAMS = 160     # cap distinct param names tried per endpoint
 FUZZ_BATCH = 20           # params per request (each gets its own canary)
+MAX_BREAKOUT_PARAMS = 15  # XSS-context params verified in ONE breakout probe per endpoint
 _DYN_EXT = (".php", ".asp", ".aspx", ".jsp", ".jspx", ".do", ".action", ".cgi",
             ".pl", ".ashx", ".asmx", ".json", ".cfm")
 
 
 def _fuzz_candidate(f) -> bool:
     """A dynamic endpoint worth fuzzing params on: a 2xx app route / script /
-    API — not a static asset (those don't read query params)."""
+    API (reads query params), or a 3xx redirect (prime open-redirect territory —
+    a reflected param in its Location is the lead). Static assets don't qualify."""
+    if 300 <= f.status < 400:
+        return True                              # redirect endpoint → open-redirect check
     if not (200 <= f.status < 300):
         return False
     last = urlparse(f.url).path.rstrip("/").rsplit("/", 1)[-1].lower()
@@ -1752,16 +1756,24 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
             break
         observer.substep(urlparse(f.url).path.rsplit("/", 1)[-1] or f.url)
         found: dict[str, str] = {}            # param -> reflection context (js/html/attr/json/body)
+        redirect_params: set[str] = set()     # canary echoed in Location → open-redirect lead
+        header_hits: dict[str, str] = {}       # param -> response-header name it reflected in
         echoes = False
+        sep = "&" if urlparse(f.url).query else "?"
         for qs, token_map, ctl in paramfuzz.build_batches(params, FUZZ_BATCH):
             if _over_budget(engine, opts):
                 break
-            sep = "&" if urlparse(f.url).query else "?"
-            url = f.url + sep + qs
-            pr = await engine.fetch(url, keep_body=True)
+            pr = await engine.fetch(f.url + sep + qs, keep_body=True)
             observer.tick(hit=False)
-            observer.request(url, pr.status, False)
-            if not (pr.ok and pr.body):
+            observer.request(f.url, pr.status, False)
+            if not pr.ok:
+                continue
+            # Location/header reflection is inspected BEFORE the empty-body guard —
+            # an open-redirect 3xx usually has no body but a reflected Location.
+            redirect_params.update(paramfuzz.reflected_in_location(pr.location, token_map))
+            for p, h in paramfuzz.reflected_in_headers(pr.headers, token_map).items():
+                header_hits.setdefault(p, h)
+            if not pr.body:
                 continue
             if paramfuzz.control_reflected(pr.body, ctl):    # echoes any query → no signal
                 echoes = True
@@ -1772,23 +1784,67 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
             observer.log(f"params: {observer.disp(f.url)} reflects any query param — skipped",
                          1, style="yellow")
             continue
+
+        # Breakout verification: for params that reflected into an XSS sink, one
+        # extra probe with `'"<>{{7*7}}` proves whether the metacharacters come
+        # back RAW (real XSS) vs escaped, and whether {{7*7}} evaluated (SSTI).
+        verified: dict[str, dict] = {}
+        xss_ctx = [p for p, c in found.items() if c in ("js", "html", "attr")]
+        if xss_ctx and not _over_budget(engine, opts):
+            bqs, sent_map = paramfuzz.build_breakout_batch(xss_ctx, cap=MAX_BREAKOUT_PARAMS)
+            if bqs:
+                bpr = await engine.fetch(f.url + sep + bqs, keep_body=True)
+                observer.tick(hit=False)
+                observer.request(f.url, bpr.status, False)
+                if bpr.ok and bpr.body:
+                    verified = paramfuzz.analyze_breakout(bpr.body, sent_map)
+
+        if not (found or redirect_params or header_hits):
+            continue
+
+        def _verdict(param: str, ctx: str) -> str:
+            v = verified.get(param)
+            bits = []
+            if v:
+                if "<" in v["raw"] and ">" in v["raw"]:
+                    bits.append(f"UNESCAPED {v['raw']}")
+                elif ctx in ("js", "html", "attr"):
+                    bits.append("escaped")
+                if v["ssti"]:
+                    bits.append("SSTI 7*7→49")
+            return f"{param} ({ctx}{', ' + ', '.join(bits) if bits else ''})"
+
+        xss = any("<" in v["raw"] and ">" in v["raw"] for v in verified.values())
+        ssti = any(v["ssti"] for v in verified.values())
+        new_tags = ["param"]
+        if xss:
+            new_tags.append("xss-lead")           # now: VERIFIED raw reflection in an HTML/JS sink
+        if ssti:
+            new_tags.append("ssti-lead")
+        if redirect_params:
+            new_tags.append("redirect-lead")
+        f.tags = list(dict.fromkeys(list(f.tags) + new_tags))
+
+        parts = []
         if found:
-            # surface the most exploitable contexts first (js/html → XSS lead)
             ranked = sorted(found.items(), key=lambda kv: (-paramfuzz._CTX_RANK.get(kv[1], 0), kv[0]))
-            preview = ", ".join(f"{p} ({c})" for p, c in ranked[:8]) \
+            preview = ", ".join(_verdict(p, c) for p, c in ranked[:8]) \
                 + (f" (+{len(ranked) - 8})" if len(ranked) > 8 else "")
-            f.tags = list(dict.fromkeys(list(f.tags) + ["param"]))
-            # a reflection into an HTML/JS sink is an XSS lead — tag it louder
-            if any(c in ("js", "html", "attr") for c in found.values()):
-                f.tags = list(dict.fromkeys(f.tags + ["xss-lead"]))
-            f.note = (f.note + " · " if f.note else "") + f"reflected params: {preview}"
-            observer.log(f"param: {observer.disp(f.url)} ← reflects {preview}", 0, style="bold green")
-            if opts.finding_sink is not None:
-                opts.finding_sink(f)
-            total += len(found)
+            parts.append(f"reflected params: {preview}")
+        if redirect_params:
+            parts.append("open-redirect: " + ", ".join(sorted(redirect_params)) + " → Location")
+        if header_hits:
+            parts.append("header reflection: "
+                         + ", ".join(f"{p}→{h}" for p, h in sorted(header_hits.items())))
+        f.note = (f.note + " · " if f.note else "") + " · ".join(parts)
+        style = "bold red" if (xss or ssti) else "bold green"
+        observer.log(f"param: {observer.disp(f.url)} ← {' · '.join(parts)}", 0, style=style)
+        if opts.finding_sink is not None:
+            opts.finding_sink(f)
+        total += len(found) + len(redirect_params) + len(header_hits)
     if total:
-        observer.log(f"params: {total} reflected parameter(s) flagged — see the 'param' tag",
-                     0, style="cyan")
+        observer.log(f"params: {total} reflected input(s) flagged — see 'param'/'xss-lead'/"
+                     f"'ssti-lead'/'redirect-lead' tags", 0, style="cyan")
 
 
 MAX_CACHE_TARGETS = 12          # cap endpoints probed for cache poisoning

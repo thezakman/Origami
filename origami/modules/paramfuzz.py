@@ -124,3 +124,74 @@ def control_reflected(body: bytes, ctl_tok: str) -> bool:
     """True when the control canary reflects → the endpoint echoes ANY query
     param, so per-param reflection carries no signal for it."""
     return ctl_tok.encode() in body.lower()
+
+
+def reflected_in_location(location: str, token_map: dict[str, str]) -> list[str]:
+    """Params whose canary appears in the `Location` header — an open-redirect
+    lead (the app puts attacker-controlled input into a redirect target)."""
+    low = (location or "").lower()
+    return [param for tok, param in token_map.items() if tok in low] if low else []
+
+
+# Response headers that legitimately echo request-ish data or are hop-by-hop —
+# a canary here is noise, not a header-injection lead.
+_SKIP_HEADERS = {"location", "content-length", "date", "age", "connection",
+                 "content-type", "vary", "cache-control", "expires"}
+
+
+def reflected_in_headers(headers: dict, token_map: dict[str, str]) -> dict[str, str]:
+    """Map param → response-header NAME for canaries echoed in a header value
+    (Location handled separately). Header reflection is a header-injection / cache
+    lead. Deduped to the first header a param lands in."""
+    out: dict[str, str] = {}
+    for name, value in (headers or {}).items():
+        if name.lower() in _SKIP_HEADERS:
+            continue
+        low = str(value).lower()
+        for tok, param in token_map.items():
+            if param not in out and tok in low:
+                out[param] = name
+    return out
+
+
+# Breakout payload: a value that, if reflected RAW, proves the reflection is
+# unescaped (real XSS sink) — and carries an SSTI polyglot. Wrapped in a unique
+# sentinel on both sides so `analyze_breakout` can inspect exactly the reflected
+# region (and tell an evaluated `49` from a literal `{{7*7}}`).
+_BREAKOUT_META = "'\"<>"
+_SSTI_PROBE = "{{7*7}}"
+_SSTI_EVAL = "49"
+
+
+def build_breakout_batch(params, run: str | None = None, cap: int = 15):
+    """One request that breakout-tests up to `cap` params → (querystring,
+    {sentinel: param}). Each param carries `<sentinel>'"<>{{7*7}}<sentinel>` with
+    a unique sentinel, so many params are verified in a single follow-up probe."""
+    run = run or run_prefix()
+    pairs, sent_map = [], {}
+    for i, p in enumerate(params[:cap]):
+        sent = f"{run}b{i}z"
+        sent_map[sent] = p
+        pairs.append(f"{p}={sent}{_BREAKOUT_META}{_SSTI_PROBE}{sent}")
+    return "&".join(pairs), sent_map
+
+
+def analyze_breakout(body: bytes, sent_map: dict[str, str]) -> dict[str, dict]:
+    """For each param, find its two sentinels in `body` and inspect the region
+    between them: which of `< > " '` came back RAW (unescaped → XSS), and whether
+    `{{7*7}}` evaluated to `49` (SSTI). Params whose sentinels aren't both present
+    are inconclusive and omitted. Returns {param: {"raw": "<>", "ssti": bool}}."""
+    text = body.decode("latin-1", "replace")
+    out: dict[str, dict] = {}
+    for sent, param in sent_map.items():
+        i = text.find(sent)
+        if i < 0:
+            continue
+        j = text.find(sent, i + len(sent))
+        if j < 0:
+            continue
+        region = text[i + len(sent):j]                 # exactly the reflected payload
+        raw = "".join(c for c in _BREAKOUT_META if c in region)
+        ssti = _SSTI_EVAL in region and _SSTI_PROBE not in region
+        out[param] = {"raw": raw, "ssti": ssti}
+    return out
