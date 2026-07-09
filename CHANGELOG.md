@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.98.1] — Faster simhash (runs on every response) — byte-identical output
+- Rewrote `normalize.simhash` — the structural fingerprint computed on **every** HTTP
+  response (soft-404 calibration, dedup, `--diff`, corpus k-NN). Two lossless changes:
+  duplicate shingles are hashed **once** and weighted by count (HTML repeats a lot of
+  markup), and the 64 lane counters are packed into one big integer updated with a single
+  add per unique shingle instead of a 64-iteration Python loop (bit-sliced popcount).
+- **~4× faster on repetitive HTML, ~2× on unique/JSON bodies** (e.g. a 250 KB page: 25 ms → 6 ms).
+  Output is **byte-identical** to the old implementation — locked by a golden-value test, so
+  simhashes stored in the memory DB stay comparable across versions. No behavior change.
+
 ## [0.98.0] — GraphQL: read the schema, flag sensitive ops, probe unauth access
 - GraphQL is no longer just *detected* — the schema is **mined**:
   - **Deeper introspection** extracts every query/mutation **argument** (the real input
