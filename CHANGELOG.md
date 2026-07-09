@@ -5,6 +5,23 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.98.0] — GraphQL: read the schema, flag sensitive ops, probe unauth access
+- GraphQL is no longer just *detected* — the schema is **mined**:
+  - **Deeper introspection** extracts every query/mutation **argument** (the real input
+    surface), not only field names; args feed the parameter corpus.
+  - **Sensitive-operation flagging** — root ops matching `login`/`token`/`senha`/`redefinir`/
+    `lgpd`/`admin`/`boleto`/`cpf`/… are surfaced in the finding (`disclosure` tag) instead of a
+    bare "300 fields" count; queries and mutations are counted separately.
+  - **Unauthenticated-access probe** — like testing which Swagger paths answer unauthenticated,
+    Origami sends a benign no-arg query (**queries only — never mutations**, so no state change)
+    for the top ops and classifies each: `open` (returned data w/o auth), `reachable` (past the
+    gate, only a validation error), or `auth` (gate enforced). Ops reachable without auth →
+    the finding is tagged **`auth-bypass`** (a BOLA / missing-authZ lead). Bounded by `MAX_GQL_PROBES`.
+- New `graphql` helpers `analyze_schema()` / `build_probe_query()` / `classify_probe()` and the
+  `_graphql_probe` fold (all unit-tested). Validated live against a healthcare GraphQL portal
+  (32 queries / 28 mutations; `beneficiarioValidarToken` returned data unauthenticated, 11 more
+  sensitive ops reachable past the gate).
+
 ## [0.97.0] — Legacy-TLS auto-fallback + surface the real "unreachable" reason
 - **Fix a false "unreachable".** A server with a weak Diffie-Hellman key or an old cipher
   (`[SSL: DH_KEY_TOO_SMALL]`, handshake failure) is rejected by Python's default OpenSSL

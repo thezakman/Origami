@@ -1635,6 +1635,48 @@ class TestGraphQL(unittest.TestCase):
         self.assertTrue(graphql._is_schema(doc))
         self.assertFalse(graphql._is_schema({"data": {}}))
 
+    def test_analyze_schema_args_ops_sensitive(self):
+        from origami.modules.discovery import graphql
+        doc = {"data": {"__schema": {
+            "queryType": {"name": "Query"}, "mutationType": {"name": "Mutation"},
+            "types": [
+                {"name": "Query", "fields": [
+                    {"name": "carteira", "args": [{"name": "id"}]},
+                    {"name": "listCities", "args": []}]},
+                {"name": "Mutation", "fields": [
+                    {"name": "beneficiarioRedefinirSenha", "args": [{"name": "token"}]}]},
+                {"name": "__Type", "fields": [{"name": "name"}]},   # meta → skipped
+            ]}}}
+        m = graphql.analyze_schema(doc)
+        self.assertEqual(set(m["queries"]), {"carteira", "listCities"})
+        self.assertEqual(m["mutations"], ["beneficiarioRedefinirSenha"])
+        self.assertEqual(m["args"], {"id", "token"})
+        # sensitive spans queries AND mutations (senha/redefinir, carteira)
+        self.assertIn("beneficiarioRedefinirSenha", m["sensitive"])
+        self.assertIn("carteira", m["sensitive"])
+        self.assertNotIn("listCities", m["sensitive"])
+
+    def test_build_probe_query_is_benign(self):
+        from origami.modules.discovery import graphql
+        q = graphql.build_probe_query("carteira")
+        self.assertEqual(q, "{__typename carteira}")   # no args, no sub-selection, no mutation
+
+    def test_classify_probe_open_auth_reachable(self):
+        import json
+        from origami.modules.discovery import graphql
+        # data returned without auth → open
+        self.assertEqual(graphql.classify_probe(200, json.dumps({"data": {"carteira": {"x": 1}}}).encode()), "open")
+        # explicit auth error / 401 → auth
+        self.assertEqual(graphql.classify_probe(401, b""), "auth")
+        self.assertEqual(graphql.classify_probe(200, json.dumps(
+            {"errors": [{"message": "Not authorized"}]}).encode()), "auth")
+        # validation error (needs args) → reachable (past the gate)
+        self.assertEqual(graphql.classify_probe(200, json.dumps(
+            {"errors": [{"message": "Field 'carteira' argument 'id' of type 'ID!' is required"}]}).encode()),
+            "reachable")
+        # data: null, no error → reachable
+        self.assertEqual(graphql.classify_probe(200, json.dumps({"data": {"carteira": None}}).encode()), "reachable")
+
 
 class TestWellKnown(unittest.TestCase):
     def test_extract_oidc_endpoints_same_host(self):
