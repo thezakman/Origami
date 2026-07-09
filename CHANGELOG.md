@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.96.0] — Verified injection leads: breakout, SSTI, open-redirect, header reflection
+- The `--params` reflection fold no longer stops at *"the value reflects."* It now grades a
+  reflection into a **verified lead**:
+  - **Breakout probe** — one follow-up request per endpoint sends `'"<>{{7*7}}` (wrapped in a
+    unique sentinel) at the params that reflected into an HTML/JS sink. `xss-lead` is now set
+    only when the metacharacters come back **raw** (real, unescaped sink); an *escaped*
+    reflection is downgraded to plain `param`. If `{{7*7}}→49`, the finding gets **`ssti-lead`**.
+  - **Open-redirect** — a canary reflected into the `Location` header → **`redirect-lead`**
+    (checked before the empty-body guard, and 3xx endpoints are now fuzz candidates).
+  - **Header reflection** — a canary echoed in any response header is noted (header-injection lead).
+- New `paramfuzz` helpers `build_breakout_batch()` / `analyze_breakout()` / `reflected_in_location()`
+  / `reflected_in_headers()` (all unit-tested); one extra request per endpoint (bounded by
+  `MAX_BREAKOUT_PARAMS`). New tags: `ssti-lead`, `redirect-lead`.
+
 ## [0.95.0] — Path regression: climb a deep target URL up to root
 - A deep/file target URL (`…/caminho/path/arquivo.pdf`) is now **climbed**: Origami scans
   the file's **directory** (previously it treated the file as a folder and scanned *under*

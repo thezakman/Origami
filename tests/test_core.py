@@ -14,11 +14,12 @@ from origami.modules.discovery import backups, js_parser, robots, shortname
 
 
 def make_probe(status=200, body=b"<html>hi</html>", url="http://t/x", ctype="text/html",
-               location=""):
+               location="", headers=None):
     return Probe(url=url, method="GET", status=status, length=len(body),
                  words=len(body.split()), lines=body.count(b"\n") + 1,
                  content_type=ctype, location=location,
                  body_simhash=simhash(body), elapsed_ms=1.0,
+                 headers=headers or {},
                  body_head=body[:2048], body=body)
 
 
@@ -494,9 +495,38 @@ class TestParamFuzz(unittest.TestCase):
         opts = ScanOptions(param_fuzz=True, finding_sink=streamed.append)
         asyncio.run(_param_fold(FakeEngine(), prof, result, opts, NullObserver()))
         self.assertIn("param", f.tags)
-        self.assertIn("xss-lead", f.tags)              # reflected into an HTML sink → XSS lead
-        self.assertIn("q (html)", f.note)              # graded by injection context
+        self.assertIn("xss-lead", f.tags)              # breakout confirmed a raw HTML-sink reflection
+        self.assertIn("q (html", f.note)               # graded by injection context
+        self.assertIn("UNESCAPED", f.note)             # the breakout probe proved metachars came back raw
         self.assertTrue(any(s is f for s in streamed))             # streamed for JSONL
+
+    def test_fold_flags_open_redirect_and_header(self):
+        import asyncio
+        from urllib.parse import urlparse, parse_qs
+        from origami.core.scanner import _param_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:                       # 3xx endpoint: reflects 'url' into Location
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                q = parse_qs(urlparse(url).query)
+                loc = q.get("url", [""])[0]     # open-redirect: canary echoed into Location
+                hdrs = {"location": loc}
+                if "q" in q:
+                    hdrs["x-echo"] = q["q"][0]  # header reflection
+                return make_probe(302, b"", url=url, location=loc, headers=hdrs)
+
+        prof = TargetProfile(host="h", base_url="https://h/")
+        f = Finding("https://h/redir", 302, 0, "", 0.9, "wordlist")
+        result = ScanResult(profile=prof, findings=[f])
+        opts = ScanOptions(param_fuzz=True)
+        asyncio.run(_param_fold(FakeEngine(), prof, result, opts, NullObserver()))
+        self.assertIn("redirect-lead", f.tags)         # canary in Location → open-redirect
+        self.assertIn("open-redirect: url", f.note)
+        self.assertIn("header reflection: q", f.note)  # canary echoed in x-echo header
 
     def test_reflection_contexts_classify_sink(self):
         from origami.modules import paramfuzz as P
@@ -1125,6 +1155,47 @@ class TestFeroxParity(unittest.TestCase):
         self.assertIsNone(_int_set(None))
         with self.assertRaises(SystemExit):
             _int_set("200,foo")
+
+
+class TestReflectionLeads(unittest.TestCase):
+    """Graded reflection: breakout (unescaped/SSTI), open-redirect, header reflection."""
+
+    def test_build_breakout_batch_unique_sentinels(self):
+        from origami.modules import paramfuzz as pf
+        qs, sent = pf.build_breakout_batch(["q", "name"], run="oztest")
+        self.assertEqual(set(sent.values()), {"q", "name"})
+        self.assertEqual(len(set(sent)), 2)                      # unique sentinels
+        self.assertIn("q=oztestb0z", qs)
+        self.assertIn("{{7*7}}", qs)                            # SSTI polyglot present
+        # cap bounds the params in one probe
+        _, capped = pf.build_breakout_batch([f"p{i}" for i in range(50)], cap=15)
+        self.assertEqual(len(capped), 15)
+
+    def test_analyze_breakout_raw_vs_escaped_vs_ssti(self):
+        from origami.modules import paramfuzz as pf
+        sm = {"oztestb0z": "q"}
+        raw = pf.analyze_breakout(b'<b>oztestb0z\'"<>{{7*7}}oztestb0z</b>', sm)
+        self.assertIn("<", raw["q"]["raw"])
+        self.assertIn(">", raw["q"]["raw"])
+        self.assertFalse(raw["q"]["ssti"])
+        # HTML-entity-encoded → no raw metacharacters survive
+        esc = pf.analyze_breakout(b"oztestb0z&#39;&quot;&lt;&gt;{{7*7}}oztestb0z", sm)
+        self.assertEqual(esc["q"]["raw"], "")
+        # template evaluated: 49 present, literal {{7*7}} gone → SSTI
+        ssti = pf.analyze_breakout(b'oztestb0z\'"<>49oztestb0z', sm)
+        self.assertTrue(ssti["q"]["ssti"])
+        # only one sentinel → inconclusive, omitted
+        self.assertEqual(pf.analyze_breakout(b"oztestb0z<>", sm), {})
+
+    def test_reflected_in_location_and_headers(self):
+        from origami.modules import paramfuzz as pf
+        tm = {"oz0q": "redirect", "oz1q": "x"}
+        self.assertEqual(pf.reflected_in_location("https://evil.com/oz0q", tm), ["redirect"])
+        self.assertEqual(pf.reflected_in_location("", tm), [])
+        # a canary in an X- header is a lead; the same canary in Location is NOT
+        # double-counted here (Location is handled by reflected_in_location)
+        self.assertEqual(pf.reflected_in_headers({"x-foo": "oz1q", "location": "oz0q"}, tm),
+                         {"x": "x-foo"})
 
 
 class TestPathClimb(unittest.TestCase):
