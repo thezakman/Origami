@@ -306,10 +306,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         else:
             started_authed = True
 
-    # scan starts at the given base path (e.g. /lms/), so calibrate THERE.
-    base_prefix = urlparse(base_url).path or "/"
-    if not base_prefix.endswith("/"):
-        base_prefix += "/"
+    # scan starts at the given base path (e.g. /lms/), so calibrate THERE. Path
+    # regression: a deep/file target (…/path/arquivo.pdf) scans its DIRECTORY (not
+    # the file-as-folder), and every ancestor dir up to root is climbed (seeded
+    # below). The file itself is fetched as a seed.
+    base_prefix, _climb_file, _climb_ancestors = _path_climb(urlparse(base_url).path)
 
     observer.phase("calibrate")
     await bl.calibrate(engine, profile, [(base_prefix, e) for e in _BASE_CALIB_EXTS + [".php", ".aspx"]])
@@ -400,6 +401,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # assemble high-priority root seeds: memory (cross-target) + js + backups
     root_seeds: list[tuple[str, str]] = []
+
+    # Path regression: fetch the target file (if any) and climb every ancestor
+    # directory — each is probed as a seed; the ones that exist get recursed by
+    # the normal directory machinery, so a deep target explores its whole lineage.
+    if _climb_file:
+        root_seeds.append((_climb_file, "target"))
+    if _climb_ancestors:
+        root_seeds += [(a, "climb") for a in _climb_ancestors]
+        observer.log(f"path-climb: exploring {len(_climb_ancestors)} ancestor "
+                     f"director{'y' if len(_climb_ancestors) == 1 else 'ies'} of "
+                     f"{base_prefix} up to root", 0, style="cyan")
 
     if memory is not None:
         _recon("memory")
@@ -559,7 +571,9 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     names_ctr, exts_ctr = derive_vocabulary(js_paths | robots_paths | api_paths)
     learned_names = [n for n, _ in names_ctr.most_common(opts.max_folds)]
     # the target's own name (host labels + base path) is prime vocabulary
-    tgt = target_tokens(profile.host, base_prefix)
+    # use the FULL target path (incl. a file segment) so /caminho/path/arquivo.pdf
+    # folds arquivo into the vocabulary too, not just the base directory's segments.
+    tgt = target_tokens(profile.host, urlparse(base_url).path or base_prefix)
     learned_names = list(dict.fromkeys(list(tgt) + learned_names))
     # extensions multiply the WHOLE wordlist, so they get a tighter cap.
     ext_cap = max(6, opts.max_folds // 8)
@@ -987,6 +1001,39 @@ async def _is_soft(engine, profile, prefix, probe) -> bool:
                 cb.soft_signatures.append(sig)
         return True
     return False
+
+
+def _path_climb(raw_path: str) -> tuple[str, str | None, list[str]]:
+    """Path regression from a deep target URL → (base_dir, file_seed, ancestors).
+
+    Given `/caminho/path/arquivo.pdf`, Origami should scan the *directory* (the
+    file's PARENT, not treat the file as a folder), fetch the file itself, and
+    walk every ancestor directory up to root so `/caminho/path/`, `/caminho/` and
+    `/` are all explored — "climb the path". The segment names (caminho/path/…)
+    are folded into the dynamic vocabulary separately by `target_tokens`.
+
+      * base_dir   — the directory to calibrate/scan at (parent dir for a file)
+      * file_seed  — the file path to fetch/harvest, or None when the target is a dir
+      * ancestors  — directories strictly ABOVE base_dir, deepest-first, incl. "/"
+    """
+    path = raw_path or "/"
+    last = path.rsplit("/", 1)[-1]
+    is_file = bool(last) and "." in last and not path.endswith("/")
+    if is_file:
+        base_dir = path[: len(path) - len(last)] or "/"
+        file_seed: str | None = path
+    else:
+        base_dir = path if path.endswith("/") else path + "/"
+        file_seed = None
+    ancestors: list[str] = []
+    cur = base_dir.rstrip("/")
+    while cur:
+        cur = cur.rsplit("/", 1)[0]
+        anc = f"{cur}/" if cur else "/"
+        ancestors.append(anc)
+        if anc == "/":
+            break
+    return base_dir, file_seed, ancestors
 
 
 def _over_budget(engine, opts) -> bool:

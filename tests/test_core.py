@@ -1127,6 +1127,32 @@ class TestFeroxParity(unittest.TestCase):
             _int_set("200,foo")
 
 
+class TestPathClimb(unittest.TestCase):
+    """Path regression: a deep/file target scans its dir and climbs every ancestor."""
+
+    def test_file_target_scans_parent_and_climbs(self):
+        from origami.core.scanner import _path_climb
+        base, file_seed, anc = _path_climb("/caminho/path/arquivo.pdf")
+        self.assertEqual(base, "/caminho/path/")               # scan the DIR, not the file
+        self.assertEqual(file_seed, "/caminho/path/arquivo.pdf")  # fetch the file
+        self.assertEqual(anc, ["/caminho/", "/"])              # climb to root
+
+    def test_dir_target_climbs_no_file(self):
+        from origami.core.scanner import _path_climb
+        base, file_seed, anc = _path_climb("/a/b/")
+        self.assertEqual(base, "/a/b/")
+        self.assertIsNone(file_seed)
+        self.assertEqual(anc, ["/a/", "/"])
+
+    def test_root_and_bare_segment(self):
+        from origami.core.scanner import _path_climb
+        self.assertEqual(_path_climb("/"), ("/", None, []))
+        self.assertEqual(_path_climb(""), ("/", None, []))
+        # a bare segment with no extension is treated as a directory
+        base, file_seed, anc = _path_climb("/caminho")
+        self.assertEqual((base, file_seed, anc), ("/caminho/", None, ["/"]))
+
+
 class TestScanDiff(unittest.TestCase):
     """--diff: current scan vs the last stored run (new / gone / newly-accessible)."""
 
