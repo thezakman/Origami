@@ -542,19 +542,34 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         if opts.graph:
             result.edges += wk_edges
 
-    # GraphQL introspection — confirm the endpoint + harvest schema field names.
+    # GraphQL introspection — confirm the endpoint + harvest the schema, flag the
+    # sensitive operations, and (queries only) probe which respond without auth.
     if opts.apidocs:
         _recon("graphql")
-        gql_url, gql_fields = await _guard(observer, "graphql",
-                                           graphql.harvest(engine, base_url), (None, set()))
+        _empty_meta = {"fields": set(), "args": set(), "queries": [], "mutations": [], "sensitive": []}
+        gql_url, gql_fields, gql_meta = await _guard(
+            observer, "graphql", graphql.harvest(engine, base_url), (None, set(), _empty_meta))
         if gql_url:
-            profile.parameters |= gql_fields
-            gf = Finding(gql_url, 200, 0, "application/json", 0.9, "graphql",
-                         note="introspection enabled", tags=["api"])
+            profile.parameters |= gql_fields | gql_meta["args"]   # fields AND their arguments
+            sens = gql_meta["sensitive"]
+            n_q, n_m = len(gql_meta["queries"]), len(gql_meta["mutations"])
+            note = "introspection enabled"
+            tags = ["api"]
+            if sens:
+                note += " · sensitive ops: " + ", ".join(sens[:8]) \
+                    + (f" (+{len(sens) - 8})" if len(sens) > 8 else "")
+                tags.append("disclosure")
+            gf = Finding(gql_url, 200, 0, "application/json", 0.9, "graphql", note=note, tags=tags)
             result.findings.append(gf)
             observer.finding(gf)
-            observer.log(f"graphql: introspection enabled at {urlparse(gql_url).path} "
-                         f"→ {len(gql_fields)} schema fields harvested", 0, style="cyan")
+            observer.log(f"graphql: introspection enabled at {urlparse(gql_url).path} → "
+                         f"{len(gql_fields)} fields · {n_q} queries + {n_m} mutations · "
+                         f"{len(sens)} sensitive", 0, style="cyan")
+            if sens:
+                observer.log("graphql: sensitive ops → " + ", ".join(sens[:12])
+                             + (f" (+{len(sens) - 12})" if len(sens) > 12 else ""), 0, style="yellow")
+            await _guard(observer, "graphql-probe",
+                         _graphql_probe(engine, opts, observer, gf, gql_url, gql_meta), None)
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]
@@ -1557,6 +1572,58 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
 
 MAX_CONFIG_SEEDS = 60   # cap paths enumerated from config-file references
 MAX_VHOSTS = 60   # cap Host-header candidates probed
+
+
+MAX_GQL_PROBES = 12   # benign query-op probes (queries ONLY — never mutations)
+
+
+async def _graphql_probe(engine, opts, observer, gf, gql_url, meta) -> None:
+    """Send a benign, no-arg query for the top root QUERY operations — NEVER
+    mutations, since calling those changes state — to learn which respond WITHOUT
+    auth. An 'open' (returned data) or 'reachable' (past the gate, only a
+    validation error) response is an auth-bypass / BOLA lead — the GraphQL analog
+    of probing which Swagger paths answer unauthenticated. Sensitive ops go first.
+    Annotates the introspection finding with the verdict."""
+    q_ops = meta.get("queries") or []
+    sens = set(meta.get("sensitive") or [])
+    ordered = [o for o in q_ops if o in sens] + [o for o in q_ops if o not in sens]
+    ordered = ordered[:MAX_GQL_PROBES]
+    if not ordered:
+        return
+    observer.phase("graphql-probe")
+    observer.log(f"graphql: probing {len(ordered)} query op(s) for unauth access "
+                 f"(queries only, no mutations)", 0, style="cyan")
+    open_ops, reachable_ops = [], []
+    for op in ordered:
+        if _over_budget(engine, opts):
+            break
+        try:
+            pr = await engine.fetch(gql_url, method="POST", keep_body=True,
+                                    json={"query": graphql.build_probe_query(op)})
+        except Exception:
+            continue
+        observer.request(gql_url, pr.status, False)
+        verdict = graphql.classify_probe(pr.status, pr.body or b"")
+        if verdict == "open":
+            open_ops.append(op)
+        elif verdict == "reachable":
+            reachable_ops.append(op)
+    if not (open_ops or reachable_ops):
+        observer.log("graphql: all probed ops require auth (gate enforced)", 1, style="green")
+        return
+    # `op!` = returned data unauthenticated (strongest); plain = reachable past the gate.
+    detail = ", ".join(f"{o}!" for o in open_ops) \
+        + (", " if open_ops and reachable_ops else "") + ", ".join(reachable_ops)
+    gf.note = (gf.note + " · " if gf.note else "") + f"reachable WITHOUT auth: {detail}"
+    gf.tags = list(dict.fromkeys(gf.tags + ["auth-bypass"]))
+    if open_ops:
+        gf.confidence = max(gf.confidence, 0.9)
+    hot = [o for o in (open_ops + reachable_ops) if o in sens]
+    observer.log(f"graphql: {len(open_ops)} op(s) return data + {len(reachable_ops)} reachable "
+                 f"WITHOUT auth" + (f" — incl. sensitive: {', '.join(hot[:6])}" if hot else "")
+                 + " → auth-bypass/BOLA lead", 0, style="bold red")
+    if opts.finding_sink is not None:
+        opts.finding_sink(gf)
 
 
 async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> None:
