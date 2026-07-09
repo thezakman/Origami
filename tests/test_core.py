@@ -1157,6 +1157,30 @@ class TestFeroxParity(unittest.TestCase):
             _int_set("200,foo")
 
 
+class TestLegacyTLS(unittest.TestCase):
+    """Weak-DH / legacy-cipher servers: detect the handshake error, drop SECLEVEL."""
+
+    def test_looks_weak_tls_matches_dh_and_handshake(self):
+        from origami.core.httpclient import _looks_weak_tls
+        self.assertTrue(_looks_weak_tls("ConnectError: [SSL: DH_KEY_TOO_SMALL] dh key too small"))
+        self.assertTrue(_looks_weak_tls("SSLError: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE]"))
+        self.assertTrue(_looks_weak_tls("SSLError: unsafe legacy renegotiation disabled"))
+        # NOT a security-level issue → don't lower TLS for these
+        self.assertFalse(_looks_weak_tls("ConnectTimeout: timed out"))
+        self.assertFalse(_looks_weak_tls("ConnectError: [Errno 111] Connection refused"))
+        self.assertFalse(_looks_weak_tls("SSLError: CERTIFICATE_VERIFY_FAILED"))  # cert, handled by -k
+
+    def test_legacy_ssl_context_lowers_security(self):
+        import ssl
+        from origami.core.httpclient import _legacy_ssl_context
+        ctx = _legacy_ssl_context(verify=False)
+        self.assertIsInstance(ctx, ssl.SSLContext)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)      # verify off → no cert check
+        self.assertFalse(ctx.check_hostname)
+        ctx2 = _legacy_ssl_context(verify=True)
+        self.assertEqual(ctx2.verify_mode, ssl.CERT_REQUIRED)  # verify on → cert still checked
+
+
 class TestReflectionLeads(unittest.TestCase):
     """Graded reflection: breakout (unescaped/SSTI), open-redirect, header reflection."""
 
