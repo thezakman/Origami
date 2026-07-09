@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.97.0] — Legacy-TLS auto-fallback + surface the real "unreachable" reason
+- **Fix a false "unreachable".** A server with a weak Diffie-Hellman key or an old cipher
+  (`[SSL: DH_KEY_TOO_SMALL]`, handshake failure) is rejected by Python's default OpenSSL
+  security level — even though `curl` reaches it. Origami reported the target as *unreachable*
+  and gave up after 1 request. Now, on such a handshake error, the engine transparently drops
+  to **`SECLEVEL=1`**, rebuilds its client pool, and retries — so the scan proceeds (a clear
+  "weak DH / legacy cipher — transport is less secure" warning is logged). New `--legacy-tls`
+  forces it from the start.
+- **Surface the reason.** When the root really is unreachable, the message now includes the
+  transport error (`… unreachable — ConnectError: [SSL: …]` / DNS / reset), instead of a bare
+  "unreachable" that left you guessing. New `ScanResult.error`.
+
 ## [0.96.0] — Verified injection leads: breakout, SSTI, open-redirect, header reflection
 - The `--params` reflection fold no longer stops at *"the value reflects."* It now grades a
   reflection into a **verified lead**:

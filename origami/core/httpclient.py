@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import ssl
 import time
 from dataclasses import dataclass, field
 
@@ -92,12 +93,44 @@ class EngineConfig:
     http2: bool = False                         # negotiate HTTP/2 (ALPN) — matches modern CDNs (--http2; needs the h2 pkg)
     follow_redirects: bool = False              # we want to *see* redirects
     verify_tls: bool = False                    # pentest targets: don't choke on certs
+    legacy_tls: bool = False                    # start with a lowered OpenSSL security level (weak-DH/legacy servers); auto-engaged on a weak-TLS handshake error
     backoff_base: float = 0.8                   # seconds, grows on pushback
     max_body: int = 2_000_000                   # cap body read (bytes) — OOM guard on hostile/huge responses
 
 
 # Statuses that mean "slow down", not "answer".
 _PUSHBACK = {429, 503}
+
+# TLS handshake errors that a *lowered security level* (SECLEVEL=1) resolves —
+# a weak Diffie-Hellman key, an old cipher, or legacy renegotiation the modern
+# default rejects. These are the servers curl reaches but a strict Python OpenSSL
+# refuses; we drop the security level and retry rather than call them "unreachable".
+_WEAK_TLS = ("dh_key_too_small", "dh key too small", "key_too_small",
+             "handshake_failure", "handshake failure", "unsafe_legacy",
+             "md_too_weak", "ca_md_too_weak", "sslv3_alert", "no_ciphers",
+             "unsupported_protocol", "wrong_signature_type", "legacy")
+
+
+def _looks_weak_tls(err: str) -> bool:
+    """True when a transport error is a TLS handshake rejection that lowering the
+    OpenSSL security level (SECLEVEL=1) would fix."""
+    e = err.lower()
+    return ("ssl" in e or "tls" in e) and any(s in e for s in _WEAK_TLS)
+
+
+def _legacy_ssl_context(verify: bool) -> ssl.SSLContext:
+    """A permissive TLS context for legacy servers (weak DH params / old ciphers)
+    that a default OpenSSL security level rejects — mirrors what curl reaches.
+    Drops to SECLEVEL=1; cert verification is kept unless `verify` is False."""
+    ctx = ssl.create_default_context()
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except ssl.SSLError:
+        pass
+    return ctx
 
 # Cap on an honored Retry-After: a server (or a hostile WAF) can send
 # `Retry-After: 86400` — we respect the signal but never stall the scan for a day.
@@ -160,6 +193,12 @@ class Engine:
         self.total_requests = 0      # every logical fetch THIS run (calibration, harvests, scan)
         self.prior_requests = 0      # requests spent on earlier runs of this target (set on --resume)
         self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
+        # Legacy-TLS: some (often enterprise/legacy) servers negotiate a weak DH
+        # key or an old cipher that a default OpenSSL security level rejects — the
+        # handshake fails where curl succeeds. We start strict and, on the first
+        # such handshake error, transparently drop to SECLEVEL=1 and retry.
+        self._legacy_active = bool(self.cfg.legacy_tls)
+        self.legacy_tls_engaged = False   # True once the fallback actually kicked in (for a warning)
 
     @property
     def concurrency_limit(self) -> int:
@@ -174,10 +213,12 @@ class Engine:
 
     def _new_client(self, proxy: str | None) -> httpx.AsyncClient:
         # User-Agent first so an explicit -H "User-Agent: ..." override wins.
+        # `verify` is a lowered-security SSL context once legacy-TLS is engaged.
+        verify = _legacy_ssl_context(self.cfg.verify_tls) if self._legacy_active else self.cfg.verify_tls
         return httpx.AsyncClient(
             timeout=self.cfg.timeout,
             follow_redirects=self.cfg.follow_redirects,
-            verify=self.cfg.verify_tls,
+            verify=verify,
             proxy=proxy or None,
             http2=self.cfg.http2,             # negotiated via ALPN; CLI guards the h2 dep
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
@@ -199,6 +240,25 @@ class Engine:
         self._clients = [self._new_client(p or None) for p in proxies]
         self._client = self._clients[0]       # default/first (back-compat)
         return self
+
+    async def _enable_legacy_tls(self) -> None:
+        """Rebuild the client pool with a lowered TLS security level after a
+        weak-DH/legacy handshake failure — so the rest of the scan reaches the
+        server that curl can. Idempotent; happens at most once (usually the root
+        fetch, before concurrency ramps)."""
+        if self._legacy_active:
+            return
+        self._legacy_active = True
+        self.legacy_tls_engaged = True
+        old = self._clients
+        proxies = self.cfg.proxies or [self.cfg.proxy or ""]
+        self._clients = [self._new_client(p or None) for p in proxies]
+        self._client = self._clients[0]
+        for c in old:
+            try:
+                await c.aclose()
+            except Exception:
+                pass
 
     def _pick_client(self) -> httpx.AsyncClient:
         return self._clients[0] if len(self._clients) == 1 else random.choice(self._clients)
@@ -288,6 +348,10 @@ class Engine:
                     # scan. Only an explicit 429/503 status (below) is a reliable
                     # overload signal. The held in-flight slot already slows us.
                     last_err = f"{type(e).__name__}: {e}"
+                    # A weak-DH/legacy-cipher handshake the strict default rejects:
+                    # drop to SECLEVEL=1 and retry (reaches what curl reaches).
+                    if _looks_weak_tls(last_err) and not self._legacy_active:
+                        await self._enable_legacy_tls()
                     continue
                 except (ValueError, UnicodeError, httpx.InvalidURL) as e:
                     # A malformed candidate URL — e.g. a wordlist/payload whose raw

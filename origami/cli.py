@@ -370,7 +370,7 @@ async def run(args: argparse.Namespace) -> int:
                                    headers=_parse_headers(args.header),
                                    user_agent=args.user_agent or EngineConfig.user_agent,
                                    rotate_ua=args.rotate_ua and not args.user_agent,
-                                   http2=use_http2)
+                                   http2=use_http2, legacy_tls=args.legacy_tls)
                 rpath = resume_mod.path_for(target)
                 saved = resume_mod.load(rpath) if args.resume else None
                 if args.resume and saved is None:
@@ -394,7 +394,8 @@ async def run(args: argparse.Namespace) -> int:
 
                 if (result.requests_made <= 1 and not result.profile.tech_scores
                         and not result.findings):
-                    print(f"[!] {target} unreachable", file=_status_out)
+                    why = f" — {result.error}" if result.error else ""
+                    print(f"[!] {target} unreachable{why}", file=_status_out)
                     rc = 2
                     continue
                 if not jsonl_stdout:           # keep stdout pure JSONL in pipe mode
@@ -503,6 +504,10 @@ def main() -> None:
                     help="wall-clock budget per target, e.g. 30s / 10m / 1h (or bare seconds); "
                          "the scan stops cleanly when it's reached (like --max-requests, by time)")
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
+    ap.add_argument("--legacy-tls", action="store_true",
+                    help="start with a lowered OpenSSL security level (SECLEVEL=1) for servers "
+                         "with weak DH keys / old ciphers (reaches what curl reaches). Auto-engaged "
+                         "on a weak-TLS handshake error even without this flag")
     ap.add_argument("-H", "--header", action="append", metavar="'Name: Value'",
                     help="extra header sent on every request; repeatable "
                          "(e.g. -H 'Cookie: sid=…' -H 'Authorization: Bearer …') — "

@@ -238,6 +238,7 @@ class ScanResult:
     folds: set[str] = field(default_factory=set)
     pushbacks: int = 0            # 429/reset events — target throttled us
     completed: bool = False       # False if interrupted (quit/cap) → resumable
+    error: str = ""               # transport error when the root was unreachable (surfaced to the user)
     edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
     seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
@@ -257,8 +258,13 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 
     # 1. baseline at root + fingerprint -----------------------------------
     root = await engine.fetch(base_url, keep_body=True)
+    if getattr(engine, "legacy_tls_engaged", False):
+        observer.log("tls: server negotiated a weak DH key / legacy cipher — dropped to a "
+                     "lower OpenSSL security level to connect (as curl does); the transport "
+                     "is less secure", 0, style="yellow")
     if not root.ok:
         observer.log(f"root unreachable: {root.error}", 1, style="red")
+        result.error = root.error           # surface WHY (TLS/DNS/reset) instead of a bare "unreachable"
         result.requests_made = engine.total_requests
         return result
 
