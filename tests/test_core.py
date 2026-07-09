@@ -28,6 +28,20 @@ class TestSimhash(unittest.TestCase):
         b = b"<html><body>welcome to the portal</body></html>"
         self.assertEqual(hamming(simhash(b), simhash(b)), 0)
 
+    def test_simhash_golden_values_stable(self):
+        # Locks the exact 64-bit output: simhashes are stored in the memory DB
+        # (--diff, corpus k-NN), so any optimization MUST stay byte-identical or
+        # cross-run comparison silently breaks. Values predate the fast rewrite.
+        golden = {
+            b"": 0xe4a6a0577479b2b4,
+            b"<html>hi</html>": 0x106bce4401410416,
+            b"<html><body><h1>Welcome</h1><p>portal home page</p></body></html>": 0x628292d559e4000a,
+            b'{"status":"running","version":"1.2.2","name":"svc"}': 0x115203b7674b6b87,
+            b"<ul>" + b"<li class='x'>item produto preco</li>" * 40 + b"</ul>": 0xa95b253eb8ce514b,
+        }
+        for body, expected in golden.items():
+            self.assertEqual(simhash(body), expected, f"simhash drifted for {body[:32]!r}")
+
     def test_dynamic_noise_ignored(self):
         # same page, different CSRF token / timestamp each render
         a = b"<html><body>Not Found <!-- csrf=deadbeefdeadbeef 1700000000 --></body></html>"
