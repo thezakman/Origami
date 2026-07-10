@@ -1614,7 +1614,7 @@ async def _graphql_probe(engine, opts, observer, gf, gql_url, meta) -> None:
         except Exception:
             continue
         observer.request(gql_url, pr.status, False)
-        verdict = graphql.classify_probe(pr.status, pr.body or b"")
+        verdict = graphql.classify_probe(pr.status, pr.body or b"", op)
         if verdict == "open":
             open_ops.append(op)
         elif verdict == "reachable":

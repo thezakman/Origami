@@ -5,6 +5,21 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.7] — Review fixes: GraphQL probe accuracy + gau fallback
+- **GraphQL `classify_probe` false `open`** (the worst FP for the auth-bypass feature): the
+  probe selects `__typename` alongside the op, and `__typename` *always* resolves — so a
+  reachable op returning `null` unauthenticated (`me`/`viewer`) read as "returns data without
+  auth". Now `__typename` is excluded from the data check → such ops correctly classify
+  `reachable`, not a false `auth-bypass` lead.
+- **GraphQL auth-named ops mislabeled**: an op literally named `login`/`authenticate` made its
+  own validation error match the auth pattern (via the echoed field name) → dropped as
+  `auth`. The op name is now stripped from the error text before matching, and validation
+  phrasing ("selection of subfields") is recognized → these high-value ops classify `reachable`.
+- **gau hang lost the native fallback**: a gau binary that timed out returned an empty set,
+  which suppressed the four native history sources. It now returns `None` (treated as
+  "unavailable") so native runs — a hung gau no longer means zero history.
+- `--deep --no-history` no longer advertises `wayback` in the preset preamble line (cosmetic).
+
 ## [0.99.6] — `--no-history` to skip the archive step
 - New **`--no-history`**: skip the historical-URL step (Wayback/gau) entirely — for internal
   hosts with no public archive, or when the providers are rate-limiting your IP. Overrides the

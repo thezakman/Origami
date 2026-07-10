@@ -266,7 +266,8 @@ async def run(args: argparse.Namespace) -> int:
                   + (" (only)" if args.ext_only else " (+ auto)"))
         print(f"  filters  : codes {fdesc}")
         if args.deep:
-            print("  deep     : bypass-403 + cache-poison + probe-405 + buckets + params + wayback + origin")
+            _hist = "" if args.no_history else " + wayback"
+            print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params{_hist} + origin")
         if args.header:
             print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
         if args.user_agent:
