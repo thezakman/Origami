@@ -311,7 +311,13 @@ async def run(args: argparse.Namespace) -> int:
         if args.probe_405:
             print("  methods  : 405 → POST/PATCH (empty & {} body) — state-changing, never PUT/DELETE")
         if args.wayback or args.gau:
-            print(f"  history  : {'gau/waybackurls (native fallback)' if args.gau else 'Wayback CDX + Common Crawl'}")
+            if args.gau:
+                from shutil import which
+                gaubin = which("gau") or which("waybackurls")
+                hist = f"{gaubin}" if gaubin else "gau/waybackurls NOT FOUND → native sources"
+            else:
+                hist = "Wayback CDX + Common Crawl + urlscan + OTX (native)"
+            print(f"  history  : {hist}")
         if args.rate:
             print(f"  rate     : {args.rate:g} req/s cap (aggregate)")
         if args.delay:
