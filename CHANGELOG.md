@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.0] — 403-bypass: character percent-encoding of the path
+- New bypass family in `--bypass-403`: **percent-encode individual path characters** so a
+  WAF/ACL matching the literal word (`/admin`) misses while the server decodes it back —
+  encode the last letter (the canonical trick), the first letter, and the whole segment,
+  each **single** (`/hidde%6E`) and **double** (`/hidde%256E`, defeats filters that decode
+  once). Operates on the last path segment; the parent dir and trailing slash are preserved.
+  Grouped under the `path` family (rides `light` mode too). Verified end-to-end that httpx
+  sends the encoded path verbatim on the wire. New `_char_encode_variants()` (unit-tested).
+
 ## [0.98.1] — Faster simhash (runs on every response) — byte-identical output
 - Rewrote `normalize.simhash` — the structural fingerprint computed on **every** HTTP
   response (soft-404 calibration, dedup, `--diff`, corpus k-NN). Two lossless changes:

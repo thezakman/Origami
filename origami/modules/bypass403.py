@@ -172,6 +172,43 @@ def _swapcase(p: str) -> str:
     return "/" + p.lstrip("/").swapcase()
 
 
+def _pct(c: str) -> str:
+    """Single percent-encode a character: 'n' -> '%6E'."""
+    return f"%{ord(c):02X}"
+
+
+def _pct2(c: str) -> str:
+    """Double percent-encode: 'n' -> '%256E' (the `%` itself encoded), so a filter
+    that decodes the input ONCE still sees `%6E`, not `n`."""
+    return f"%25{ord(c):02X}"
+
+
+def _char_encode_variants(p: str) -> list[tuple[str, str]]:
+    """Percent-encode individual path characters so a WAF/ACL matching the literal
+    word (`/admin`) misses while the server still decodes back to it — the "encode
+    the last letter" trick. Returns (label, request_path). Operates on the last
+    path segment (the resource name, the usual filter target); the last character
+    is the canonical case, plus the first char and the whole segment (single AND
+    double encoded)."""
+    core = p.rstrip("/")
+    trail = "/" if p.endswith("/") and core else ""
+    seg = core.rsplit("/", 1)[-1]
+    if not seg or not any(c.isalnum() for c in seg):
+        return []
+    head = core[: len(core) - len(seg)]
+    out: list[tuple[str, str]] = []
+    if seg[-1].isalnum():                                       # last char (the canonical trick)
+        out.append((f"path enc-char last {_pct(seg[-1])}", head + seg[:-1] + _pct(seg[-1]) + trail))
+        out.append((f"path enc-char last2 {_pct2(seg[-1])}", head + seg[:-1] + _pct2(seg[-1]) + trail))
+    if len(seg) > 1 and seg[0].isalnum():                       # first char
+        out.append((f"path enc-char first {_pct(seg[0])}", head + _pct(seg[0]) + seg[1:] + trail))
+    whole = "".join(_pct(c) if c.isalnum() else c for c in seg)
+    out.append(("path enc-char all", head + whole + trail))    # every letter — defeats any substring match
+    whole2 = "".join(_pct2(c) if c.isalnum() else c for c in seg)
+    out.append(("path enc-char all2", head + whole2 + trail))  # …double-encoded (single-decode filters)
+    return out
+
+
 def variants(path: str, case_insensitive: bool = False,
              header_pairs: list[tuple[str, str]] | None = None, *,
              intensity: str = "auto", encoded: bool = True, api: bool = True,
@@ -228,6 +265,10 @@ def variants(path: str, case_insensitive: bool = False,
     if not case_insensitive:                       # pointless on a case-insensitive ACL
         add(f"path {p.upper()}", "GET", p.upper(), {})
         add(f"path {_swapcase(p)}", "GET", _swapcase(p), {})
+    # character percent-encoding — encode a path letter (last/first/whole, single
+    # and double) so a WAF regex on the literal word misses; the server decodes.
+    for label, rpath in _char_encode_variants(p):
+        add(label, "GET", rpath, {})
 
     # --- header injection (same path) ---
     if header_pairs:                               # user wordlist replaces the built-in axis
