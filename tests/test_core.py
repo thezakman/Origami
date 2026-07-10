@@ -928,6 +928,21 @@ class TestBypass403(unittest.TestCase):
         vpaths = {m for _, _, m, _ in variants("/admin")}
         self.assertIn("/admi%6E", vpaths)
 
+    def test_normalization_diff_variants(self):
+        # bare-suffix + traversal-resolve tricks that exploit edge-vs-app
+        # normalization differences (the video's slash/dot/traversal families).
+        from origami.modules.bypass403 import variants, _traversal_resolve_variants
+        v = {m for _, _, m, _ in variants("/admin")}
+        for want in ("/admin..", "/admin;", "/admin.", "/admin/..",
+                     "/admin/%2e/", "/admin.js", "/admin;.json", "/admin.json;"):
+            self.assertIn(want, v)
+        # traversal that resolves back to the target
+        tr = {rp for _, rp in _traversal_resolve_variants("/admin")}
+        self.assertIn("/admin/../admin", tr)              # append /../<seg>
+        self.assertIn("/x/../admin", tr)                  # prepend bogus dir + up
+        self.assertIn("/admin/%252e%252e/admin", tr)      # double-encoded ..
+        self.assertTrue(v.issuperset(tr))                 # all wired into variants()
+
     def test_variants_skip_case_tricks_on_insensitive_host(self):
         # on a case-insensitive (IIS) ACL, upper/swapcase hit the same resource
         from origami.modules.bypass403 import variants

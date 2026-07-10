@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.1] — 403-bypass: normalization-difference variants (slash/dot/traversal)
+- More `--bypass-403` path tricks that exploit normalization differences between the
+  edge (CDN/WAF/proxy) and the app router:
+  - bare trailing suffixes `/admin..`, `/admin;`, `/admin.`, `/admin/..`, encoded-dot
+    suffixes `/admin/%2e/`, `/admin/%2e%2e/`, extension spoofs `.js`/`.txt` and
+    `/admin;.json`, `/admin.json;` (content-negotiation/extension routing past the ACL);
+  - **traversal that resolves back to the target** — `/admin/../admin`, `/x/../admin`
+    (+ encoded/double-encoded `..`): the edge matches its ACL on the raw string, the app
+    collapses the traversal and routes to `/admin` anyway. New `_traversal_resolve_variants()`.
+- All under the `path` family (unit-tested). Deliberately NOT added: PUT/DELETE and
+  arbitrary verbs (state-changing / low-signal — the method swap stays POST/PATCH, which
+  can return the content); "content below the blocked dir" is already covered by the
+  scanner's 403-directory recursion.
+
 ## [0.99.0] — 403-bypass: character percent-encoding of the path
 - New bypass family in `--bypass-403`: **percent-encode individual path characters** so a
   WAF/ACL matching the literal word (`/admin`) misses while the server decodes it back —
