@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.5] — Clearer `--gau` handling (the "(native fallback)" label lied)
+- The preamble printed `history : gau/waybackurls (native fallback)` **whenever `--gau` was
+  set** — it was static text, not a detection result, so it read as "gau not found" even when
+  gau was installed and being used. Now it shows the actual resolved path
+  (`history : /Users/…/go/bin/gau`) or a clear `NOT FOUND → native sources`.
+- With `--gau`, the native HTTP sources are **no longer re-queried after gau ran** — gau hits
+  the same four providers, so running both was a pure double-query (and a second stall). Native
+  is now only the fallback for when no gau/waybackurls binary exists.
+- `gau --timeout` (8s) and the subprocess wait (10s) are kept under the scanner's history
+  budget, so gau is cut cleanly instead of being cancelled by the outer budget.
+- Note: if the archive providers are down/rate-limiting your IP (e.g. `gau example.com` itself
+  returns nothing after ~55s), history is genuinely unavailable — Origami now caps the wait and
+  continues instead of hanging on it.
+
 ## [0.99.4] — History: partial results instead of all-or-nothing on a hung source
 - The four native history sources (Wayback CDX / Common Crawl / urlscan / OTX) run
   concurrently, but each had a **25s** HTTP timeout — longer than the scanner's 12s history

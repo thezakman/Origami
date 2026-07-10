@@ -197,7 +197,7 @@ async def from_otx(host: str, cap: int = _FETCH_ROWS, subs: bool = False) -> set
         return parse_otx(await _get(c, otx_query_url(host)))
 
 
-_GAU_TIMEOUT = 25.0
+_GAU_TIMEOUT = 10.0                               # subprocess wait — just above gau's own --timeout
 
 
 async def _reap(proc) -> None:
@@ -222,7 +222,9 @@ async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
     for binary in binaries:
         args = [binary]
         if binary == "gau":
-            args += ["--threads", "5", "--timeout", "20"]
+            # --timeout kept under the scanner's history budget so gau returns
+            # whatever the providers gave instead of being cut off with nothing.
+            args += ["--threads", "5", "--timeout", "8"]
             if subs:
                 args += ["--subs"]
         args.append(host)
@@ -254,12 +256,14 @@ async def harvest(host: str, *, use_gau: bool = False, cap: int = DEFAULT_CAP,
     failure returns (set(), set(), "none"). `paths` is capped at `cap`."""
     urls: set[str] = set()
     source = "none"
+    gau_ran = False
     if use_gau:
         gau = await _safe(from_gau(host, cap=_FETCH_ROWS, subs=subs))
-        if gau is not None:
+        if gau is not None:                      # None == binary absent → native fallback
             urls = gau
             source = "gau"
-    if not urls:                                 # native (default, or gau fallback)
+            gau_ran = True                        # gau covers the SAME providers → don't re-query
+    if not urls and not gau_ran:                 # native only when no gau binary was found
         # all four passive sources concurrently — a slow/down one can't hold up the rest
         cdx, cc, us, otx = await asyncio.gather(
             _safe(from_cdx(host, cap=_FETCH_ROWS, subs=subs)),
