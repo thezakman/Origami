@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.4] — History: partial results instead of all-or-nothing on a hung source
+- The four native history sources (Wayback CDX / Common Crawl / urlscan / OTX) run
+  concurrently, but each had a **25s** HTTP timeout — longer than the scanner's 12s history
+  budget. So when one source hung (commonly the slow Common Crawl index), the whole
+  `gather()` was still pending at 12s and got **cancelled — losing the results the fast
+  sources had already returned**. Now the per-source timeout is **8s** (comfortably under the
+  budget), so the gather returns with whatever answered and a single hung source only costs
+  its own empty result, not the entire harvest.
+
 ## [0.99.3] — Don't let a hung history source stall the scan for 30s
 - The historical-URL lookup (`--wayback`/`--gau`) is kicked off in the background during
   fingerprint and folded as **optional** seeds. But the fold `await`ed it with a fresh 30s
