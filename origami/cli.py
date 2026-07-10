@@ -218,7 +218,8 @@ async def run(args: argparse.Namespace) -> int:
         openapi_source=args.openapi, vhost=args.vhost, origin=args.origin or args.deep,
         overlays=not args.no_overlays,
         param_fuzz=args.params or args.deep,
-        wayback=args.wayback or args.gau or args.deep, gau=args.gau,
+        wayback=(args.wayback or args.gau or args.deep) and not args.no_history,
+        gau=args.gau and not args.no_history,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
         cache_headers=args.cache_headers,
         probe_405=args.probe_405 or args.deep, buckets=args.buckets or args.deep,
@@ -310,7 +311,7 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  cache    : poisoning probe ({lvl}{extra}) — throwaway cache-buster, never the real key")
         if args.probe_405:
             print("  methods  : 405 → POST/PATCH (empty & {} body) — state-changing, never PUT/DELETE")
-        if args.wayback or args.gau:
+        if (args.wayback or args.gau or args.deep) and not args.no_history:
             if args.gau:
                 from shutil import which
                 gaubin = which("gau") or which("waybackurls")
@@ -655,6 +656,10 @@ def main() -> None:
     ap.add_argument("--gau", action="store_true",
                     help="like --wayback but prefer your gau/waybackurls binary (richer providers); "
                          "falls back to the native sources if the binary isn't installed")
+    ap.add_argument("--no-history", action="store_true",
+                    help="skip the historical-URL step entirely (Wayback/gau) — for internal "
+                         "hosts with no public archive, or when the providers are rate-limiting "
+                         "your IP. Overrides the --wayback/--gau that --deep turns on")
     ap.add_argument("-x", "--exclude", action="append", metavar="PATTERN",
                     help="never request or recurse a path containing PATTERN "
                          "(case-insensitive, repeatable) — safety rail for "

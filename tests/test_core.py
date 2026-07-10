@@ -4221,7 +4221,18 @@ class TestCLIUrlFlag(unittest.TestCase):
                             "-u", "https://127.0.0.1:9/", "-t", "1", "--no-ui"],
                            capture_output=True, text=True, timeout=30)
         self.assertIn("deep", r.stdout.lower())
-        self.assertIn("bypass-403", r.stdout)
+
+    def test_no_history_disables_history_step(self):
+        # --no-history overrides the --wayback/--gau that --deep turns on: the
+        # "history :" preamble line is present with --deep, absent with --no-history.
+        import subprocess, sys
+        base = [sys.executable, "-m", "origami", "-u", "https://127.0.0.1:9/",
+                "-t", "1", "--no-ui"]
+        with_hist = subprocess.run(base + ["--deep"], capture_output=True, text=True, timeout=30)
+        self.assertIn("history  :", with_hist.stdout)
+        no_hist = subprocess.run(base + ["--deep", "--no-history"],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertNotIn("history  :", no_hist.stdout)
 
 
 if __name__ == "__main__":

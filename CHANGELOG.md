@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.6] — `--no-history` to skip the archive step
+- New **`--no-history`**: skip the historical-URL step (Wayback/gau) entirely — for internal
+  hosts with no public archive, or when the providers are rate-limiting your IP. Overrides the
+  `--wayback`/`--gau` that `--deep` turns on, so `origami --deep --no-history` runs everything
+  else without waiting on the archives. (The history sources are keyless — no API quota to
+  exhaust; a stall is provider-side IP rate-limiting, not your `--origin` OSINT keys.)
+
 ## [0.99.5] — Clearer `--gau` handling (the "(native fallback)" label lied)
 - The preamble printed `history : gau/waybackurls (native fallback)` **whenever `--gau` was
   set** — it was static text, not a detection result, so it read as "gau not found" even when
