@@ -1011,6 +1011,22 @@ class TestBypass403(unittest.TestCase):
         self.assertNotIn(f, result.findings)             # …and supersedes the original 403
         self.assertTrue(any(s.origin == "bypass403" for s in streamed))  # and is streamed (JSONL)
 
+    def test_bypass_tech_key_transfers_across_resources(self):
+        # cross-resource learning: a technique that works on one 403 must key the
+        # same on another so it's fired first there (with the per-resource early-exit).
+        from origami.core.scanner import _bypass_tech_key
+        # suffix trick: /admin%2f and /users%2f share a key
+        self.assertEqual(_bypass_tech_key("/admin", "GET", "/admin%2f", {}),
+                         _bypass_tech_key("/users", "GET", "/users%2f", {}))
+        # header trick transfers regardless of path
+        self.assertEqual(_bypass_tech_key("/admin", "GET", "/admin", {"X-Real-IP": "127.0.0.1"}),
+                         _bypass_tech_key("/x", "GET", "/x", {"X-Real-IP": "127.0.0.1"}))
+        # different techniques → different keys
+        self.assertNotEqual(_bypass_tech_key("/admin", "GET", "/admin%2f", {}),
+                            _bypass_tech_key("/admin", "GET", "/admin//", {}))
+        self.assertNotEqual(_bypass_tech_key("/admin", "GET", "/admin", {}),
+                            _bypass_tech_key("/admin", "POST", "/admin", {}))   # method matters
+
     def test_variants_hop_by_hop_and_api_prefix(self):
         # advanced families: hop-by-hop (spoof+strip) + API version-prefix + enc-sep
         from origami.modules.bypass403 import variants
