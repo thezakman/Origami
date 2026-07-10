@@ -81,6 +81,8 @@ def _ext_excluded(path: str, patterns) -> bool:
 # --max-requests, not by starving the best candidates.
 MAX_HARVEST_SEEDS = 2000
 MAX_WAYBACK_SEEDS = 2000   # cap historical (Wayback/gau) paths folded as candidates
+WAYBACK_BUDGET = 12.0      # total wall-clock budget for the (optional) history lookup —
+                           # bounds how long the scan will BLOCK on it before starting
 
 
 def _host_root(url: str) -> str:
@@ -322,10 +324,14 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     await bl.calibrate(engine, profile, [(base_prefix, e) for e in _BASE_CALIB_EXTS + [".php", ".aspx"]])
 
     # Kick off the (slow, external) historical-URL lookup NOW, in the background,
-    # so it runs while we fingerprint/calibrate; recon awaits its result below.
+    # so it runs while we fingerprint/calibrate; recon folds its result below under
+    # a TOTAL wall-clock budget from here (not a fresh wait at the await), so a
+    # hung history source can't stall the whole scan — the seeds are optional.
     wb_task = None
+    wb_deadline = 0.0
     if opts.wayback or opts.gau:
         wb_task = asyncio.create_task(wayback.harvest(profile.host, use_gau=opts.gau))
+        wb_deadline = time.monotonic() + WAYBACK_BUDGET
 
     observer.phase("fingerprint")
     # The only unguarded code between the wb_task kickoff and its await is the
@@ -514,12 +520,17 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # historical URLs (kicked off at fingerprint, now in hand) → fold as seeds.
     if wb_task is not None:
         _recon("wayback")
+        # Only the time REMAINING in the total budget — recon already ran the task
+        # concurrently, so a fast source is already done here (instant), and a hung
+        # one is cut at the budget instead of stalling the scan for a fresh 30s.
+        remaining = max(0.5, wb_deadline - time.monotonic())
         try:
-            wb_paths, wb_params, wb_src = await asyncio.wait_for(wb_task, timeout=30)
+            wb_paths, wb_params, wb_src = await asyncio.wait_for(wb_task, timeout=remaining)
         except Exception as e:        # timeout/any error: never let history stall/break the scan
             wb_task.cancel()
             wb_paths, wb_params, wb_src = set(), set(), "skipped"
-            observer.log(f"wayback: skipped ({type(e).__name__})", 0, style="yellow")
+            observer.log(f"wayback: skipped ({type(e).__name__}) — history is optional, "
+                         f"scan continues", 0, style="yellow")
         scoped = [p for p in _scope_paths(wb_paths, profile.host, opts.scope)
                   if not _excluded("/" + p.lstrip("/"), opts)][:MAX_WAYBACK_SEEDS]
         if scoped:

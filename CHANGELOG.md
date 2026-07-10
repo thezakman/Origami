@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.3] — Don't let a hung history source stall the scan for 30s
+- The historical-URL lookup (`--wayback`/`--gau`) is kicked off in the background during
+  fingerprint and folded as **optional** seeds. But the fold `await`ed it with a fresh 30s
+  timeout, so a hung/slow source (Wayback/Common Crawl/gau down) **stalled the whole scan for
+  up to 30 seconds** before the main brute-force even started.
+- Now it's a **total wall-clock budget from kickoff** (`WAYBACK_BUDGET = 12s`): recon already
+  runs the lookup concurrently, so a fast source is done by the time we fold it (instant), and
+  a hung one is cut at the budget — the scan blocks for at most ~12s minus however long recon
+  took, instead of a fresh 30s. History is optional; the scan continues regardless.
+
 ## [0.99.2] — 403-bypass learns the WAF's weakness (winner-first, cross-resource)
 - The bypass battery is now **adaptive**: when a technique flips one 403→2xx, that
   technique is remembered and fired **first** on every subsequent 403. Combined with the
