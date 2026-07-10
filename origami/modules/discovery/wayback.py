@@ -30,7 +30,12 @@ from origami.core.scope import same_site
 
 # A plain, honest UA — archives rate-limit/great-wall anonymous floods.
 _UA = "origami-discovery/1.0 (+historical-url harvest)"
-_TIMEOUT = 25.0
+# Per-source HTTP timeout. Kept comfortably UNDER the scanner's total history budget
+# (WAYBACK_BUDGET, 12s) so the concurrent gather() always returns with whatever
+# sources answered before the scan cuts it off — a single hung source (e.g. a slow
+# Common Crawl index) times out here and the fast sources' results are still kept,
+# instead of the whole harvest being cancelled and everything lost.
+_TIMEOUT = 8.0
 DEFAULT_CAP = 2000                                # max paths folded from history
 _FETCH_ROWS = 10000                               # raw rows pulled before extraction/cap
 _GAU_BINARIES = ("gau", "waybackurls")
@@ -213,7 +218,7 @@ async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
     """Shell out to gau/waybackurls if present. None if no binary is available.
 
     The child is always reaped: on its own timeout, and on cancellation (the
-    scanner cancels the background task at 30s) — never left running detached."""
+    scanner cuts the background task at its history budget) — never left detached."""
     for binary in binaries:
         args = [binary]
         if binary == "gau":
