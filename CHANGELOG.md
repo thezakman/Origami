@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.2] — 403-bypass learns the WAF's weakness (winner-first, cross-resource)
+- The bypass battery is now **adaptive**: when a technique flips one 403→2xx, that
+  technique is remembered and fired **first** on every subsequent 403. Combined with the
+  existing per-resource early-exit, the 2nd..Nth bypassable wall (same WAF → same weakness)
+  usually costs **~1 request** instead of the whole battery — the same thoroughness, far
+  fewer requests when a weakness exists. The reused trick is logged `(learned)`.
+- Technique keys are **resource-independent** (`/admin%2f` and `/users%2f` share a key), so
+  suffix/prefix/header/method weaknesses transfer across resources. New `_bypass_tech_key()`.
+- Reordering never changes *which* variants are tried (no bypass missed) — only the order,
+  so a known-good trick is found immediately. The fold remains **401/403-only**.
+
 ## [0.99.1] — 403-bypass: normalization-difference variants (slash/dot/traversal)
 - More `--bypass-403` path tricks that exploit normalization differences between the
   edge (CDN/WAF/proxy) and the app router:

@@ -2442,6 +2442,16 @@ def _select_bypass_targets(findings, per_wall=BYPASS_PER_WALL, cap=MAX_BYPASS_TA
     return diverse[:cap], skipped + max(0, len(diverse) - cap)
 
 
+def _bypass_tech_key(path: str, method: str, rpath: str, headers: dict):
+    """A resource-INDEPENDENT signature of a bypass technique, so a trick that flips
+    one 403 can be recognized and fired FIRST on the next 403. Replacing the resource
+    path with a placeholder makes `/admin%2f` and `/users%2f` share the key — the
+    suffix/prefix/header/method tricks (the usual WAF weaknesses) transfer across
+    resources; the char-case tricks that rewrite the path don't, which is fine."""
+    sig = rpath.replace(path, "\x00") if path and path in rpath else rpath
+    return (method, sig, frozenset((headers or {}).items()))
+
+
 async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) -> None:
     """For each 403/401, fire curated bypass variants; report a surviving 2xx.
 
@@ -2506,6 +2516,21 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
             encoded=enc_stack, api=_api_gate(f),
             mgmt=mgmt_stack and bypass403.is_management_path(p), route_prefixes=route_prefixes)
 
+    # Cross-resource learning: a technique that bypassed one 403 is fired FIRST on
+    # the next (same WAF → same weakness), so with the per-resource early-exit the
+    # 2nd..Nth bypassable wall usually costs ~1 request instead of the whole battery.
+    winners: list = []
+
+    def _ordered_vars(f):
+        vs = _vars_for(f)
+        if not winners:
+            return vs
+        p = urlparse(f.url).path
+        rank = {k: i for i, k in enumerate(winners)}
+        # stable sort → known winners lead (in discovery order), the rest keep order
+        return sorted(vs, key=lambda v: rank.get(_bypass_tech_key(p, v[1], v[2], v[3]),
+                                                  len(winners)))
+
     observer.phase("403-bypass")
     msg = f"403-bypass: probing {len(blocked)} blocked resources ({intensity})"
     if header_pairs:
@@ -2523,7 +2548,7 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rstrip("/").rsplit("/", 1)[-1] or path)   # 403-bypass: <resource>
-        for label, method, rpath, headers in _vars_for(f):
+        for label, method, rpath, headers in _ordered_vars(f):
             if _over_budget(engine, opts):
                 return
             url = urljoin(root, rpath.lstrip("/"))
@@ -2550,8 +2575,12 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
             result.seen_urls.discard(f.url)
             result.seen_urls_lc.discard(f.url.lower())
             _report(observer, result, opts, bf, f.url)
-            observer.log(f"403-bypass: {observer.disp(f.url)} → {probe.status} via {label}",
-                         0, style="bold green")
+            key = _bypass_tech_key(path, method, rpath, headers)
+            learned = key in winners
+            if not learned:
+                winners.append(key)                       # remember the working trick for later 403s
+            observer.log(f"403-bypass: {observer.disp(f.url)} → {probe.status} via {label}"
+                         + (" (learned)" if learned else ""), 0, style="bold green")
             break                                         # one confirmed bypass per resource
 
 
