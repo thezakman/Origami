@@ -909,6 +909,25 @@ class TestBypass403(unittest.TestCase):
         from origami.modules.bypass403 import variants
         self.assertFalse(any("#" in m for _, _, m, _ in variants("/admin")))
 
+    def test_char_encode_variants(self):
+        # encode a path letter so a WAF regex on the literal word misses; the
+        # server still decodes it. Single (%6E) and double (%256E).
+        from origami.modules.bypass403 import _char_encode_variants, variants
+        paths = {rp for _, rp in _char_encode_variants("/hidden")}
+        self.assertIn("/hidde%6E", paths)                   # last char, single-encoded
+        self.assertIn("/hidde%256E", paths)                 # last char, double-encoded
+        self.assertIn("/%68idden", paths)                   # first char
+        self.assertIn("/%68%69%64%64%65%6E", paths)         # whole segment
+        # only the last SEGMENT is encoded; the parent dir is preserved
+        seg = {rp for _, rp in _char_encode_variants("/admin/secret")}
+        self.assertTrue(all(rp.startswith("/admin/") for rp in seg))
+        self.assertIn("/admin/secre%74", seg)
+        # a trailing-slash directory keeps its slash
+        self.assertIn("/hidde%6E/", {rp for _, rp in _char_encode_variants("/hidden/")})
+        # wired into variants() under the 'path' family (so it rides light mode too)
+        vpaths = {m for _, _, m, _ in variants("/admin")}
+        self.assertIn("/admi%6E", vpaths)
+
     def test_variants_skip_case_tricks_on_insensitive_host(self):
         # on a case-insensitive (IIS) ACL, upper/swapcase hit the same resource
         from origami.modules.bypass403 import variants
