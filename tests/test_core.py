@@ -643,10 +643,11 @@ class TestWayback(unittest.TestCase):
             W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx = orig
 
     def test_from_gau_timeout_reaps_child(self):
-        # a hung gau must hit its own timeout, be reaped, and return empty fast —
-        # never left running detached. Pass the fake binary EXPLICITLY (`binaries`
-        # is a def-time default, so rebinding the module global wouldn't take) so
-        # the test is deterministic regardless of whether gau is installed.
+        # a hung gau must hit its own timeout, be reaped, and return fast — never
+        # left running detached. It returns None (not empty) so the caller treats a
+        # hung binary as unavailable and falls back to the native sources. Pass the
+        # fake binary EXPLICITLY (`binaries` is a def-time default) so the test is
+        # deterministic regardless of whether gau is installed.
         import asyncio, time
         from origami.modules.discovery import wayback as W
         orig_to = W._GAU_TIMEOUT
@@ -654,7 +655,7 @@ class TestWayback(unittest.TestCase):
             W._GAU_TIMEOUT = 0.3
             t0 = time.time()
             res = asyncio.run(W.from_gau("5", binaries=("sleep",)))  # `sleep 5` >> 0.3s timeout
-            self.assertEqual(res, set())
+            self.assertIsNone(res)                  # timeout → None → native fallback runs
             self.assertLess(time.time() - t0, 3.0)  # returned promptly, didn't block 5s
         finally:
             W._GAU_TIMEOUT = orig_to
@@ -1740,6 +1741,16 @@ class TestGraphQL(unittest.TestCase):
             "reachable")
         # data: null, no error → reachable
         self.assertEqual(graphql.classify_probe(200, json.dumps({"data": {"carteira": None}}).encode()), "reachable")
+        # __typename ALWAYS resolves — a null op alongside it must NOT read as 'open'
+        self.assertEqual(graphql.classify_probe(200, json.dumps(
+            {"data": {"__typename": "Query", "me": None}}).encode(), "me"), "reachable")
+        self.assertEqual(graphql.classify_probe(200, json.dumps(
+            {"data": {"__typename": "Query", "carteira": {"x": 1}}}).encode(), "carteira"), "open")
+        # an op literally named `authenticate` with a validation error → reachable, NOT auth
+        # (the echoed op name must not self-match the auth pattern)
+        self.assertEqual(graphql.classify_probe(200, json.dumps(
+            {"errors": [{"message": "Field 'authenticate' must have a selection of subfields"}]}).encode(),
+            "authenticate"), "reachable")
 
 
 class TestWellKnown(unittest.TestCase):

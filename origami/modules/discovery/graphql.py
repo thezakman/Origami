@@ -119,15 +119,19 @@ _AUTH_ERR = re.compile(
     r"(?i)(authoriz|authenti|forbidden|permission|access denied|must be logged|"
     r"invalid token|missing token|autoriz|acesso negado|autentic|login required|"
     r"jwt|bearer|401|403)")
+# "must provide" is deliberately NOT here — it also appears in auth messages
+# ("must provide a token"), which would let a genuine auth block read as validation.
 _VALIDATION_ERR = re.compile(
     r"(?i)(argument|of type|required|not provided|cannot query field|unknown|"
-    r"expected|must provide|sub.?selection|did you mean|syntax)")
+    r"expected|selection|subfield|did you mean|syntax)")
 
 
-def classify_probe(status: int, body: bytes) -> str:
+def classify_probe(status: int, body: bytes, op: str = "") -> str:
     """Classify a benign GraphQL probe → 'open' (executed without auth),
     'reachable' (past the gate, only a validation error), 'auth' (gate blocked),
-    or 'error' (inconclusive)."""
+    or 'error' (inconclusive). `op` (the probed operation name) is stripped from
+    error text before matching so an op literally named `login`/`authenticate`
+    can't self-match the auth pattern via the echoed field name."""
     if status in (401, 403):
         return "auth"
     try:
@@ -138,10 +142,17 @@ def classify_probe(status: int, body: bytes) -> str:
         return "error"
     errs = doc.get("errors")
     data = doc.get("data")
-    if isinstance(data, dict) and any(v is not None for v in data.values()):
-        return "open"                              # returned data with no auth → BOLA/auth-bypass
+    # `__typename` ALWAYS resolves (to the root type name) whenever a query executes,
+    # so it must NOT count as "returned data" — else every reachable op that returns
+    # null (e.g. `me`/`viewer` unauthenticated) would falsely read as 'open'.
+    if isinstance(data, dict):
+        real = [v for k, v in data.items() if k != "__typename"]
+        if real and any(v is not None for v in real):
+            return "open"                          # returned real data w/o auth → BOLA/auth-bypass
     if errs:
         msg = json.dumps(errs).lower()
+        if op:
+            msg = msg.replace(op.lower(), "")      # don't let the echoed op name match the patterns
         if _AUTH_ERR.search(msg):
             return "auth"
         if _VALIDATION_ERR.search(msg):

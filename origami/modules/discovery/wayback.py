@@ -238,7 +238,8 @@ async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=_GAU_TIMEOUT)
         except asyncio.TimeoutError:
             await _reap(proc)
-            return set()
+            return None                          # gau hung → treat as unavailable, try native
+
         except BaseException:                    # cancellation / loop teardown
             await _reap(proc)
             raise
