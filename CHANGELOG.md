@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.8] — Empty-body 2xx demoted; 5xx floods muted (less noise)
+- A **`200` with a 0-byte body no longer reads as a high-confidence disclosure**. An empty
+  `backup.old`/`config.bak`/`.py` leaked nothing, and an empty 200 is usually a
+  catch-all/placeholder — so the content-implying tags (`disclosure`/`config`/`source`/
+  `upload`/`listing`) are dropped, confidence is capped at 0.4, and the note says
+  `empty body`. A non-empty response is untouched (real content still flags `disclosure`).
+- **5xx upstream-down floods are muted.** A `502`/`503`/… error page served identically for
+  every path is a dead backend, not per-path signal — 5xx joins the wall-flood control
+  (`_WALL_STATUS`), so it's muted in the live stream past a few and collapsed in the report.
+
 ## [0.99.7] — Review fixes: GraphQL probe accuracy + gau fallback
 - **GraphQL `classify_probe` false `open`** (the worst FP for the auth-bypass feature): the
   probe selects `__typename` alongside the op, and `__typename` *always* resolves — so a

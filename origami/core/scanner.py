@@ -20,10 +20,11 @@ from urllib.parse import urljoin, urlparse
 # More than this many byte-identical results (same status+simhash) = a catch-all
 # or generic page; collapse to one representative + a count.
 COLLISION_MAX = 4
-# Blocked statuses whose identical-body flood is a generic block wall (forbids
-# every .env*/.git*…) — muted in the live stream past COLLISION_MAX. 2xx/3xx are
-# left to the end-of-scan collapse, which keys on length without this gate.
-_WALL_STATUS = frozenset({401, 403, 405})
+# Blocked/erroring statuses whose identical-body flood is a generic wall — a 403
+# block page forbidding every .env*/.git*, or a 5xx upstream-down page served for
+# every path (a dead backend, not per-path signal). Muted in the live stream past
+# COLLISION_MAX. 2xx/3xx are left to the end-of-scan collapse (keyed on length).
+_WALL_STATUS = frozenset({401, 403, 405, 500, 502, 503, 504})
 # Origins that come from a DECLARED contract (an OpenAPI/Swagger spec, a
 # .well-known index) — a bounded, curated set where every path is a real, named
 # endpoint. A 401/403 on one is high-value intel ("exists, needs auth"), not a

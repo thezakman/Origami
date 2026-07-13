@@ -66,6 +66,10 @@ _TAG_RULES = [
                 ".phps", ".kt", ".scala", ".class")),
 ]
 
+# Tags that assert LEAKED CONTENT — meaningless on a 0-byte body (an empty
+# `config.bak`/`.old`/`.py` disclosed nothing). Dropped for empty 2xx responses.
+_EMPTY_BODY_DROP_TAGS = {"disclosure", "config", "source", "upload", "listing"}
+
 
 _TOKEN_SEP = re.compile(r"[-_/.]+")
 
@@ -268,6 +272,13 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
     if 200 <= probe.status < 300 and is_dir_listing(probe.body_head):
         tags.append("listing")          # autoindex enabled — exposes the dir's files
+    # An EMPTY 2xx body leaked nothing — a 0-byte `backup.old` is not a disclosure,
+    # and an empty 200 is usually a catch-all/placeholder, not a real resource. Drop
+    # the content-implying tags and demote it so it doesn't read as a high-confidence
+    # find (`200 0B disclosure 0.95`). The path still exists, so it's reported — quietly.
+    empty = 200 <= probe.status < 300 and probe.length == 0
+    if empty:
+        tags = [t for t in tags if t not in _EMPTY_BODY_DROP_TAGS]
     # No baseline — or a baseline whose calibration probes ALL failed (samples==0,
     # e.g. a transient throttle/network blip during calibration). A samples==0
     # baseline defaults to status 404, which would pass EVERY 200 on a soft-404
@@ -275,9 +286,10 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     # it as no-baseline: cautious 0.5, never the high-confidence path.
     if cb is None or cb.samples == 0:
         if probe.status in (200, 204, 301, 302, 401, 403, 405):
+            nb = (note405 + " · no-baseline") if note405 else "no-baseline"
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
-                           0.5, origin,
-                           note=(note405 + " · no-baseline") if note405 else "no-baseline",
+                           0.4 if empty else 0.5, origin,
+                           note=(nb + " · empty body") if empty else nb,
                            tags=tags, simhash=probe.body_simhash,
                            words=probe.words, lines=probe.lines)
         return None
@@ -285,7 +297,9 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     if looks_like_miss(probe, cb):
         return None
 
-    confidence = _confidence(probe, cb)
+    confidence = min(_confidence(probe, cb), 0.4) if empty else _confidence(probe, cb)
+    if empty:
+        note405 = (note405 + " · " if note405 else "") + "empty body"
     return Finding(probe.url, probe.status, probe.length, probe.content_type,
                    confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash,
                    words=probe.words, lines=probe.lines)
