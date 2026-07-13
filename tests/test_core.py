@@ -1294,7 +1294,12 @@ class TestReflectionLeads(unittest.TestCase):
         from origami.modules import paramfuzz as pf
         tm = {"oz0q": "redirect", "oz1q": "x"}
         self.assertEqual(pf.reflected_in_location("https://evil.com/oz0q", tm), ["redirect"])
+        self.assertEqual(pf.reflected_in_location("/oz0q", tm), ["redirect"])   # canary in path
         self.assertEqual(pf.reflected_in_location("", tm), [])
+        # NOT an open-redirect: a trailing-slash canonicalization redirect that just
+        # PRESERVES the request query (/x → /x/?...) echoes every canary in the query,
+        # but none steer the destination → must flag nothing (was a 78-param FP).
+        self.assertEqual(pf.reflected_in_location("/assets/?redirect=oz0q&x=oz1q", tm), [])
         # a canary in an X- header is a lead; the same canary in Location is NOT
         # double-counted here (Location is handled by reflected_in_location)
         self.assertEqual(pf.reflected_in_headers({"x-foo": "oz1q", "location": "oz0q"}, tm),

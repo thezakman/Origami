@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [0.99.9] — Fix open-redirect false positives on trailing-slash redirects
+- The `--params` open-redirect check flagged a canary found **anywhere** in the `Location`
+  header. A canonicalization redirect (`/assets` → `/assets/`) that **preserves the request
+  query string** echoes *every* probed param in `Location: /assets/?access=…&action=…&…`, so
+  **all ~78 params were reported as open-redirect leads** on every 3xx endpoint (312 bogus
+  "reflected inputs" in one scan).
+- Now `reflected_in_location` only matches the canary in the redirect **destination**
+  (scheme/host/path) — where the input actually steers where the redirect goes — and ignores
+  the preserved **query string**. Real open-redirects (canary in the target path/host) still fire.
+
 ## [0.99.8] — Empty-body 2xx demoted; 5xx floods muted (less noise)
 - A **`200` with a 0-byte body no longer reads as a high-confidence disclosure**. An empty
   `backup.old`/`config.bak`/`.py` leaked nothing, and an empty 200 is usually a
