@@ -127,10 +127,21 @@ def control_reflected(body: bytes, ctl_tok: str) -> bool:
 
 
 def reflected_in_location(location: str, token_map: dict[str, str]) -> list[str]:
-    """Params whose canary appears in the `Location` header — an open-redirect
-    lead (the app puts attacker-controlled input into a redirect target)."""
-    low = (location or "").lower()
-    return [param for tok, param in token_map.items() if tok in low] if low else []
+    """Params whose canary appears in the redirect DESTINATION (scheme/host/path) of
+    the `Location` header — a real open-redirect lead (the input steers where the
+    redirect goes). A canary that only shows up in the Location's QUERY STRING is
+    NOT an open-redirect: it's the server preserving the request query on a
+    canonicalization redirect (`/x` → `/x/?<original query>`), which would otherwise
+    flag EVERY probed param at once. So the query part is excluded from the match."""
+    if not location:
+        return []
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit(location)
+    except ValueError:
+        return []
+    dest = f"{p.scheme}{p.netloc}{p.path}".lower()      # destination only — NOT p.query
+    return [param for tok, param in token_map.items() if tok in dest]
 
 
 # Response headers that legitimately echo request-ish data or are hop-by-hop —
