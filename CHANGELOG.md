@@ -5,6 +5,29 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.0.0] — First stable release
+First stable release. Origami is an adaptive content-discovery engine: it calibrates a
+per-context soft-404 profile, fingerprints the stack additively per path-prefix, and folds
+its strategy around the evidence — the wordlist writes itself from the fingerprint (15
+tech-overlay packs), discovery compounds (JS/source-maps/robots/OpenAPI/GraphQL/VCS-tree),
+and it learns across targets (SQLite corpus, k-NN, `--diff` recon-over-time).
+
+Highlights consolidated since the 0.9x series:
+- **Verified injection leads** — reflected params proven with a breakout probe (unescaped
+  `xss-lead`, `{{7*7}}→49` `ssti-lead`, `Location`/header `redirect-lead`).
+- **GraphQL schema-mining** — introspection → args + sensitive-op flagging + a queries-only
+  unauth probe (`auth-bypass`/BOLA leads).
+- **403/401 bypass** that **learns the WAF's weakness** (winner-first across resources), with
+  path/case/char-encoding/normalization-diff/traversal/hop-by-hop/encoded-sep/API-prefix/
+  matrix-management families.
+- **Origin-IP discovery + IP-based WAF bypass** (`--origin`, keyed OSINT → crt.sh fallback),
+  **cache poisoning**, **vhost**, **buckets**, **historical URLs**.
+- Robustness: weak-DH/legacy-TLS auto-fallback, bounded history budget, `--no-history`,
+  low-noise reporting (empty-body demotion, 5xx-flood muting, open-redirect FP fix).
+
+318 unit tests + a live integration scan; `pyflakes` clean; zero-dependency core (rich/h2/yaml
+optional). See the entries below for the full per-version history.
+
 ## [0.99.9] — Fix open-redirect false positives on trailing-slash redirects
 - The `--params` open-redirect check flagged a canary found **anywhere** in the `Location`
   header. A canonicalization redirect (`/assets` → `/assets/`) that **preserves the request
