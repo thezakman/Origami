@@ -60,3 +60,38 @@ def same_host(a: str, b: str) -> bool:
     a = a[4:] if a.startswith("www.") else a
     b = b[4:] if b.startswith("www.") else b
     return a == b
+
+
+# Hosts where the TENANT is a PATH segment, not the host: one shared host serves
+# every customer (Google Cloud REST APIs — Firestore/Storage/BigQuery/…, where
+# the tenant is `/v1/projects/<id>/…`, `/<bucket>/…`, etc.). Host scope alone is
+# not a tenant boundary here: history harvested by DOMAIN (gau/wayback) and memory
+# primed by HOST both return co-tenants' paths, and `same_host` waves them through
+# — so a scan of one project probes (and reports) other people's live data. On
+# these hosts we additionally confine seeds to the target's own path chain.
+_PATH_TENANT_SUFFIXES = frozenset({
+    "googleapis.com",
+})
+
+
+def path_tenant_host(host: str) -> bool:
+    """True for shared hosts whose tenant is identified by the URL path, so host
+    scope must be tightened to the target's path chain (see same_tenant_path)."""
+    h = host.split("@")[-1].split(":")[0].lower().strip(".")
+    return any(h == s or h.endswith("." + s) for s in _PATH_TENANT_SUFFIXES)
+
+
+def _segs(path: str) -> list[str]:
+    return [s for s in path.split("/") if s]
+
+
+def same_tenant_path(target_path: str, cand_path: str) -> bool:
+    """For a shared path-multitenant host: is cand_path on the SAME tenant chain
+    as target_path? True iff one path is a prefix of the other — an ancestor (so
+    path-climb up toward root still works) or a descendant (discovery under the
+    target). Diverging in ANY leading segment means a DIFFERENT tenant → False.
+
+    A target with no path (bare host) names no tenant, so nothing is confined."""
+    t, c = _segs(target_path), _segs(cand_path)
+    n = min(len(t), len(c))
+    return t[:n] == c[:n]

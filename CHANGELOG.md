@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.0.1]
+### Fixed
+- **Tenant confinement on shared path-multitenant hosts.** On hosts where the tenant is a
+  URL-path segment rather than the host itself (Google Cloud REST APIs — Firestore/Storage/
+  BigQuery, `…/v1/projects/<id>/…`), history harvested by domain (`gau`/wayback) and memory
+  primed by host dragged in **other tenants' paths**, which host scope (`same_host`) couldn't
+  distinguish — so a scan of one project probed and reported co-tenants' live data. Seeds off
+  the target's own path chain (ancestors for path-climb, descendants for discovery) are now
+  dropped, logged as `scope: dropped N cross-tenant seed(s)`. Normal hosts are unaffected.
+
 ## [1.0.0] — First stable release
 First stable release. Origami is an adaptive content-discovery engine: it calibrates a
 per-context soft-404 profile, fingerprints the stack additively per path-prefix, and folds
