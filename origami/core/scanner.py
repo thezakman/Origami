@@ -46,7 +46,7 @@ from origami.core.httpclient import Engine
 from origami.core.normalize import hamming, simhash
 from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding,
                                                classify, is_dir_listing, resolve_baseline)
-from origami.core.scope import same_host, same_site
+from origami.core.scope import same_host, same_site, path_tenant_host, same_tenant_path
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlists,
                                      target_tokens)
@@ -596,6 +596,22 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             root_seeds += [(p, "overlay") for p in ov_paths]
             observer.log(f"overlay: folded {len(ov_paths)} stack-specific paths "
                          f"from confirmed tech ({', '.join(ov_packs)})", 0, style="cyan")
+
+    # Tenant confinement on shared path-multitenant hosts (Firestore/Storage/…):
+    # history is harvested by DOMAIN and memory is primed by HOST, so both drag in
+    # OTHER tenants' paths (e.g. /v1/projects/<someone-else>/…) that host scope
+    # can't tell apart. Drop any absolute seed off the target's own path chain so
+    # the scan never probes a co-tenant's data. Relative/CDN seeds are unaffected.
+    if path_tenant_host(profile.host):
+        tgt_path = urlparse(base_url).path or "/"
+        before = len(root_seeds)
+        root_seeds = [(p, s) for (p, s) in root_seeds
+                      if not p.startswith("/") or same_tenant_path(tgt_path, p)]
+        dropped = before - len(root_seeds)
+        if dropped:
+            observer.log(f"scope: dropped {dropped} cross-tenant seed(s) — "
+                         f"{profile.host} is shared multi-tenant, confined to "
+                         f"{tgt_path}", 0, style="yellow")
 
     # THE origami fold: learn the target's own vocabulary (names + extensions)
     # from the references discovered above, and weave it into the scan — capped
@@ -1413,9 +1429,12 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
 
     # 2. scope + drop what we already probed/found, then cap
     scoped = _scope_paths(set(new_paths), profile.host, opts.scope)
+    tgt_path = urlparse(profile.base_url).path or "/"          # tenant chain, shared hosts
+    confine = path_tenant_host(profile.host)
     fresh = [(p, new_paths[p]) for p in sorted(scoped)
              if urljoin(root, p.lstrip("/")).lower() not in result.seen_urls_lc
-             and not _excluded("/" + p.lstrip("/"), opts)]   # honor --exclude / --exclude-ext
+             and not _excluded("/" + p.lstrip("/"), opts)      # honor --exclude / --exclude-ext
+             and not (confine and p.startswith("/") and not same_tenant_path(tgt_path, p))]
     fresh = fresh[:MAX_HARVEST_NEW]
     if not fresh:
         observer.log("harvest: no endpoints beyond what's already found", 1)

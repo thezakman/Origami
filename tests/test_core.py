@@ -346,6 +346,39 @@ class TestVhost(unittest.TestCase):
         self.assertTrue(same_site("cdn.example.com", "app.example.com"))
         self.assertTrue(same_site("a.acme.com.br", "b.acme.com.br"))
 
+    def test_path_tenant_host_detection(self):
+        # shared hosts whose tenant lives in the PATH, not the host
+        from origami.core.scope import path_tenant_host
+        self.assertTrue(path_tenant_host("firestore.googleapis.com"))
+        self.assertTrue(path_tenant_host("storage.googleapis.com"))
+        self.assertTrue(path_tenant_host("firestore.googleapis.com:443"))
+        # a normal host is NOT path-multitenant — host scope stays as-is
+        self.assertFalse(path_tenant_host("example.com"))
+        self.assertFalse(path_tenant_host("api.acme.com.br"))
+        # suffix match must be on a label boundary, not a substring
+        self.assertFalse(path_tenant_host("notgoogleapis.com"))
+
+    def test_same_tenant_path_confines_to_target_chain(self):
+        # the reported Firestore bleed: one project targeted, history/memory drag
+        # in OTHER projects' paths that host scope can't tell apart
+        from origami.core.scope import same_tenant_path
+        tgt = "/v1/projects/appmotorista-93167/databases/(default)/documents/"
+        # descendants of the target (real discovery) stay in scope
+        self.assertTrue(same_tenant_path(
+            tgt, "/v1/projects/appmotorista-93167/databases/(default)/documents/users"))
+        # ancestors of the target (path-climb toward root) stay in scope
+        self.assertTrue(same_tenant_path(
+            tgt, "/v1/projects/appmotorista-93167/databases/"))
+        self.assertTrue(same_tenant_path(tgt, "/v1/projects/appmotorista-93167"))
+        # a DIFFERENT project = a different tenant → out of scope
+        self.assertFalse(same_tenant_path(
+            tgt, "/v1/projects/mapleunionchess-950e6/databases/(default)/documents/UserLogs"))
+        self.assertFalse(same_tenant_path(tgt, "/v1/projects/heyfool-aa585/databases/"))
+        # host-root probes (well-known/.git) diverge at segment 0 → dropped
+        self.assertFalse(same_tenant_path(tgt, "/.well-known/security.txt"))
+        # a bare-host target names no tenant → confine nothing
+        self.assertTrue(same_tenant_path("/", "/v1/projects/anything/x"))
+
     def test_candidates_build_from_apex_excluding_target(self):
         from origami.modules.vhost import candidates
         c = candidates("nfce.newchoice.com.br")
