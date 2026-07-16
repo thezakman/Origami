@@ -256,26 +256,38 @@ async def harvest(host: str, *, use_gau: bool = False, cap: int = DEFAULT_CAP,
     Returns (paths, params, source_label). Best-effort — never raises; on total
     failure returns (set(), set(), "none"). `paths` is capped at `cap`."""
     urls: set[str] = set()
-    source = "none"
-    gau_ran = False
-    if use_gau:
-        gau = await _safe(from_gau(host, cap=_FETCH_ROWS, subs=subs))
-        if gau is not None:                      # None == binary absent → native fallback
-            urls = gau
-            source = "gau"
-            gau_ran = True                        # gau covers the SAME providers → don't re-query
-    if not urls and not gau_ran:                 # native only when no gau binary was found
+    labels: list[str] = []
+
+    async def _native() -> dict[str, set[str]]:
         # all four passive sources concurrently — a slow/down one can't hold up the rest
         cdx, cc, us, otx = await asyncio.gather(
             _safe(from_cdx(host, cap=_FETCH_ROWS, subs=subs)),
             _safe(from_commoncrawl(host, cap=_FETCH_ROWS, subs=subs)),
             _safe(from_urlscan(host, cap=_FETCH_ROWS, subs=subs)),
             _safe(from_otx(host, cap=_FETCH_ROWS, subs=subs)))
-        cdx, cc, us, otx = cdx or set(), cc or set(), us or set(), otx or set()
-        urls = cdx | cc | us | otx
-        parts = [n for n, s in (("wayback", cdx), ("cc", cc),
-                                ("urlscan", us), ("otx", otx)) if s]
-        source = "+".join(parts) or "none"
+        return {"wayback": cdx or set(), "cc": cc or set(),
+                "urlscan": us or set(), "otx": otx or set()}
+
+    if use_gau:
+        # gau and the keyless native sources run CONCURRENTLY, not gau-then-fallback.
+        # gau frequently hangs (killed at _GAU_TIMEOUT); serialised, the native
+        # fallback would only START after that ~10s wait and then be cut off by the
+        # scanner's history budget — the target gets NOTHING despite gau being
+        # installed. Hedged, native finishes within budget while gau is still
+        # waiting, so a gau hang no longer starves the fallback. Overlap is deduped.
+        gau_res, native = await asyncio.gather(
+            _safe(from_gau(host, cap=_FETCH_ROWS, subs=subs)), _native())
+        if gau_res:                              # None (absent/hung) or empty → nothing to add
+            urls |= gau_res
+            labels.append("gau")
+    else:
+        native = await _native()
+
+    for name, s in native.items():
+        if s:
+            urls |= s
+            labels.append(name)
+    source = "+".join(dict.fromkeys(labels)) or "none"
     paths, params = extract_paths_and_params(urls, host, subs=subs)
     if len(paths) > cap:
         paths = set(sorted(paths)[:cap])

@@ -669,7 +669,10 @@ class TestWayback(unittest.TestCase):
         finally:
             W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx = orig
 
-    def test_harvest_gau_preferred_with_native_fallback(self):
+    def test_harvest_gau_hedged_with_native(self):
+        # --gau runs gau AND the native sources CONCURRENTLY (not gau-then-fallback):
+        # a hung gau must not starve the keyless fallback out of the scan's history
+        # budget. Overlap is deduped; the label unions every source that returned.
         import asyncio
         from origami.modules.discovery import wayback as W
         orig = (W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx)
@@ -678,14 +681,16 @@ class TestWayback(unittest.TestCase):
             async def none(host, cap=0, subs=False): return set()
             W.from_cdx, W.from_commoncrawl = cdx, none
             W.from_urlscan, W.from_otx = none, none
+            # gau succeeds → its results are UNIONED with native (hedge), not exclusive
             async def gau_ok(host, **k): return {"http://h/fromgau"}
             W.from_gau = gau_ok
             paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
-            self.assertEqual((paths, src), ({"/fromgau"}, "gau"))
-            async def gau_missing(host, **k): return None        # binary absent
+            self.assertEqual((paths, src), ({"/fromgau", "/native"}, "gau+wayback"))
+            # gau hung/absent (None) → native still lands within budget
+            async def gau_missing(host, **k): return None
             W.from_gau = gau_missing
             paths, _, src = asyncio.run(W.harvest("h", use_gau=True))
-            self.assertEqual((paths, src), ({"/native"}, "wayback"))   # fell back to native
+            self.assertEqual((paths, src), ({"/native"}, "wayback"))
         finally:
             W.from_cdx, W.from_commoncrawl, W.from_gau, W.from_urlscan, W.from_otx = orig
 
