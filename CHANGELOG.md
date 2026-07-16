@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.0.2]
+### Fixed
+- **History no longer skipped when `gau` hangs.** With `--gau`, the harvest ran gau *first*
+  and only started the keyless native sources (Wayback CDX / Common Crawl / urlscan / OTX)
+  *after* it. When gau hung on a host with no archived history it was killed at its 10s
+  timeout, leaving the native fallback to start too late to finish inside the 12s history
+  budget — so the scanner cut it with `wayback: skipped (TimeoutError)` and the target got
+  nothing despite gau being installed. gau and the native sources now run **concurrently**
+  (hedged, deduped), so a gau hang can't starve the fallback; the source label unions every
+  provider that returned.
+
 ## [1.0.1]
 ### Fixed
 - **Tenant confinement on shared path-multitenant hosts.** On hosts where the tenant is a
