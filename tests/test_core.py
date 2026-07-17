@@ -1946,6 +1946,48 @@ class TestOData(unittest.TestCase):
         self.assertIsNone(odata.parse_records(413, b'{"message":"Request Entity Too Large"}'))
         self.assertIsNone(odata.parse_records(200, json.dumps({"value": []}).encode()))
 
+    def test_query_fold_probes_the_target_even_when_blocked(self):
+        # the reported gap: point directly AT a collection that 413s on the plain
+        # listing — it never becomes a finding, but ?$top=1 leaks a row. The fold
+        # must probe the TARGET itself, not only result.findings.
+        import asyncio
+        from origami.core import scanner
+        from origami.core.scanner import ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        class _P:
+            def __init__(self, status, body):
+                self.status, self.body, self.ok = status, body, True
+
+        class _Eng:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                if "$apply=aggregate" in url:
+                    return _P(200, b'[{"OrigamiC":8060}]')
+                if "$top=1" in url:
+                    return _P(200, b'[{"nomeCompleto":"X","cpf":"123","ativo":true}]')
+                return _P(413, b'{"message":"Request Entity Too Large"}')   # plain listing blocked
+
+        prof = TargetProfile(host="h", base_url="https://h/api/motoristas")
+        res = ScanResult(profile=prof)                 # NO findings — the 413 target isn't one
+        found = []
+        asyncio.run(scanner._odata_query_fold(
+            _Eng(), prof, res, ScanOptions(finding_sink=found.append), NullObserver()))
+        self.assertEqual(len(found), 1)
+        f = found[0]
+        self.assertIn("auth-bypass", f.tags)
+        self.assertIn("odata-agg", f.tags)
+        self.assertIn("disclosure", f.tags)
+        self.assertIn("413", f.note)                   # notes the bypassed plain status
+        self.assertIn("8060", f.note)                  # the leaked aggregate count
+        # a plain-2xx root target names no collection → nothing probed
+        prof2 = TargetProfile(host="h", base_url="https://h/")
+        found2 = []
+        asyncio.run(scanner._odata_query_fold(
+            _Eng(), prof2, ScanResult(profile=prof2),
+            ScanOptions(finding_sink=found2.append), NullObserver()))
+        self.assertEqual(found2, [])
+
     def test_harvest_finds_metadata_via_stub_engine(self):
         import asyncio
         from origami.modules.discovery import odata
