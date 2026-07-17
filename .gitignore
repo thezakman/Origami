@@ -41,3 +41,6 @@ legacy/
 
 # ingested KB (regenerate with: origami --update)
 origami/brain/rules.yaml
+
+# client-specific regression tests — real identifiers, never public
+tests/local/

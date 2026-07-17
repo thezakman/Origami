@@ -185,6 +185,9 @@ def _scope_paths(paths, host: str, scope: str) -> set[str]:
 @dataclass
 class ScanOptions:
     max_depth: int = 1            # 0 = root only
+    climb_brute: int = 0          # ancestor dirs above the target swept with the FULL wordlist
+                                  # (not just single-probed): 0 = off, N = N levels up (deepest-first),
+                                  # <0 = all the way to root. CLI resolves it: 1 plain, all under --deep.
     max_requests: int = 0         # hard cap per run (§3.11); 0 = unlimited (default)
     time_limit: float = 0.0       # wall-clock cap in seconds (--time-limit); 0 = unlimited
     replay_proxy: str | None = None       # send confirmed findings through this proxy (--replay-proxy)
@@ -418,15 +421,26 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     root_seeds: list[tuple[str, str]] = []
 
     # Path regression: fetch the target file (if any) and climb every ancestor
-    # directory — each is probed as a seed; the ones that exist get recursed by
-    # the normal directory machinery, so a deep target explores its whole lineage.
+    # directory. Each ancestor is at least single-probed as a seed. Under
+    # `climb_brute`, the top N ancestors (deepest-first) are instead promoted to
+    # full brute-force PREFIXES (seeded into the queue below) so the whole wordlist
+    # runs at each level — that's what surfaces sibling resources living in the
+    # parent dir (e.g. /prod/api/usuarios when the target is /prod/api/motoristas),
+    # which the scope gate otherwise never reaches from a deep target.
+    climb_brute_dirs: list[str] = []
     if _climb_file:
         root_seeds.append((_climb_file, "target"))
     if _climb_ancestors:
-        root_seeds += [(a, "climb") for a in _climb_ancestors]
+        climb_brute_dirs, seed_only = _climb_brute_split(_climb_ancestors, opts.climb_brute)
+        root_seeds += [(a, "climb") for a in seed_only]   # levels we won't sweep: single probe as before
         observer.log(f"path-climb: exploring {len(_climb_ancestors)} ancestor "
                      f"director{'y' if len(_climb_ancestors) == 1 else 'ies'} of "
                      f"{base_prefix} up to root", 0, style="cyan")
+        if climb_brute_dirs:
+            observer.log(f"climb-brute: sweeping the full wordlist at "
+                         f"{len(climb_brute_dirs)} ancestor "
+                         f"director{'y' if len(climb_brute_dirs) == 1 else 'ies'}: "
+                         f"{', '.join(climb_brute_dirs)}", 0, style="cyan")
 
     if memory is not None:
         _recon("memory")
@@ -723,7 +737,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                      None)
 
     # 4. recursive scan + folds (checkpointed) -----------------------------
+    # Base target first (prioritized), then each climb-brute ancestor as its own
+    # depth-0 scan root — deepest-first so the closest parent is swept before the
+    # broader ones. They run AFTER the base, so they never steal its budget.
     queue: list[tuple[str, int]] = [(base_prefix, 0)]   # (prefix, depth)
+    queue += [(a, 0) for a in climb_brute_dirs]
     result = await _scan_loop(engine, profile, opts, observer, memory, control, result,
                               base_prefix=base_prefix, words=words, exts=exts,
                               priority_paths=priority_paths, root_seeds=root_seeds,
@@ -1137,6 +1155,20 @@ def _path_climb(raw_path: str) -> tuple[str, str | None, list[str]]:
         if anc == "/":
             break
     return base_dir, file_seed, ancestors
+
+
+def _climb_brute_split(ancestors: list[str], climb_brute: int) -> tuple[list[str], list[str]]:
+    """Split climbed ancestors into (brute_dirs, seed_only) by the climb-brute level.
+
+    `ancestors` is deepest-first (immediate parent … root). `climb_brute` levels of
+    them (from the deepest) are promoted to full-wordlist prefixes; the rest stay
+    single-probe seeds. 0 = none promoted; negative = all promoted (to root).
+    """
+    if climb_brute < 0:
+        n = len(ancestors)
+    else:
+        n = max(0, min(climb_brute, len(ancestors)))
+    return ancestors[:n], ancestors[n:]
 
 
 def _over_budget(engine, opts) -> bool:

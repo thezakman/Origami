@@ -201,8 +201,17 @@ async def run(args: argparse.Namespace) -> int:
     wordlists = list(args.wordlist or [])
     if args.deep:
         wordlists = ["base"] + wordlists
+    # climb-brute: sweep the wordlist at ancestor dirs of a deep target. Explicit
+    # --climb-brute N wins; else all-the-way-to-root under --deep, immediate parent
+    # otherwise (a light default that still catches the common /api/<sibling> case).
+    if args.climb_brute is not None:
+        climb_brute = args.climb_brute
+    elif args.deep:
+        climb_brute = -1
+    else:
+        climb_brute = 1
     opts = ScanOptions(
-        max_depth=args.depth, max_requests=args.max_requests,
+        max_depth=args.depth, max_requests=args.max_requests, climb_brute=climb_brute,
         wordlist_paths=wordlists, shortscan=shortscan,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
@@ -494,6 +503,12 @@ def main() -> None:
                     help="fixed delay before every request (stealth / rate-sensitive "
                          "targets); on top of the adaptive backoff")
     ap.add_argument("-d", "--depth", type=int, default=1, help="recursion depth (0 = root only)")
+    ap.add_argument("--climb-brute", type=int, default=None, metavar="N",
+                    help="brute-force the full wordlist at N ancestor directories above a deep "
+                         "target, not just single-probe them — surfaces sibling resources in the "
+                         "parent dir (e.g. /api/usuarios when the target is /api/motoristas). "
+                         "0 = off; negative = all the way to root. "
+                         "Default: 1 (immediate parent); under --deep, all the way to root.")
     ap.add_argument("-w", "--wordlist", action="append", metavar="NAME|FILE",
                     help="wordlist: a file path, or a bundled name — 'base' (~540, default) or "
                          "'big' (~1250, exhaustive). Repeatable to MERGE several. Under --deep "

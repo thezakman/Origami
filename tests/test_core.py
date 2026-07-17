@@ -354,7 +354,7 @@ class TestVhost(unittest.TestCase):
     def test_registrable_handles_multi_label_suffixes(self):
         from origami.modules.vhost import registrable
         self.assertEqual(registrable("app.example.com"), "example.com")
-        self.assertEqual(registrable("nfce.examplestore.com.br"), "examplestore.com.br")  # .com.br!
+        self.assertEqual(registrable("shop.examplestore.com.br"), "examplestore.com.br")  # .com.br!
         self.assertEqual(registrable("a.b.co.uk"), "b.co.uk")
         self.assertEqual(registrable("example.com"), "example.com")
 
@@ -383,16 +383,16 @@ class TestVhost(unittest.TestCase):
         self.assertFalse(path_tenant_host("notgoogleapis.com"))
 
     def test_same_tenant_path_confines_to_target_chain(self):
-        # the reported Firestore bleed: one project targeted, history/memory drag
-        # in OTHER projects' paths that host scope can't tell apart
+        # path-multitenant hosts (e.g. firestore): one project targeted, history/
+        # memory must not drag in OTHER projects' paths host scope can't tell apart.
+        # (Client repro with real project IDs lives in tests/local/.)
         from origami.core.scope import same_tenant_path
         tgt = "/v1/projects/demoproject-11111/databases/(default)/documents/"
         # descendants of the target (real discovery) stay in scope
         self.assertTrue(same_tenant_path(
             tgt, "/v1/projects/demoproject-11111/databases/(default)/documents/users"))
         # ancestors of the target (path-climb toward root) stay in scope
-        self.assertTrue(same_tenant_path(
-            tgt, "/v1/projects/demoproject-11111/databases/"))
+        self.assertTrue(same_tenant_path(tgt, "/v1/projects/demoproject-11111/databases/"))
         self.assertTrue(same_tenant_path(tgt, "/v1/projects/demoproject-11111"))
         # a DIFFERENT project = a different tenant → out of scope
         self.assertFalse(same_tenant_path(
@@ -403,13 +403,34 @@ class TestVhost(unittest.TestCase):
         # a bare-host target names no tenant → confine nothing
         self.assertTrue(same_tenant_path("/", "/v1/projects/anything/x"))
 
+    def test_path_climb_ancestors_deepest_first(self):
+        from origami.core.scanner import _path_climb
+        base, file_seed, anc = _path_climb("/shop/api/orders")
+        self.assertEqual(base, "/shop/api/orders/")
+        self.assertIsNone(file_seed)
+        self.assertEqual(anc, ["/shop/api/", "/shop/", "/"])
+
+    def test_climb_brute_split_by_level(self):
+        from origami.core.scanner import _climb_brute_split
+        anc = ["/shop/api/", "/shop/", "/"]
+        # off: nothing promoted, all stay single-probe seeds
+        self.assertEqual(_climb_brute_split(anc, 0), ([], anc))
+        # light default: only the immediate parent gets the full wordlist
+        self.assertEqual(_climb_brute_split(anc, 1), (["/shop/api/"], ["/shop/", "/"]))
+        # explicit N clamps to what exists (no phantom levels)
+        self.assertEqual(_climb_brute_split(anc, 99), (anc, []))
+        # negative = all the way to root (the --deep behavior)
+        self.assertEqual(_climb_brute_split(anc, -1), (anc, []))
+        # a target already at root climbs nothing
+        self.assertEqual(_climb_brute_split([], -1), ([], []))
+
     def test_candidates_build_from_apex_excluding_target(self):
         from origami.modules.vhost import candidates
-        c = candidates("nfce.examplestore.com.br")
+        c = candidates("shop.examplestore.com.br")
         self.assertIn("admin.examplestore.com.br", c)
         self.assertIn("staging.examplestore.com.br", c)
         self.assertIn("localhost", c)
-        self.assertNotIn("nfce.examplestore.com.br", c)        # the target itself excluded
+        self.assertNotIn("shop.examplestore.com.br", c)     # the target itself excluded
 
     def test_vhost_fold_reports_only_distinct_vhosts(self):
         import asyncio
