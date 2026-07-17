@@ -133,21 +133,74 @@ def entity_set_paths(meta: dict) -> list[str]:
     return [base + name for name in meta.get("entitysets", [])]
 
 
-# --- read-only aggregation probe ----------------------------------------------
+# --- read-only OData query-option probes --------------------------------------
+#
+# OData collections accept `$apply` (aggregation), `$top`/`$skip` (paging) and
+# `$select`/`$filter`. That matters for access control: a plain listing that is
+# blocked (413 "entity too large", 403, a paging requirement) is NOT protected if
+# `$top`/`$skip` walk around the block or `$apply=aggregate` rolls the rows up. We
+# confirm exposure with two read-only GETs — an aggregate `$count` and a single
+# `$top=1` row — never a bulk dump, never a write.
 
 _AGG_ALIAS = "OrigamiC"
+AGG_COUNT = f"$apply=aggregate($count as {_AGG_ALIAS})"
+
+# PII / secret-bearing field names to call out when a probed record comes back
+# (EN + PT-BR). We report the field NAMES as evidence — never the values.
+_SENS_FIELD = re.compile(
+    r"(?i)(cpf|cnpj|\brg\b|identificac|passaporte|passport|cnh|senha|password|"
+    r"passwd|token|secret|apikey|e[-_]?mail|email|telefone|phone|celular|"
+    r"nascimento|birth|nome|name|salario|salary|cartao|\bcard\b|conta|account|"
+    r"endereco|address|credential|documento|document)")
+
+
+def with_query(url: str, option: str) -> str:
+    """Append an OData query option to a URL, respecting an existing query string."""
+    sep = "&" if urlparse(url).query else "?"
+    return f"{url}{sep}{option}"
+
+
+def top_query(n: int = 1) -> str:
+    """`$top=N` — read at most N rows. The probe uses N=1: enough to prove the
+    collection is readable without pulling the whole table."""
+    return f"$top={int(n)}"
 
 
 def build_agg_probe(service_root: str, entityset: str) -> str:
     """A minimal, read-only aggregation query: count the whole set. If it returns
     a number without auth, aggregation is leaking row-level data by rollup."""
     base = service_root if service_root.endswith("/") else service_root + "/"
-    return urljoin(base, f"{entityset}?$apply=aggregate($count as {_AGG_ALIAS})")
+    return urljoin(base, f"{entityset}?{AGG_COUNT}")
+
+
+def _agg_rows(doc) -> list | None:
+    """The row list from either an OData envelope (`{"value":[…]}`) or a bare
+    array (`[…]`) — custom APIs with `$apply` support often return the latter."""
+    if isinstance(doc, dict):
+        v = doc.get("value")
+        return v if isinstance(v, list) else None
+    if isinstance(doc, list):
+        return doc
+    return None
+
+
+def agg_count(body: bytes):
+    """Extract the aggregate count our `$count as OrigamiC` probe asked for, from
+    either response shape. Returns the number, or None if it isn't there — the
+    distinctive alias is the false-positive guard (a normal row won't carry it)."""
+    try:
+        doc = json.loads(body)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    rows = _agg_rows(doc)
+    if rows and isinstance(rows[0], dict) and isinstance(rows[0].get(_AGG_ALIAS), (int, float)):
+        return rows[0][_AGG_ALIAS]
+    return None
 
 
 def classify_probe(status: int, body: bytes) -> str:
     """Classify a read-only `$apply=aggregate($count)` probe:
-      * 'open'        — executed without auth and returned an aggregate row
+      * 'open'        — executed without auth and returned our aggregate alias
                         (data disclosure / authz-by-aggregation bypass);
       * 'reachable'   — past the gate but the query errored (400/`$apply` issue);
       * 'auth'        — the gate blocked it (401/403);
@@ -158,19 +211,42 @@ def classify_probe(status: int, body: bytes) -> str:
     if status == 501:
         return "unsupported"
     if 200 <= status < 300:
+        if agg_count(body) is not None:             # our alias came back → aggregate ran
+            return "open"
         try:
-            doc = json.loads(body)
+            json.loads(body)
         except (json.JSONDecodeError, ValueError, TypeError):
             return "error"
-        if isinstance(doc, dict):
-            val = doc.get("value")
-            if isinstance(val, list) and val and isinstance(val[0], dict) \
-                    and _AGG_ALIAS in val[0]:
-                return "open"                       # aggregate returned unauth → lead
         return "reachable"
     if status == 400:
         return "reachable"                          # reached the service; query rejected
     return "error"
+
+
+def parse_records(status: int, body: bytes) -> list | None:
+    """A `$top=1` response → the record list (from envelope or bare array), or None
+    if the response isn't a non-empty list of objects."""
+    if not (200 <= status < 300):
+        return None
+    try:
+        doc = json.loads(body)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    rows = _agg_rows(doc)
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        # a bare aggregate row (just our alias) is NOT a data record — don't
+        # double-count it as an exposed row.
+        if len(rows) == 1 and set(rows[0].keys()) == {_AGG_ALIAS}:
+            return None
+        return [r for r in rows if isinstance(r, dict)]
+    return None
+
+
+def sensitive_fields(record: dict, cap: int = 12) -> list:
+    """PII / secret-bearing key names in a record — reported as evidence of what
+    the exposure leaks, without ever surfacing the values."""
+    out = [k for k in record.keys() if isinstance(k, str) and _SENS_FIELD.search(k)]
+    return out[:cap]
 
 
 async def harvest(engine, base_url: str) -> tuple[str | None, set[str], dict]:

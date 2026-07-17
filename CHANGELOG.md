@@ -5,6 +5,24 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.2.0]
+### Added
+- **OData query-option exposure — no `$metadata` required.** On *any* discovered API
+  collection endpoint, Origami now fires two read-only probes: `$apply=aggregate($count)`
+  and `$top=1`. A count or a single row returned **without auth** is an authorization-bypass
+  data-exposure lead — strongest where the plain listing is BLOCKED (HTTP 413 "entity too
+  large", 403) but OData paging/aggregation walk around what was only ever a size/access
+  guard. Reports the leaked count and the exposed record's **sensitive field names**
+  (CPF/CNH/e-mail/…) as evidence — never the values; `$top=1` reads a single row, never a
+  bulk dump, and `$batch`/Actions/writes are never touched. This is the complement to the
+  `$metadata`-gated mining from 1.1.0: real-world APIs (custom API-Gateway/.NET backends
+  with OData query support) expose data through `$top`/`$apply` without ever publishing an
+  EDMX document. Tags `odata-agg` / `auth-bypass` / `disclosure`; runs under `--apidocs`.
+### Changed
+- `classify_probe`/`agg_count` now accept the **bare-array** aggregate shape (`[{"OrigamiC":N}]`)
+  that custom backends return, not only the OData v4 `{"value":[…]}` envelope. The distinctive
+  `$count as OrigamiC` alias remains the false-positive guard (a normal row never carries it).
+
 ## [1.1.0]
 ### Added
 - **OData schema-mining + aggregation leads** (`origami/modules/discovery/odata.py`). The
