@@ -246,6 +246,7 @@ class ScanResult:
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
     seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
+    twin_sig: dict = field(default_factory=dict, compare=False, repr=False)       # slash-normalized URL → response sig, to suppress an identical /x vs /x/ twin live
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -1253,6 +1254,17 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
         observer.tick(hit=False)            # not a new resource — count the probe, don't re-list
         observer.request(url, finding.status, False)
         return
+    # Suppress an identical trailing-slash twin LIVE: /x and /x/ that returned the
+    # same response (status + body fingerprint) are one resource — the report-time
+    # _collapse_slash_twins folds them, but the stream would still show both. A twin
+    # with a DIFFERENT response (a redirect, a different body) is left to show.
+    nkey = url.rstrip("/") or "/"
+    nkey = nkey.lower() if ci else nkey
+    tsig = (finding.status, finding.simhash if finding.simhash else -finding.length)
+    if result.twin_sig.get(nkey) == tsig:
+        observer.tick(hit=False)
+        observer.request(url, finding.status, False)
+        return
     shown = (opts.filters.accept(finding.status, finding.length)
              and opts.filters.accept_body(body, finding.simhash, finding.words, finding.lines))
     observer.tick(hit=shown)
@@ -1260,6 +1272,7 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
     if shown:
         result.seen_urls.add(url)
         result.seen_urls_lc.add(url.lower())
+        result.twin_sig[nkey] = tsig          # register so an identical twin is suppressed
         result.findings.append(finding)
         if opts.finding_sink is not None:
             opts.finding_sink(finding)            # stream this confirmed finding (e.g. JSONL)
