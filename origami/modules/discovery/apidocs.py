@@ -16,6 +16,7 @@ Two shapes are understood:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -30,6 +31,36 @@ SPEC_PATHS = (
 )
 
 MAX_API_PATHS = 300                        # cap folded endpoints — a big API can be huge
+
+# Swagger/Redoc UI pages that DECLARE the real spec locations. Crucial for the
+# multi-document .NET Swashbuckle pattern: one UI at /swagger/index.html whose
+# config lists several specs (`urls:[{url,name},…]`) at non-default, per-area
+# paths a brute list would never guess (/swagger/internal/swagger.json, …).
+UI_PATHS = (
+    "/swagger/index.html", "/swagger", "/swagger/", "/swagger-ui/index.html",
+    "/swagger-ui/", "/api-docs/index.html", "/redoc",
+)
+MAX_SPECS = 12                             # cap distinct specs folded from one UI
+
+# `"url":"…swagger.json"` entries in the UI config (the multi-doc `urls:[…]` array
+# or a single `url:`), and a `configUrl` that points at a JSON carrying them.
+_UI_SPEC_URL = re.compile(rb"""["']url["']\s*:\s*["']([^"']+?\.(?:json|ya?ml))["']""", re.I)
+_UI_CONFIG_URL = re.compile(rb"""["']?configUrl["']?\s*:\s*["']([^"']+)["']""", re.I)
+
+
+def extract_ui_spec_urls(html: bytes, page_url: str) -> list[str]:
+    """A Swagger-UI page (or its configUrl JSON) → the spec URLs it declares,
+    each resolved against the page location. Handles the multi-document
+    `urls:[{url,name},…]` array with relative (`internal/swagger.json`) or
+    absolute entries; order-preserving and de-duplicated."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in _UI_SPEC_URL.finditer(html[:200_000]):
+        full = urljoin(page_url, m.group(1).decode("utf-8", "replace"))
+        if full not in seen:
+            seen.add(full)
+            out.append(full)
+    return out[:MAX_SPECS]
 
 
 def _load(body: bytes) -> dict | None:
@@ -154,24 +185,67 @@ async def ingest_source(engine, source: str) -> tuple[str | None, set[str]]:
     return (source, endpoints) if endpoints else (None, set())
 
 
-async def harvest(engine, base_url: str, on_progress=None) -> tuple[str | None, set[str]]:
-    """Probe the API-document locations; on the first that parses (OpenAPI or
-    JSON:API), return (url, paths). `paths` includes the document's own path so
-    the disclosure is reported too."""
-    for i, cand in enumerate(SPEC_PATHS, 1):
-        if on_progress is not None:
-            on_progress(i, len(SPEC_PATHS))
+async def _discover_ui_specs(engine, base_url: str) -> list[str]:
+    """Probe the Swagger-UI pages; return the spec URLs the first one declares
+    (following a `configUrl` one hop if the page defers to one). Empty if no UI
+    or config is found."""
+    for cand in UI_PATHS:
         url = urljoin(base_url, cand.lstrip("/"))
-        probe = await engine.fetch(url, keep_body=True)
+        try:
+            probe = await engine.fetch(url, keep_body=True)
+        except Exception:
+            continue
+        if not (probe.ok and probe.status == 200 and probe.body):
+            continue
+        specs = extract_ui_spec_urls(probe.body, url)
+        if specs:
+            return specs
+        m = _UI_CONFIG_URL.search(probe.body[:200_000])   # UI defers to a config JSON
+        if m:
+            cfg_url = urljoin(url, m.group(1).decode("utf-8", "replace"))
+            try:
+                cp = await engine.fetch(cfg_url, keep_body=True)
+            except Exception:
+                cp = None
+            if cp is not None and cp.ok and cp.body:
+                specs = extract_ui_spec_urls(cp.body, cfg_url)
+                if specs:
+                    return specs
+    return []
+
+
+async def harvest(engine, base_url: str, on_progress=None) -> tuple[list[str], set[str]]:
+    """Discover API documents and fold their union of declared endpoints.
+
+    First reads the Swagger-UI's declared spec list — multi-document aware, so a
+    .NET app that serves several specs under one UI (`/swagger/internal/…`,
+    `/swagger/siscomexEvents/…`) gets ALL of them, not just the first — then falls
+    back to the common default locations when the UI reveals nothing. Every spec
+    that parses is folded, and each spec's own path is included so the disclosure
+    is reported. Returns (spec_urls, paths)."""
+    ui_specs = await _discover_ui_specs(engine, base_url)
+    candidates = ui_specs or [urljoin(base_url, c.lstrip("/")) for c in SPEC_PATHS]
+    endpoints: set[str] = set()
+    found: list[str] = []
+    for i, url in enumerate(candidates, 1):
+        if on_progress is not None:
+            on_progress(i, len(candidates))
+        try:
+            probe = await engine.fetch(url, keep_body=True)
+        except Exception:
+            continue
         if not (probe.ok and probe.status == 200 and probe.body):
             continue
         doc = _load(probe.body)
         if doc is None:
             continue
-        endpoints = _endpoints_from_doc(doc, probe.content_type)
-        if not endpoints:
+        eps = _endpoints_from_doc(doc, probe.content_type)
+        if not eps:
             continue
-        endpoints = set(sorted(endpoints)[:MAX_API_PATHS])
-        endpoints.add("/" + cand.lstrip("/"))    # the document itself
-        return url, endpoints
-    return None, set()
+        endpoints |= eps
+        endpoints.add(urlparse(url).path)        # the document itself
+        found.append(url)
+        if not ui_specs:                         # default-path brute: first hit is enough
+            break
+    endpoints = set(sorted(endpoints)[:MAX_API_PATHS])
+    return found, endpoints

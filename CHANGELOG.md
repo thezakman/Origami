@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.3.0]
+### Added
+- **Multi-document Swagger/OpenAPI discovery.** `apidocs.harvest` now reads the Swagger-UI's
+  declared spec list (`urls:[{url,name},…]` — the .NET Swashbuckle multi-doc pattern) and folds
+  **every** spec, not just the first hit. Specs at custom per-area paths a brute list would never
+  guess (`/swagger/internal/swagger.json`, `/swagger/siscomexEvents/swagger.json`, …) are
+  resolved (relative-to-the-UI) and parsed; their endpoints are unioned and each spec's own path
+  is reported as a disclosure. Follows a `configUrl` one hop when the UI defers to a config JSON.
+  Falls back to the common default locations when no UI is present. `harvest` now returns
+  `(spec_urls, paths)`; validated live against an API-Gateway host serving three specs under one
+  UI (69 endpoints folded where the old first-hit-only path found none).
+
 ## [1.2.0]
 ### Added
 - **OData query-option exposure — no `$metadata` required.** On *any* discovered API

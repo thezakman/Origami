@@ -490,16 +490,18 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     api_paths: set[str] = set()
     if opts.apidocs:
         _recon("api-docs")
-        spec_url, api_paths = await _guard(observer, "api-docs",
-                                           apidocs.harvest(engine, base_url),
-                                           (None, set()))
+        spec_urls, api_paths = await _guard(observer, "api-docs",
+                                            apidocs.harvest(engine, base_url),
+                                            ([], set()))
         api_paths = _scope_paths(api_paths, profile.host, opts.scope)
-        if spec_url:
+        if spec_urls:
             root_seeds += [(p, "apidocs") for p in sorted(api_paths)]
-            observer.log(f"api-docs: API spec/index at {urlparse(spec_url).path} "
+            where = ", ".join(urlparse(u).path for u in spec_urls[:3]) \
+                + (f" (+{len(spec_urls) - 3})" if len(spec_urls) > 3 else "")
+            observer.log(f"api-docs: {len(spec_urls)} API spec(s) — {where} "
                          f"→ {len(api_paths)} endpoints folded", 0, style="cyan")
             if opts.graph:
-                spec_path = urlparse(spec_url).path
+                spec_path = urlparse(spec_urls[0]).path
                 result.edges += [(spec_path, p) for p in sorted(api_paths) if p != spec_path]
 
     # user-supplied spec (URL or file) → fold its declared surface onto the target.
