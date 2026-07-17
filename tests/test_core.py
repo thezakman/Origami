@@ -3584,6 +3584,59 @@ class TestApiDocs(unittest.TestCase):
         self.assertTrue(apidocs._is_jsonapi({"data": []}, "application/vnd.api+json"))
         self.assertFalse(apidocs._is_jsonapi({"data": []}, "application/json"))
 
+    def test_extract_ui_spec_urls_multi_doc_relative(self):
+        from origami.modules.discovery import apidocs
+        # the exact inline config a multi-doc .NET Swashbuckle UI ships
+        html = (b'<script>const ui = SwaggerUIBundle({"urls":['
+                b'{"url":"internal/swagger.json","name":"Atlas Internal"},'
+                b'{"url":"siscomexEvents/swagger.json","name":"Siscomex Events"},'
+                b'{"url":"codebaEvents/swagger.json","name":"Codeba Events"}],'
+                b'"deepLinking":true})</script>')
+        specs = apidocs.extract_ui_spec_urls(html, "https://h/swagger/index.html")
+        self.assertEqual(specs, [
+            "https://h/swagger/internal/swagger.json",       # relative → resolved under /swagger/
+            "https://h/swagger/siscomexEvents/swagger.json",
+            "https://h/swagger/codebaEvents/swagger.json"])
+        # absolute entries and a single `url:` are handled too; deduped
+        html2 = b'{"url":"/api/v1/swagger.json"}{"url":"/api/v1/swagger.json"}'
+        self.assertEqual(apidocs.extract_ui_spec_urls(html2, "https://h/swagger/"),
+                         ["https://h/api/v1/swagger.json"])
+
+    def test_harvest_folds_all_specs_from_ui(self):
+        import asyncio
+        from origami.modules.discovery import apidocs
+
+        class _P:
+            def __init__(self, ok, body, ct="application/json", status=200):
+                self.ok, self.body, self.content_type, self.status = ok, body, ct, status
+
+        UI = (b'{"urls":[{"url":"internal/swagger.json"},'
+              b'{"url":"codebaEvents/swagger.json"}]}')
+        SPECS = {
+            "/swagger/internal/swagger.json":
+                b'{"openapi":"3.0","paths":{"/internal/health":{},"/internal/users/{id}":{}}}',
+            "/swagger/codebaEvents/swagger.json":
+                b'{"openapi":"3.0","paths":{"/codeba/events":{}}}'}
+
+        class _Eng:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                from urllib.parse import urlparse as up
+                p = up(url).path
+                if p == "/swagger/index.html":
+                    return _P(True, UI)
+                if p in SPECS:
+                    return _P(True, SPECS[p])
+                return _P(False, b"", status=404)
+
+        specs, eps = asyncio.run(apidocs.harvest(_Eng(), "https://h/"))
+        self.assertEqual(len(specs), 2)                       # BOTH specs parsed, not just the first
+        # endpoints from BOTH specs are folded, plus each spec's own path
+        self.assertIn("/internal/health", eps)
+        self.assertIn("/internal/users/", eps)                # templated → static dir
+        self.assertIn("/codeba/events", eps)
+        self.assertIn("/swagger/internal/swagger.json", eps)  # disclosure reported
+        self.assertIn("/swagger/codebaEvents/swagger.json", eps)
+
 
 class TestExtList(unittest.TestCase):
     def test_normalizes_and_dedups(self):
