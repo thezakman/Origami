@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.1.0]
+### Added
+- **OData schema-mining + aggregation leads** (`origami/modules/discovery/odata.py`). The
+  enterprise analogue of the GraphQL introspection fold: Origami probes the OData `$metadata`
+  (EDMX) endpoints and JSON service documents, parses the schema, and
+  - folds every **entity set** in as a scan seed (scope-filtered like Swagger paths),
+  - harvests **property names** onto the `--params` surface,
+  - flags **sensitive** entity sets / Functions / Actions (user/account/CPF/payment/…),
+  - runs a strictly **read-only** `$apply=aggregate($count)` probe on the top sets: a count
+    returned **without auth** is an *authorization-by-aggregation* leak (data exposed by
+    rollup even when the rows are gated) and a DoS amplifier — reported as `odata-agg` /
+    `auth-bypass`. `$batch`, bound/unbound Actions and any state-changing call are never
+    touched. Runs under the existing `--apidocs` gate (on by default); new `odata` source tag.
+
 ## [1.0.2]
 ### Fixed
 - **History no longer skipped when `gau` hangs.** With `--gau`, the harvest ran gau *first*

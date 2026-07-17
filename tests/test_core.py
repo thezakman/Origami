@@ -1810,6 +1810,111 @@ class TestGraphQL(unittest.TestCase):
             "authenticate"), "reachable")
 
 
+class TestOData(unittest.TestCase):
+    _EDMX = (
+        b'<?xml version="1.0"?><edmx:Edmx Version="4.0" '
+        b'xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">'
+        b'<edmx:DataServices><Schema Namespace="Svc">'
+        b'<EntityType Name="Customer"><Property Name="Id" Type="Edm.Int32"/>'
+        b'<Property Name="Cpf" Type="Edm.String"/>'
+        b'<NavigationProperty Name="Orders" Type="Collection(Svc.Order)"/></EntityType>'
+        b'<EntityType Name="Order"><Property Name="Total" Type="Edm.Decimal"/></EntityType>'
+        b'<EntityType Name="City"><Property Name="Zip" Type="Edm.String"/></EntityType>'
+        b'<Function Name="GetSalary"/><Action Name="Recharge"/>'
+        b'<EntityContainer Name="C">'
+        b'<EntitySet Name="Customers" EntityType="Svc.Customer"/>'
+        b'<EntitySet Name="Orders" EntityType="Svc.Order"/>'
+        b'<EntitySet Name="Cities" EntityType="Svc.City"/>'
+        b'<Annotation Term="Org.OData.Aggregation.V1.ApplySupported"/>'
+        b'</EntityContainer></Schema></edmx:DataServices></edmx:Edmx>')
+
+    def test_is_metadata_and_service_doc_detection(self):
+        from origami.modules.discovery import odata
+        self.assertTrue(odata.is_metadata(self._EDMX))
+        self.assertFalse(odata.is_metadata(b"<html>not odata</html>"))
+        self.assertTrue(odata.is_service_doc(
+            b'{"@odata.context":"$metadata","value":[]}', "application/json"))
+        self.assertFalse(odata.is_service_doc(b'{"value":[]}', "application/json"))
+        self.assertFalse(odata.is_service_doc(b'{"@odata.context":"x"}', "text/html"))
+
+    def test_parse_metadata_sets_props_ops_sensitive_aggregation(self):
+        from origami.modules.discovery import odata
+        m = odata.parse_metadata(self._EDMX, service_root="https://h/odata/")
+        self.assertEqual(set(m["entitysets"]), {"Customers", "Orders", "Cities"})
+        self.assertEqual(m["properties"], {"Id", "Cpf", "Orders", "Total", "Zip"})  # incl. NavigationProperty
+        self.assertEqual(m["functions"], ["GetSalary"])
+        self.assertEqual(m["actions"], ["Recharge"])
+        self.assertEqual(m["version"], "4.0")
+        self.assertTrue(m["aggregation"])                    # ApplySupported annotation seen
+        # sensitive spans sets + functions (Customers, Orders=financial, GetSalary)
+        self.assertIn("Customers", m["sensitive"])
+        self.assertIn("Orders", m["sensitive"])
+        self.assertIn("GetSalary", m["sensitive"])
+        self.assertNotIn("Cities", m["sensitive"])           # neutral set → not flagged
+
+    def test_parse_service_doc_entity_sets(self):
+        import json
+        from origami.modules.discovery import odata
+        body = json.dumps({"@odata.context": "$metadata", "value": [
+            {"name": "Users", "kind": "EntitySet", "url": "Users"},
+            {"name": "Me", "kind": "Singleton", "url": "Me"},        # not an entity set
+            {"name": "Products", "url": "Products"}]}).encode()      # kind omitted → set
+        m = odata.parse_service_doc(body, service_root="https://h/odata/")
+        self.assertEqual(set(m["entitysets"]), {"Users", "Products"})
+        self.assertIn("Users", m["sensitive"])
+
+    def test_entity_set_paths_and_agg_probe_are_read_only(self):
+        from origami.modules.discovery import odata
+        m = odata.parse_metadata(self._EDMX, service_root="https://h/odata/")
+        self.assertEqual(sorted(odata.entity_set_paths(m)),
+                         ["/odata/Cities", "/odata/Customers", "/odata/Orders"])
+        probe = odata.build_agg_probe("https://h/odata/", "Customers")
+        self.assertEqual(probe, "https://h/odata/Customers?$apply=aggregate($count as OrigamiC)")
+        # never a write verb / $batch / action in the probe URL
+        for bad in ("$batch", "Recharge", "insert", "delete"):
+            self.assertNotIn(bad, probe)
+
+    def test_classify_probe_open_auth_reachable_unsupported(self):
+        import json
+        from origami.modules.discovery import odata
+        # aggregate returned unauth → open (authz-by-aggregation leak)
+        self.assertEqual(odata.classify_probe(200, json.dumps(
+            {"@odata.context": "x", "value": [{"OrigamiC": 91234}]}).encode()), "open")
+        self.assertEqual(odata.classify_probe(401, b""), "auth")
+        self.assertEqual(odata.classify_probe(403, b""), "auth")
+        self.assertEqual(odata.classify_probe(501, b""), "unsupported")   # $apply not implemented
+        self.assertEqual(odata.classify_probe(400, b"$apply invalid"), "reachable")
+        # 200 but no aggregate row (e.g. empty value) → reachable, not a leak
+        self.assertEqual(odata.classify_probe(200, json.dumps({"value": []}).encode()), "reachable")
+
+    def test_harvest_finds_metadata_via_stub_engine(self):
+        import asyncio
+        from origami.modules.discovery import odata
+
+        class _Probe:
+            def __init__(self, ok, body, ct="application/xml"):
+                self.ok, self.body, self.content_type = ok, body, ct
+
+        class _Engine:
+            def __init__(self, edmx): self.edmx = edmx
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                # only /odata/$metadata serves the schema; everything else 404s
+                if url.endswith("/odata/$metadata"):
+                    return _Probe(True, self.edmx)
+                return _Probe(False, b"")
+
+        url, sets, meta = asyncio.run(
+            odata.harvest(_Engine(self._EDMX), "https://h/"))
+        self.assertEqual(url, "https://h/odata/$metadata")
+        self.assertEqual(sets, {"Customers", "Orders", "Cities"})
+        self.assertEqual(meta["service_root"], "https://h/odata/")
+        # nothing served → clean empty result, never raises
+        none_url, none_sets, _ = asyncio.run(
+            odata.harvest(_Engine(b"<html/>"), "https://h/"))
+        self.assertIsNone(none_url)
+        self.assertEqual(none_sets, set())
+
+
 class TestWellKnown(unittest.TestCase):
     def test_extract_oidc_endpoints_same_host(self):
         from origami.modules.discovery import wellknown
