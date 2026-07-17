@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.4.1]
+### Fixed
+- **Trailing-slash twins are now suppressed in the LIVE stream too, not just the final
+  report.** 1.4.0 collapsed `/x` and `/x/` in the report artifacts, but the streaming output
+  still printed both as each was probed (e.g. `/api/feriados-nacionais` and its `/`-twin, both
+  200/862B, from an OpenAPI spec that declares both a collection and a templated sub-path). The
+  reporter now registers each shown finding's `(url-without-slash → status+body-fingerprint)` and
+  suppresses an identical twin on sight — a twin with a different response (redirect, different
+  body) still shows.
+
 ## [1.4.0]
 ### Fixed
 - **API-doc discovery now anchors at the host root (and every ancestor), not the target

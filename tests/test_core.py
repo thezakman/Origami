@@ -261,6 +261,30 @@ class TestJsonlStream(unittest.TestCase):
         _report(NullObserver(), r, opts, make_finding("https://h/b"), "https://h/b")
         self.assertEqual([f.url for f in streamed], ["https://h/a", "https://h/b"])  # dup not streamed
 
+    def test_identical_slash_twin_suppressed_live(self):
+        from origami.core.scanner import _report, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        # /x and /x/ with an identical response → only ONE streams (the report-time
+        # collapse would fold them, but the live stream must not show both)
+        streamed = []
+        opts = ScanOptions(finding_sink=streamed.append)
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        _report(NullObserver(), r, opts, make_finding("https://h/x"), "https://h/x")
+        _report(NullObserver(), r, opts, make_finding("https://h/x/"), "https://h/x/")
+        self.assertEqual([f.url for f in streamed], ["https://h/x"])
+        self.assertEqual(len(r.findings), 1)                       # twin not even stored
+        # a twin with a DIFFERENT response (different length) still shows both
+        streamed2 = []
+        opts2 = ScanOptions(finding_sink=streamed2.append)
+        r2 = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        _report(NullObserver(), r2, opts2,
+                Finding("https://h/y", 200, 10, "text/html", 0.9, "wordlist"), "https://h/y")
+        _report(NullObserver(), r2, opts2,
+                Finding("https://h/y/", 200, 999, "text/html", 0.9, "wordlist"), "https://h/y/")
+        self.assertEqual([f.url for f in streamed2], ["https://h/y", "https://h/y/"])
+
 
 class TestDirListing(unittest.TestCase):
     APACHE = (b'<html><head><title>Index of /images</title></head><body>'
