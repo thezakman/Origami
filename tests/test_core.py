@@ -3637,6 +3637,80 @@ class TestApiDocs(unittest.TestCase):
         self.assertIn("/swagger/internal/swagger.json", eps)  # disclosure reported
         self.assertIn("/swagger/codebaEvents/swagger.json", eps)
 
+    def test_anchor_bases_root_and_descend(self):
+        from origami.modules.discovery import apidocs
+        # a deep-path scan anchors doc probes at the host root AND each ancestor
+        self.assertEqual(apidocs._anchor_bases("https://h/api/motoristas"),
+                         ["https://h/", "https://h/api/", "https://h/api/motoristas/"])
+        # a trailing file is dropped (its directory is the deepest anchor)
+        self.assertEqual(apidocs._anchor_bases("https://h/app/docs/spec.json"),
+                         ["https://h/", "https://h/app/", "https://h/app/docs/"])
+        # a bare host → just the root
+        self.assertEqual(apidocs._anchor_bases("https://h/"), ["https://h/"])
+
+    def test_harvest_finds_root_spec_from_deep_path_and_unions_defaults(self):
+        # the reported bug: scanning /api/motoristas must still find the root
+        # /swagger/... AND a default /swagger/v1/swagger.json the UI doesn't list
+        import asyncio
+        from origami.modules.discovery import apidocs
+
+        class _P:
+            def __init__(self, ok, body, ct="application/json", status=200):
+                self.ok, self.body, self.content_type, self.status = ok, body, ct, status
+
+        UI = b'{"urls":[{"url":"SAP/swagger.json"}]}'          # UI lists only SAP
+        SPECS = {
+            "/swagger/SAP/swagger.json": b'{"openapi":"3.0","paths":{"/api/Sap/Doc":{}}}',
+            "/swagger/v1/swagger.json": b'{"openapi":"3.0","paths":{"/api/v1/Users":{}}}'}  # default, not in UI
+
+        class _Eng:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                from urllib.parse import urlparse as up
+                p = up(url).path
+                if p == "/swagger/index.html":
+                    return _P(True, UI)
+                if p in SPECS:
+                    return _P(True, SPECS[p])
+                return _P(False, b"", status=404)
+
+        # base is a DEEP path — the root swagger must still be found
+        specs, eps = asyncio.run(apidocs.harvest(
+            _Eng(), "https://h/api/motoristas"))
+        self.assertEqual(len(specs), 2)                        # SAP (from UI) + v1 (default), both
+        self.assertIn("/api/Sap/Doc", eps)
+        self.assertIn("/api/v1/Users", eps)                   # the default spec the UI omitted
+
+
+class TestSlashTwinCollapse(unittest.TestCase):
+    def _f(self, url, status=200, length=7, simhash=0, conf=0.95):
+        from origami.core.response_classifier import Finding
+        return Finding(url, status, length, "text/plain", conf, "memory", simhash=simhash)
+
+    def test_identical_twins_collapse_to_one(self):
+        from origami.core.scanner import _collapse_slash_twins
+        fs = [self._f("https://h/health"), self._f("https://h/health/")]
+        out = _collapse_slash_twins(fs)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].url, "https://h/health")      # no-slash form kept
+        # simhash-based identity when set
+        fs2 = [self._f("https://h/a", simhash=123, length=5),
+               self._f("https://h/a/", simhash=123, length=999)]  # same simhash → same resource
+        self.assertEqual(len(_collapse_slash_twins(fs2)), 1)
+
+    def test_differing_twins_both_kept(self):
+        from origami.core.scanner import _collapse_slash_twins
+        # a redirect vs a 200 → genuinely different, keep both
+        fs = [self._f("https://h/x", status=301, length=0),
+              self._f("https://h/x/", status=200, length=50)]
+        self.assertEqual(len(_collapse_slash_twins(fs)), 2)
+        # same status but different body → different, keep both
+        fs2 = [self._f("https://h/y", simhash=1, length=10),
+               self._f("https://h/y/", simhash=2, length=20)]
+        self.assertEqual(len(_collapse_slash_twins(fs2)), 2)
+        # unrelated paths never merge
+        fs3 = [self._f("https://h/a"), self._f("https://h/ab")]
+        self.assertEqual(len(_collapse_slash_twins(fs3)), 2)
+
 
 class TestExtList(unittest.TestCase):
     def test_normalizes_and_dedups(self):

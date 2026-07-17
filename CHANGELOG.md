@@ -5,6 +5,26 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.4.0]
+### Fixed
+- **API-doc discovery now anchors at the host root (and every ancestor), not the target
+  path.** Scanning a deep URL (`…/api/motoristas`) probed `/swagger/…` *relative to that
+  path* (`/api/swagger/…`) and so missed the root API docs entirely — no `api-docs:` line, no
+  endpoints folded. `harvest` now probes the Swagger-UI + default spec locations at the host
+  root **and** each ancestor directory of the target, so the root `/swagger/` is always found
+  whatever path you point at.
+- **Both a UI-listed spec and a conventional default spec are folded.** Discovery no longer
+  stops at the UI's `urls:[…]` list — it also probes the default locations, so a
+  `/swagger/v1/swagger.json` that exists but isn't in the UI dropdown is folded alongside the
+  UI-declared ones (one host went from 11 → 300 folded endpoints).
+- **Large OpenAPI specs are no longer truncated into unparseable JSON.** The engine's 2 MB body
+  cap (an OOM guard) silently corrupted a big spec, losing the entire declared API surface. The
+  engine now accepts a per-request `max_body` override; spec fetches use 20 MB (a 2.9 MB / 394-path
+  spec that was being dropped now folds).
+- **Trailing-slash twins collapse.** `/x` and `/x/` that return an identical response (same status
+  + body fingerprint) are reported once instead of twice (`/health` 7B == `/health/` 7B). A
+  redirect or a differing body still keeps both.
+
 ## [1.3.0]
 ### Added
 - **Multi-document Swagger/OpenAPI discovery.** `apidocs.harvest` now reads the Swagger-UI's
