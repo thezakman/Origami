@@ -384,10 +384,14 @@ class Engine:
             hdrs = dict(kw.get("headers") or {})
             hdrs["User-Agent"] = random.choice(_UA_POOL)
             kw = {**kw, "headers": hdrs}
+        # Optional per-request body-cap override (kept out of the kwargs httpx sees):
+        # a legitimate OpenAPI spec can exceed the default OOM guard, and truncating
+        # it to invalid JSON silently loses the whole declared API surface.
+        cap = kw.get("max_body") or self.cfg.max_body
+        kw = {k: v for k, v in kw.items() if k != "max_body"}
         async with self._pick_client().stream(method, url, **kw) as r:
             chunks: list[bytes] = []
             total = 0
-            cap = self.cfg.max_body
             async for chunk in r.aiter_bytes():
                 chunks.append(chunk)
                 total += len(chunk)

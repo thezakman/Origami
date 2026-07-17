@@ -1172,6 +1172,32 @@ def _dedup_by_url(findings, ci=False):
     return list(best.values())
 
 
+def _collapse_slash_twins(findings, ci=False):
+    """Collapse a trailing-slash twin: `/x` and `/x/` that return an IDENTICAL
+    response (same status + body fingerprint) are ONE resource — listing both is
+    noise (`/health` 7B == `/health/` 7B). A redirect or a differing body keeps
+    both, since then they genuinely behave differently. Keeps the no-slash form
+    (or, tie, the higher-confidence one)."""
+    def _same(a, b):
+        if a.status != b.status:
+            return False
+        if a.simhash and b.simhash:
+            return a.simhash == b.simhash
+        return a.length == b.length
+
+    groups: dict[str, list] = defaultdict(list)
+    for f in findings:
+        key = f.url.rstrip("/")
+        groups[key.lower() if ci else key].append(f)
+    out: list = []
+    for group in groups.values():
+        if len(group) > 1 and all(_same(group[0], g) for g in group[1:]):
+            # one resource served under both spellings — keep the canonical one
+            group = [min(group, key=lambda f: (f.url.endswith("/"), -f.confidence, len(f.url)))]
+        out.extend(group)
+    return out
+
+
 def _dedupe_and_collapse(findings, observer, ci=False):
     """URL-dedup (keep best confidence) + collapse same-template collisions.
 
@@ -1182,7 +1208,7 @@ def _dedupe_and_collapse(findings, observer, ci=False):
     representative + a count. The real content found by recursion (distinct
     lengths) is untouched.
     """
-    deduped = _dedup_by_url(findings, ci=ci)
+    deduped = _collapse_slash_twins(_dedup_by_url(findings, ci=ci), ci=ci)
 
     # Declared-contract findings (OpenAPI/.well-known) are never collapsed — each
     # is a real named endpoint the user wants listed, even when it returns 401/403.
