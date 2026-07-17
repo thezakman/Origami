@@ -52,7 +52,7 @@ from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      target_tokens)
 from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
-                                        graphql, js_parser, methods, mutate, originip,
+                                        graphql, js_parser, methods, mutate, odata, originip,
                                         robots, shortname, vcs, wayback, wellknown)
 from origami.output.ui import NullObserver
 
@@ -582,6 +582,39 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                              + (f" (+{len(sens) - 12})" if len(sens) > 12 else ""), 0, style="yellow")
             await _guard(observer, "graphql-probe",
                          _graphql_probe(engine, opts, observer, gf, gql_url, gql_meta), None)
+
+    # OData — the enterprise analogue of GraphQL introspection. `$metadata` (EDMX)
+    # hands over every entity set + property + Function/Action; fold the sets as
+    # seeds, enrich params, flag sensitive surfaces, and (read-only) probe whether
+    # aggregation (`$apply`) leaks data without auth.
+    if opts.apidocs:
+        _recon("odata")
+        od_url, od_sets, od_meta = await _guard(
+            observer, "odata", odata.harvest(engine, base_url), (None, set(), dict(odata._EMPTY)))
+        if od_url:
+            profile.parameters |= od_meta["properties"]
+            sens = od_meta["sensitive"]
+            note = (f"OData {od_meta['version'] or 'service'} metadata exposed · "
+                    f"{len(od_sets)} entity sets")
+            tags = ["api"]
+            if sens:
+                note += " · sensitive: " + ", ".join(sens[:8]) \
+                    + (f" (+{len(sens) - 8})" if len(sens) > 8 else "")
+                tags.append("disclosure")
+            of = Finding(od_url, 200, 0, "application/xml", 0.9, "odata", note=note, tags=tags)
+            result.findings.append(of)
+            observer.finding(of)
+            observer.log(f"odata: metadata at {urlparse(od_url).path} → {len(od_sets)} entity "
+                         f"sets · {len(od_meta['properties'])} props · {len(od_meta['functions'])} "
+                         f"functions · {len(sens)} sensitive", 0, style="cyan")
+            if sens:
+                observer.log("odata: sensitive sets/ops → " + ", ".join(sens[:12])
+                             + (f" (+{len(sens) - 12})" if len(sens) > 12 else ""), 0, style="yellow")
+            es_paths = _scope_paths(set(odata.entity_set_paths(od_meta)), profile.host, opts.scope)
+            if es_paths:
+                root_seeds += [(p, "odata") for p in sorted(es_paths)]
+            await _guard(observer, "odata-probe",
+                         _odata_probe(engine, opts, observer, of, od_meta), None)
 
     if opts.backups:
         root_seeds += [(p, "backup") for p in backups.vcs_probes()]
@@ -1655,6 +1688,60 @@ async def _graphql_probe(engine, opts, observer, gf, gql_url, meta) -> None:
                  + " → auth-bypass/BOLA lead", 0, style="bold red")
     if opts.finding_sink is not None:
         opts.finding_sink(gf)
+
+
+MAX_ODATA_PROBES = 6   # entity sets tested for unauth aggregation (read-only $count)
+
+
+async def _odata_probe(engine, opts, observer, of, meta) -> None:
+    """Read-only aggregation probe: for the top entity sets (sensitive first), GET
+    `<set>?$apply=aggregate($count as …)`. A count returned WITHOUT auth means the
+    service exposes row-level data by rollup even when the rows themselves may be
+    gated — an authorization-by-aggregation bypass (and a DoS amplifier). Strictly
+    GET; `$batch`/Actions/writes are never touched. Annotates the metadata finding."""
+    root = meta.get("service_root")
+    sets = meta.get("entitysets") or []
+    if not (root and sets):
+        return
+    sens = set(meta.get("sensitive") or [])
+    ordered = [s for s in sets if s in sens] + [s for s in sets if s not in sens]
+    ordered = ordered[:MAX_ODATA_PROBES]
+    observer.phase("odata-probe")
+    observer.log(f"odata: probing {len(ordered)} entity set(s) for unauth aggregation "
+                 f"($apply=aggregate, read-only)", 0, style="cyan")
+    open_sets, reachable_sets = [], []
+    for es in ordered:
+        if _over_budget(engine, opts):
+            break
+        url = odata.build_agg_probe(root, es)
+        try:
+            pr = await engine.fetch(url, keep_body=True)
+        except Exception:
+            continue
+        observer.request(url, pr.status, False)
+        verdict = odata.classify_probe(pr.status, pr.body or b"")
+        if verdict == "open":
+            open_sets.append(es)
+        elif verdict == "reachable":
+            reachable_sets.append(es)
+    if not (open_sets or reachable_sets):
+        observer.log("odata: aggregation blocked/unsupported on probed sets (gate enforced)",
+                     1, style="green")
+        return
+    detail = ", ".join(f"{s}!" for s in open_sets) \
+        + (", " if open_sets and reachable_sets else "") + ", ".join(reachable_sets)
+    of.note = (of.note + " · " if of.note else "") + f"aggregation WITHOUT auth: {detail}"
+    of.tags = list(dict.fromkeys(of.tags + ["odata-agg"] + (["auth-bypass"] if open_sets else [])))
+    if open_sets:
+        of.confidence = max(of.confidence, 0.9)
+    hot = [s for s in (open_sets + reachable_sets) if s in sens]
+    observer.log(f"odata: {len(open_sets)} set(s) leak an aggregate + {len(reachable_sets)} "
+                 f"reachable WITHOUT auth"
+                 + (f" — incl. sensitive: {', '.join(hot[:6])}" if hot else "")
+                 + " → authz-by-aggregation lead", 0,
+                 style="bold red" if open_sets else "yellow")
+    if opts.finding_sink is not None:
+        opts.finding_sink(of)
 
 
 async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> None:
