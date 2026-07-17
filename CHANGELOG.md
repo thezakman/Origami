@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.5.0]
+### Fixed
+- **OData query-option exposure is now probed on the TARGET itself, even when its plain listing
+  is blocked.** The `$apply`/`$top` fold only iterated `result.findings`, so pointing Origami
+  directly at a collection whose plain GET returns a block (HTTP 413 "entity too large" / 403)
+  found **nothing** — the target never became a finding, so it was never `$top`-probed — even
+  though `?$top=1` leaks a row unauthenticated. The fold now always includes the target's own
+  collection-like path (status learned by a probe), so `-u …/api/motoristas` (413 on the plain
+  listing) is detected: `bypasses HTTP 413 · aggregate($count)=8060 · $top=1 returns a record
+  (…sensitive: identificacao, nomeCompleto, cnh…)`. This is the archetype authorization-by-paging
+  BOLA and was previously reported as `0 findings`.
+
 ## [1.4.1]
 ### Fixed
 - **Trailing-slash twins are now suppressed in the LIVE stream too, not just the final

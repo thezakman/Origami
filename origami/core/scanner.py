@@ -1819,13 +1819,25 @@ async def _odata_query_fold(engine, profile, result, opts, observer) -> None:
     exactly the class of flaw a size/paging guard is mistaken for real authz.
     Strictly GET; `$top=1` reads one row, never a bulk dump; writes never touched."""
     seen: set[str] = set()
-    cands = []
+    cands: list = []          # (base_url_without_query, plain_status | None)
+
+    # The TARGET itself first — the user may point directly AT a collection whose
+    # plain listing is BLOCKED (413 'entity too large' / 403). That never becomes a
+    # finding, so `result.findings` alone would skip it — yet it's the archetype
+    # OData-exposure case (`/api/motoristas` 413s, but `?$top=1` leaks a row). Add
+    # it explicitly; its status is learned below.
+    tpath = urlparse(profile.base_url).path
+    tlast = tpath.rstrip("/").rsplit("/", 1)[-1].lower()
+    if tlast and "." not in tlast:                # a collection-like path, not a file/root
+        seen.add(tpath.rstrip("/"))
+        cands.append((profile.base_url.split("?", 1)[0], None))
+
     for f in result.findings:
         key = urlparse(f.url).path.rstrip("/")
         if key in seen or not _odata_query_candidate(f):
             continue
         seen.add(key)
-        cands.append(f)
+        cands.append((f.url.split("?", 1)[0], f.status))
     cands = cands[:MAX_ODATA_QUERY_ENDPOINTS]
     if not cands:
         return
@@ -1833,11 +1845,15 @@ async def _odata_query_fold(engine, profile, result, opts, observer) -> None:
     observer.log(f"odata: probing {len(cands)} API collection(s) for OData query-option "
                  f"exposure ($apply/$top, read-only)", 0, style="cyan")
     hits = 0
-    for f in cands:
+    for base, plain_status in cands:
         if _over_budget(engine, opts):
             break
-        base = f.url.split("?", 1)[0]
-        blocked = not (200 <= f.status < 300)
+        if plain_status is None:                  # target added blind → learn its plain status
+            try:
+                plain_status = (await engine.fetch(base)).status
+            except Exception:
+                plain_status = 0
+        blocked = not (200 <= (plain_status or 0) < 300)
         count = None
         try:
             pr = await engine.fetch(odata.with_query(base, odata.AGG_COUNT), keep_body=True)
@@ -1869,7 +1885,7 @@ async def _odata_query_fold(engine, profile, result, opts, observer) -> None:
                          + (f", sensitive: {', '.join(sens[:6])}" if sens else "") + ")")
         note = "OData query options answer WITHOUT auth"
         if blocked:
-            note += f" — bypasses HTTP {f.status} on the plain collection"
+            note += f" — bypasses HTTP {plain_status} on the plain collection"
         note += " · " + " · ".join(parts)
         tags = ["api", "odata-agg"]
         if strong:
