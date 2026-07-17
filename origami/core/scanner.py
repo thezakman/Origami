@@ -1022,6 +1022,14 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
         await _guard(observer, "params",
                      _param_fold(engine, profile, result, opts, observer), None)
 
+    # 7.55 OData query-option exposure — on discovered API collections (no $metadata
+    # needed), probe $apply=aggregate($count) + $top=1 read-only. A count or a row
+    # returned WITHOUT auth — especially where the plain listing is blocked (413/403)
+    # — is an authorization-bypass data-exposure lead.
+    if opts.apidocs:
+        await _guard(observer, "odata-query",
+                     _odata_query_fold(engine, profile, result, opts, observer), None)
+
     # 7.6 cache poisoning — probe unkeyed inputs (X-Forwarded-Host & friends) on
     # cacheable endpoints; a reflected-and-cached or behaviour-changing unkeyed
     # input is a poisoning primitive. Safe: every probe rides a throwaway
@@ -1742,6 +1750,102 @@ async def _odata_probe(engine, opts, observer, of, meta) -> None:
                  style="bold red" if open_sets else "yellow")
     if opts.finding_sink is not None:
         opts.finding_sink(of)
+
+
+MAX_ODATA_QUERY_ENDPOINTS = 12   # discovered API collections probed for $apply/$top
+
+
+def _odata_query_candidate(f) -> bool:
+    """A discovered endpoint that looks like an OData-queryable API collection: a
+    JSON / api-tagged / `/api/`|`/odata/` resource path with no file extension
+    (collections are extensionless — `/api/motoristas`, not `/app.js`)."""
+    path = urlparse(f.url).path
+    last = path.rstrip("/").rsplit("/", 1)[-1].lower()
+    if not last or "." in last:
+        return False
+    ct = (f.content_type or "").lower()
+    pl = path.lower()
+    return ("json" in ct or "/api/" in pl or "/odata" in pl
+            or bool(set(getattr(f, "tags", []) or []) & {"api"}))
+
+
+async def _odata_query_fold(engine, profile, result, opts, observer) -> None:
+    """Probe OData query options on discovered API collections — no `$metadata`
+    required. For each candidate: a read-only `$apply=aggregate($count)` and a
+    single `$top=1` row. A count or a record returned WITHOUT auth is an
+    authorization-bypass data-exposure lead — strongest where the plain collection
+    is BLOCKED (413 'entity too large' / 403) but `$top`/`$apply` walk around it,
+    exactly the class of flaw a size/paging guard is mistaken for real authz.
+    Strictly GET; `$top=1` reads one row, never a bulk dump; writes never touched."""
+    seen: set[str] = set()
+    cands = []
+    for f in result.findings:
+        key = urlparse(f.url).path.rstrip("/")
+        if key in seen or not _odata_query_candidate(f):
+            continue
+        seen.add(key)
+        cands.append(f)
+    cands = cands[:MAX_ODATA_QUERY_ENDPOINTS]
+    if not cands:
+        return
+    observer.phase("odata-query")
+    observer.log(f"odata: probing {len(cands)} API collection(s) for OData query-option "
+                 f"exposure ($apply/$top, read-only)", 0, style="cyan")
+    hits = 0
+    for f in cands:
+        if _over_budget(engine, opts):
+            break
+        base = f.url.split("?", 1)[0]
+        blocked = not (200 <= f.status < 300)
+        count = None
+        try:
+            pr = await engine.fetch(odata.with_query(base, odata.AGG_COUNT), keep_body=True)
+            observer.request(base, pr.status, False)
+            if odata.classify_probe(pr.status, pr.body or b"") == "open":
+                count = odata.agg_count(pr.body or b"")
+        except Exception:
+            pass
+        recs = None
+        try:
+            pr2 = await engine.fetch(odata.with_query(base, odata.top_query(1)), keep_body=True)
+            observer.request(base, pr2.status, False)
+            recs = odata.parse_records(pr2.status, pr2.body or b"")
+        except Exception:
+            pass
+        # Report the BYPASS: a query option answers where the plain listing didn't,
+        # or (even on a 2xx collection) aggregation confirms the OData surface + count.
+        strong = blocked and (count is not None or recs)
+        if not (strong or count is not None):
+            continue
+        parts = []
+        if count is not None:
+            parts.append(f"aggregate($count)={count}")
+        sens = []
+        if recs:
+            fields = list(recs[0].keys())
+            sens = odata.sensitive_fields(recs[0])
+            parts.append(f"$top=1 returns a record ({len(fields)} fields"
+                         + (f", sensitive: {', '.join(sens[:6])}" if sens else "") + ")")
+        note = "OData query options answer WITHOUT auth"
+        if blocked:
+            note += f" — bypasses HTTP {f.status} on the plain collection"
+        note += " · " + " · ".join(parts)
+        tags = ["api", "odata-agg"]
+        if strong:
+            tags.append("auth-bypass")
+        if recs:
+            tags.append("disclosure")
+        of = Finding(base, 200, 0, "application/json", 0.9 if strong else 0.6,
+                     "odata", note=note, tags=list(dict.fromkeys(tags)))
+        result.findings.append(of)
+        observer.finding(of)
+        observer.log(f"odata: {observer.disp(base)} ← {note}", 0,
+                     style="bold red" if strong else "yellow")
+        if opts.finding_sink is not None:
+            opts.finding_sink(of)
+        hits += 1
+    if not hits:
+        observer.log("odata: no query-option exposure on probed collections", 1, style="green")
 
 
 async def _vhost_fold(engine, profile, result, opts, observer, root_simhash) -> None:

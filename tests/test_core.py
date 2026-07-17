@@ -1887,6 +1887,41 @@ class TestOData(unittest.TestCase):
         # 200 but no aggregate row (e.g. empty value) → reachable, not a leak
         self.assertEqual(odata.classify_probe(200, json.dumps({"value": []}).encode()), "reachable")
 
+    def test_agg_count_handles_bare_array_and_envelope(self):
+        import json
+        from origami.modules.discovery import odata
+        # bare array `[{"OrigamiC":N}]` — the shape a custom API-Gateway backend returns
+        self.assertEqual(odata.agg_count(json.dumps([{"OrigamiC": 8060}]).encode()), 8060)
+        # OData v4 envelope
+        self.assertEqual(odata.agg_count(json.dumps({"value": [{"OrigamiC": 12}]}).encode()), 12)
+        self.assertEqual(odata.classify_probe(200, json.dumps([{"OrigamiC": 8060}]).encode()), "open")
+        # a normal collection row without our alias must NOT read as an aggregate
+        self.assertIsNone(odata.agg_count(json.dumps([{"id": 1, "nome": "x"}]).encode()))
+        self.assertEqual(odata.classify_probe(200, json.dumps([{"id": 1}]).encode()), "reachable")
+
+    def test_top_probe_and_record_parsing_and_sensitive_fields(self):
+        import json
+        from origami.modules.discovery import odata
+        self.assertEqual(odata.with_query("https://h/api/motoristas", odata.top_query(1)),
+                         "https://h/api/motoristas?$top=1")
+        # respects an existing query string
+        self.assertEqual(odata.with_query("https://h/api/x?a=1", "$top=1"),
+                         "https://h/api/x?a=1&$top=1")
+        # a $top=1 record (bare array) → the record list; sensitive PII keys flagged
+        rec = {"identificacao": "046...", "cnh": "018...", "nomeCompleto": "A R",
+               "dataNascimento": "0001-01-01", "usuarioSolicitanteEmail": "x@y", "ativo": True}
+        recs = odata.parse_records(200, json.dumps([rec]).encode())
+        self.assertEqual(len(recs), 1)
+        sens = odata.sensitive_fields(recs[0])
+        for k in ("identificacao", "cnh", "nomeCompleto", "dataNascimento", "usuarioSolicitanteEmail"):
+            self.assertIn(k, sens)
+        self.assertNotIn("ativo", sens)                  # non-PII field not flagged
+        # a bare aggregate row is NOT a data record (don't double-count it)
+        self.assertIsNone(odata.parse_records(200, json.dumps([{"OrigamiC": 5}]).encode()))
+        # blocked / empty → no records
+        self.assertIsNone(odata.parse_records(413, b'{"message":"Request Entity Too Large"}'))
+        self.assertIsNone(odata.parse_records(200, json.dumps({"value": []}).encode()))
+
     def test_harvest_finds_metadata_via_stub_engine(self):
         import asyncio
         from origami.modules.discovery import odata
