@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.5.1]
+### Changed
+- **OData exposure is now reported as one standard finding row PER successful payload**, the
+  finding's URL being the reproducing request itself — `…/motoristas?$top=1` (the record read,
+  with its real 200/size) and `…?$apply=aggregate($count as …)` (the count) — instead of a custom
+  log line. Findings whose URL carries a query string now render in FULL (the query *is* the
+  payload; the usual path-only shortening would drop it), so every row is copy-paste ready and
+  lines up with the rest of the stream.
+- **The target collection is OData-probed EARLY**, right after fingerprint, not only at the
+  end-of-scan fold. Point Origami at `…/api/motoristas` and its `$top`/`$apply` exposure is
+  reported up front; the late fold still covers whatever the scan discovers, de-duped so nothing
+  is probed twice.
+
 ## [1.5.0]
 ### Fixed
 - **OData query-option exposure is now probed on the TARGET itself, even when its plain listing

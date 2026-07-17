@@ -1973,13 +1973,19 @@ class TestOData(unittest.TestCase):
         found = []
         asyncio.run(scanner._odata_query_fold(
             _Eng(), prof, res, ScanOptions(finding_sink=found.append), NullObserver()))
-        self.assertEqual(len(found), 1)
-        f = found[0]
-        self.assertIn("auth-bypass", f.tags)
-        self.assertIn("odata-agg", f.tags)
-        self.assertIn("disclosure", f.tags)
-        self.assertIn("413", f.note)                   # notes the bypassed plain status
-        self.assertIn("8060", f.note)                  # the leaked aggregate count
+        # one standard finding PER successful payload — the URL IS the reproducing request
+        self.assertEqual(len(found), 2)
+        by_url = {f.url: f for f in found}
+        top = by_url["https://h/api/motoristas?$top=1"]
+        self.assertIn("auth-bypass", top.tags)         # blocked plain listing → bypass
+        self.assertIn("disclosure", top.tags)          # a record was read
+        self.assertIn("413", top.note)                 # notes the bypassed status
+        self.assertIn("sensitive", top.note)           # PII field names flagged
+        agg = by_url["https://h/api/motoristas?$apply=aggregate($count as OrigamiC)"]
+        self.assertIn("8060", agg.note)                # the leaked aggregate count
+        self.assertEqual(agg.status, 200)              # the payload's real status
+        # the target path is recorded so a later pass won't double-probe it
+        self.assertIn("/api/motoristas", res.odata_probed)
         # a plain-2xx root target names no collection → nothing probed
         prof2 = TargetProfile(host="h", base_url="https://h/")
         found2 = []

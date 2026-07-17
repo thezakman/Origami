@@ -278,11 +278,15 @@ class RichUI(NullObserver):
         ostyle = ORIGIN_STYLE.get(f.origin, "white") if accessible else "dim"
         tags = _tag_markup(getattr(f, "tags", []))
         note = f" [dim]({f.note})[/]" if getattr(f, "note", "") else ""
+        # A URL carrying a query string IS a payload/PoC (e.g. an OData `?$top=1`) —
+        # show it in FULL so it's copy-paste-ready; disp would drop the query. Plain
+        # path findings keep the compact path-only display.
+        url_shown = f.url if urlparse(f.url).query else self.disp(f.url)
         # fixed-width columns first, URL last → everything lines up cleanly.
         self._live.console.print(
             f"[{style}]{f.status:>3}[/] [dim]{f.length:>9}B[/] "
             f"[{ostyle}]{f.origin:<9}[/] [dim]{f.confidence:.2f}[/] "
-            f"{(tags + ' ') if tags else ''}{self.disp(f.url)}{note}")
+            f"{(tags + ' ') if tags else ''}{url_shown}{note}")
         self._refresh()
 
     def directory(self, prefix: str, depth: int) -> None:
