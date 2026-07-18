@@ -1914,7 +1914,7 @@ class TestOData(unittest.TestCase):
         self.assertEqual(sorted(odata.entity_set_paths(m)),
                          ["/odata/Cities", "/odata/Customers", "/odata/Orders"])
         probe = odata.build_agg_probe("https://h/odata/", "Customers")
-        self.assertEqual(probe, "https://h/odata/Customers?$apply=aggregate($count as OrigamiC)")
+        self.assertEqual(probe, "https://h/odata/Customers?$apply=aggregate($count as Total)")
         # never a write verb / $batch / action in the probe URL
         for bad in ("$batch", "Recharge", "insert", "delete"):
             self.assertNotIn(bad, probe)
@@ -1924,7 +1924,7 @@ class TestOData(unittest.TestCase):
         from origami.modules.discovery import odata
         # aggregate returned unauth → open (authz-by-aggregation leak)
         self.assertEqual(odata.classify_probe(200, json.dumps(
-            {"@odata.context": "x", "value": [{"OrigamiC": 91234}]}).encode()), "open")
+            {"@odata.context": "x", "value": [{"Total": 91234}]}).encode()), "open")
         self.assertEqual(odata.classify_probe(401, b""), "auth")
         self.assertEqual(odata.classify_probe(403, b""), "auth")
         self.assertEqual(odata.classify_probe(501, b""), "unsupported")   # $apply not implemented
@@ -1935,14 +1935,22 @@ class TestOData(unittest.TestCase):
     def test_agg_count_handles_bare_array_and_envelope(self):
         import json
         from origami.modules.discovery import odata
-        # bare array `[{"OrigamiC":N}]` — the shape a custom API-Gateway backend returns
-        self.assertEqual(odata.agg_count(json.dumps([{"OrigamiC": 8060}]).encode()), 8060)
+        # bare array `[{"Total":N}]` — the shape a custom API-Gateway backend returns
+        self.assertEqual(odata.agg_count(json.dumps([{"Total": 8060}]).encode()), 8060)
         # OData v4 envelope
-        self.assertEqual(odata.agg_count(json.dumps({"value": [{"OrigamiC": 12}]}).encode()), 12)
-        self.assertEqual(odata.classify_probe(200, json.dumps([{"OrigamiC": 8060}]).encode()), "open")
+        self.assertEqual(odata.agg_count(json.dumps({"value": [{"Total": 12}]}).encode()), 12)
+        self.assertEqual(odata.classify_probe(200, json.dumps([{"Total": 8060}]).encode()), "open")
         # a normal collection row without our alias must NOT read as an aggregate
         self.assertIsNone(odata.agg_count(json.dumps([{"id": 1, "nome": "x"}]).encode()))
         self.assertEqual(odata.classify_probe(200, json.dumps([{"id": 1}]).encode()), "reachable")
+        # FP guard for the neutral `Total` alias: a raw ENTITY that merely HAS a Total
+        # field (an order amount), returned because $apply was ignored, is NOT a count
+        self.assertIsNone(odata.agg_count(json.dumps([{"Total": 99.9, "id": 1, "item": "x"}]).encode()))
+        # …but a pure aggregate with only @odata metadata alongside is still counted
+        self.assertEqual(odata.agg_count(json.dumps(
+            {"@odata.context": "x", "value": [{"Total": 42, "@odata.id": "y"}]}).encode()), 42)
+        # a boolean is not a count
+        self.assertIsNone(odata.agg_count(json.dumps([{"Total": True}]).encode()))
 
     def test_top_probe_and_record_parsing_and_sensitive_fields(self):
         import json
@@ -1962,7 +1970,7 @@ class TestOData(unittest.TestCase):
             self.assertIn(k, sens)
         self.assertNotIn("ativo", sens)                  # non-PII field not flagged
         # a bare aggregate row is NOT a data record (don't double-count it)
-        self.assertIsNone(odata.parse_records(200, json.dumps([{"OrigamiC": 5}]).encode()))
+        self.assertIsNone(odata.parse_records(200, json.dumps([{"Total": 5}]).encode()))
         # blocked / empty → no records
         self.assertIsNone(odata.parse_records(413, b'{"message":"Request Entity Too Large"}'))
         self.assertIsNone(odata.parse_records(200, json.dumps({"value": []}).encode()))
@@ -1984,7 +1992,7 @@ class TestOData(unittest.TestCase):
         class _Eng:
             async def fetch(self, url, method="GET", keep_body=False, **kw):
                 if "$apply=aggregate" in url:
-                    return _P(200, b'[{"OrigamiC":8060}]')
+                    return _P(200, b'[{"Total":8060}]')
                 if "$top=1" in url:
                     return _P(200, b'[{"nomeCompleto":"X","cpf":"123","ativo":true}]')
                 return _P(413, b'{"message":"Request Entity Too Large"}')   # plain listing blocked
@@ -2002,7 +2010,7 @@ class TestOData(unittest.TestCase):
         self.assertIn("disclosure", top.tags)          # a record was read
         self.assertIn("413", top.note)                 # notes the bypassed status
         self.assertIn("sensitive", top.note)           # PII field names flagged
-        agg = by_url["https://h/api/motoristas?$apply=aggregate($count as OrigamiC)"]
+        agg = by_url["https://h/api/motoristas?$apply=aggregate($count as Total)"]
         self.assertIn("8060", agg.note)                # the leaked aggregate count
         self.assertEqual(agg.status, 200)              # the payload's real status
         # the target path is recorded so a later pass won't double-probe it

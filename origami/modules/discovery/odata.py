@@ -142,7 +142,12 @@ def entity_set_paths(meta: dict) -> list[str]:
 # confirm exposure with two read-only GETs — an aggregate `$count` and a single
 # `$top=1` row — never a bulk dump, never a write.
 
-_AGG_ALIAS = "OrigamiC"
+# The `$count as …` alias. Kept NEUTRAL (`Total`, what an analyst writes by hand)
+# so the PoC URL carries no tool branding — the report/deliverable must be
+# self-contained. Safe against a false positive from a raw entity that happens to
+# have a `Total` field because `agg_count` requires the row to be a PURE aggregate
+# (only the alias + `@odata.*` metadata), which a real record never is.
+_AGG_ALIAS = "Total"
 AGG_COUNT = f"$apply=aggregate($count as {_AGG_ALIAS})"
 
 # PII / secret-bearing field names to call out when a probed record comes back
@@ -185,16 +190,23 @@ def _agg_rows(doc) -> list | None:
 
 
 def agg_count(body: bytes):
-    """Extract the aggregate count our `$count as OrigamiC` probe asked for, from
-    either response shape. Returns the number, or None if it isn't there — the
-    distinctive alias is the false-positive guard (a normal row won't carry it)."""
+    """Extract the aggregate count our `$count as Total` probe asked for, from either
+    response shape. Returns the number, or None if it isn't a genuine aggregate. The
+    false-positive guard: the row must be a PURE aggregate — the numeric alias plus at
+    most `@odata.*` metadata — so a raw entity that merely HAS a `Total` field (an
+    order amount, say), returned because `$apply` was ignored, is rejected."""
     try:
         doc = json.loads(body)
     except (json.JSONDecodeError, ValueError, TypeError):
         return None
     rows = _agg_rows(doc)
-    if rows and isinstance(rows[0], dict) and isinstance(rows[0].get(_AGG_ALIAS), (int, float)):
-        return rows[0][_AGG_ALIAS]
+    if not (rows and isinstance(rows[0], dict)):
+        return None
+    row = rows[0]
+    v = row.get(_AGG_ALIAS)
+    data_keys = [k for k in row if k != _AGG_ALIAS and not str(k).startswith("@")]
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and not data_keys:
+        return v                                   # only the alias (+ @odata metadata) → real aggregate
     return None
 
 

@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.5.2]
+### Changed
+- **The OData aggregate alias is now the neutral `Total`, not the tool-branded `OrigamiC`.** The
+  PoC URL that lands in a report/deliverable must be self-contained — `?$apply=aggregate($count
+  as Total)` is exactly what an analyst writes by hand, with no tool name leaked. The false-positive
+  guard the distinctive alias provided is preserved differently: `agg_count` now requires the row
+  to be a **pure aggregate** (the numeric alias plus at most `@odata.*` metadata), so a raw entity
+  that merely has a `Total` field (an order amount), returned because `$apply` was ignored, is
+  rejected — and a boolean `Total` isn't mistaken for a count.
+
 ## [1.5.1]
 ### Changed
 - **OData exposure is now reported as one standard finding row PER successful payload**, the
