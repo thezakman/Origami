@@ -85,8 +85,10 @@ def resolve_wordlist(path: Path | None) -> Path:
     so `-w big` just works. Otherwise the path is returned as-is."""
     if path is None:
         return WORDLIST_DIR / "base.txt"
-    if path.exists():
-        return path
+    if path.is_file():
+        return path                        # an actual file — a directory named
+                                           # `base` in the CWD must NOT shadow the
+                                           # bundled list (it'd IsADirectoryError)
     name = path.name if path.name.endswith(".txt") else path.name + ".txt"
     bundled = WORDLIST_DIR / name
     return bundled if bundled.exists() else path

@@ -2364,6 +2364,23 @@ class TestBaseWordlist(unittest.TestCase):
         self.assertEqual(resolve_wordlist(Path("/no/such.txt")).name, "such.txt")  # passthrough
         self.assertEqual(resolve_wordlist(None).name, "base.txt")           # default
 
+    def test_wordlist_name_not_shadowed_by_cwd_directory(self):
+        # regression: a directory named `base` in the CWD must not shadow the
+        # bundled base.txt — resolve_wordlist used exists() (true for dirs) and
+        # read_text() then raised IsADirectoryError under `--deep` (implies base).
+        import os, tempfile
+        from pathlib import Path
+        from origami.core.scheduler import resolve_wordlist, load_wordlists, WORDLIST_DIR
+        cwd = os.getcwd()
+        d = tempfile.mkdtemp()
+        os.mkdir(os.path.join(d, "base"))
+        try:
+            os.chdir(d)
+            self.assertEqual(resolve_wordlist(Path("base")), WORDLIST_DIR / "base.txt")
+            self.assertTrue(load_wordlists(["base"]))       # no IsADirectoryError
+        finally:
+            os.chdir(cwd)
+
     def test_load_wordlists_merges_and_dedups(self):
         import os, tempfile
         from origami.core.scheduler import load_wordlists, load_wordlist
