@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.6.1]
+### Fixed
+- **OAuth authorize URLs with HTML-encoded `&amp;` separators no longer false-flag.** An `href`
+  like `?client_id=…&amp;state=…&amp;code_challenge_method=S256` was parsed with `amp;state`/
+  `amp;code_challenge` as the keys, so a flow that *has* `state` + PKCE was wrongly reported as
+  "missing state" / "no PKCE". The candidate URL is now HTML-unescaped before parsing.
+### Changed
+- **The JWT/OAuth fold no longer re-fetches generic content.** `_authz_candidate` now qualifies a
+  2xx finding only when it's auth-relevant (a login/token/OAuth/`/me`/session path or an
+  auth-ish tag) — auth walls (401/403) still always qualify — so the fold stops re-reading every
+  JSON/HTML page (already covered by the secrets/harvest folds) and stays tightly scoped.
+
 ## [1.6.0]
 ### Added
 - **JWT + OAuth authorization-weakness detection** (`origami/modules/authz.py`, `authz` origin).

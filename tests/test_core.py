@@ -2134,6 +2134,29 @@ class TestAuthz(unittest.TestCase):
         self.assertEqual(r3[0]["issues"], [])
         # a non-OAuth URL is ignored
         self.assertEqual(authz.find_oauth_issues(b"https://h/page?client_id=only"), [])
+        # HTML-encoded `&amp;` separators must parse — else a flow WITH state+S256
+        # would false-flag "missing state"/"no PKCE"
+        amp = (b'<a href="https://h/authorize?client_id=abc&amp;response_type=code'
+               b'&amp;state=s&amp;code_challenge=c&amp;code_challenge_method=S256">')
+        r4 = authz.find_oauth_issues(amp)
+        self.assertEqual(r4[0]["issues"], [])          # no false positive
+
+    def test_authz_candidate_predicate(self):
+        from origami.core.scanner import _authz_candidate
+        from origami.core.response_classifier import Finding
+        def f(url, status=200, ct="application/json", tags=None):
+            return Finding(url, status, 100, ct, 0.9, "wordlist", tags=tags or [])
+        # auth walls always qualify (token cookie / WWW-Authenticate lives here)
+        self.assertTrue(_authz_candidate(f("https://h/x", 403)))
+        self.assertTrue(_authz_candidate(f("https://h/x", 401)))
+        # a generic 2xx JSON page (no auth signal) does NOT — avoid re-fetching content
+        self.assertFalse(_authz_candidate(f("https://h/api/products", 200)))
+        # 2xx qualifies on an auth-ish path or tag
+        self.assertTrue(_authz_candidate(f("https://h/oauth/login", 200, "text/html")))
+        self.assertTrue(_authz_candidate(f("https://h/api/token", 200)))
+        self.assertTrue(_authz_candidate(f("https://h/x", 200, tags=["auth"])))
+        # static assets never qualify
+        self.assertFalse(_authz_candidate(f("https://h/app.js", 200, "application/javascript")))
 
 
 class TestWellKnown(unittest.TestCase):

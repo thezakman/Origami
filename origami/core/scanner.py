@@ -1732,24 +1732,29 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
 
 MAX_AUTHZ_FILES = 30      # cap endpoints re-read for JWT/OAuth weakness analysis
 _AUTHZ_HINT = ("oauth", "authoriz", "openid", "/token", "jwt", "login", "signin",
-               "sign-in", "/auth", "sso", "saml", "session", "bearer", "connect/")
+               "sign-in", "/auth", "sso", "saml", "session", "bearer", "connect/",
+               "/me", "/account", "/profile", "/user", "whoami", "identity", "graphql")
+_AUTHZ_TAGS = {"auth", "oauth", "jwt", "graphql"}
 _SEV_STYLE = {"high": "bold red", "med": "yellow", "low": "dim"}
 
 
 def _authz_candidate(f) -> bool:
-    """A finding likely to carry a JWT or an OAuth authorize URL: an auth wall
-    (401/403 — where a token cookie / WWW-Authenticate lives) or a 2xx JSON/HTML
-    page (a token in the body, an OAuth login/authorize link). Auth-ish paths and
-    tags widen the net a little; static assets stay out."""
+    """A finding likely to carry a JWT or an OAuth authorize URL. An auth wall
+    (401/403 — where a token cookie / WWW-Authenticate lives) always qualifies; a
+    2xx page qualifies only when it's auth-RELEVANT (a login/token/OAuth path or an
+    auth-ish tag) — not every JSON/HTML page, so generic content isn't re-fetched
+    (it's already read by the secrets/harvest folds). Static assets stay out."""
     if f.status not in (200, 201, 202, 401, 403):
         return False
-    ct = (f.content_type or "").lower()
     path = urlparse(f.url).path.lower()
     if any(path.endswith(e) for e in (".js", ".css", ".png", ".jpg", ".svg", ".woff", ".woff2", ".ico")):
         return False
-    return ("json" in ct or "html" in ct or "jwt" in ct
+    if f.status in (401, 403):
+        return True
+    ct = (f.content_type or "").lower()
+    return ("jwt" in ct
             or any(h in path for h in _AUTHZ_HINT)
-            or bool(set(getattr(f, "tags", []) or []) & {"auth", "oauth", "jwt", "api", "graphql"}))
+            or bool(set(getattr(f, "tags", []) or []) & _AUTHZ_TAGS))
 
 
 def _authz_report(finding, body, headers, observer, opts, result) -> int:

@@ -18,6 +18,7 @@ Strictly read-only — nothing is signed, forged, or replayed. What it flags:
 from __future__ import annotations
 
 import base64
+import html as _html
 import json
 import re
 from urllib.parse import parse_qs, urlparse
@@ -128,7 +129,10 @@ def find_oauth_issues(body: bytes, base_url: str | None = None) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for m in re.finditer(r"""https?://[^\s"'<>\\]+""", text):
-        u = m.group(0).rstrip('.,);"\'')
+        # unescape HTML entities so an href's `&amp;`-separated params parse as
+        # `response_type`/`state`/… and not `amp;state` (which would false-flag
+        # "missing state"/"no PKCE" on a flow that actually has them).
+        u = _html.unescape(m.group(0).rstrip('.,);"\''))
         q = urlparse(u).query
         if not _is_authorize_query(q) or u in seen:
             continue
