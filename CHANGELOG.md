@@ -5,6 +5,23 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.6.0]
+### Added
+- **JWT + OAuth authorization-weakness detection** (`origami/modules/authz.py`, `authz` origin).
+  A new `_authz_fold` re-reads auth-relevant endpoints — auth walls (401/403) and login/token/OAuth
+  pages — and flags, **passively and read-only**:
+  - **JWT** (from a `{"token":…}` body field, a `Set-Cookie` session, or a `WWW-Authenticate`/
+    `Authorization` header): `alg:none`, `kid` path-traversal / URL-injection, `jku`/`x5u`
+    remote-key URLs (SSRF / key injection), `x5c` embedded-cert key-confusion, missing `exp`, and
+    privilege claims (`role`/`admin`/`scope`, values reported as evidence) — tag `jwt` (+
+    `auth-bypass` on a high-severity header weakness);
+  - **OAuth** authorize URLs (`response_type`+`client_id`): missing `state` (CSRF / code
+    injection), PKCE `plain` downgrade, or no PKCE at all — tag `oauth`.
+
+  Nothing is forged, signed, or replayed — this is the recon lead a token attack starts from.
+  Validated live against the Brute Logic JWT/OAuth authorization testbeds. New `jwt`/`oauth` tags
+  and `authz` origin styled in the report.
+
 ## [1.5.2]
 ### Changed
 - **The OData aggregate alias is now the neutral `Total`, not the tool-branded `OrigamiC`.** The

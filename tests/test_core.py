@@ -2051,6 +2051,91 @@ class TestOData(unittest.TestCase):
         self.assertEqual(none_sets, set())
 
 
+class TestAuthz(unittest.TestCase):
+    @staticmethod
+    def _seg(d):
+        import base64, json
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+
+    def _jwt(self, header, claims):
+        return f"{self._seg(header)}.{self._seg(claims)}.sig"
+
+    def test_find_jwts_body_and_headers(self):
+        from origami.modules import authz
+        tok = self._jwt({"alg": "HS256", "typ": "JWT"}, {"sub": "guest", "exp": 1})
+        # in a JSON body
+        self.assertIn(tok, authz.find_jwts(f'{{"token":"{tok}"}}'.encode()))
+        # in a Set-Cookie header (lowercased key, as the engine stores it)
+        self.assertIn(tok, authz.find_jwts(b"", {"set-cookie": f"session={tok}; HttpOnly"}))
+        # an unsigned (alg:none) token has an EMPTY third segment — still caught
+        none_tok = f"{self._seg({'alg': 'none'})}.{self._seg({'sub': 'admin'})}."
+        self.assertIn(none_tok, authz.find_jwts(none_tok.encode()))
+        # not-a-jwt is ignored
+        self.assertEqual(authz.find_jwts(b"just some text, no token here"), [])
+
+    def test_analyze_jwt_flags_header_weaknesses(self):
+        from origami.modules import authz
+
+        def issues(header, claims=None):
+            info = authz.analyze_jwt(self._jwt(header, claims or {"sub": "x", "exp": 9}))
+            return {t for _, t in info["issues"]}, {s for s, _ in info["issues"]}
+
+        # alg:none → high
+        txt, sev = issues({"alg": "none"})
+        self.assertTrue(any("alg:none" in t for t in txt))
+        self.assertIn("high", sev)
+        # kid path traversal → high
+        txt, _ = issues({"alg": "HS256", "kid": "../../../dev/null"})
+        self.assertTrue(any("path-traversal" in t for t in txt))
+        # kid URL injection → high
+        txt, _ = issues({"alg": "HS256", "kid": "https://evil.example/k"})
+        self.assertTrue(any("URL-injection" in t for t in txt))
+        # jku / x5u remote key → high (SSRF)
+        txt, _ = issues({"alg": "RS256", "jku": "https://evil/jwks.json"})
+        self.assertTrue(any("jku" in t and "SSRF" in t for t in txt))
+        txt, _ = issues({"alg": "RS256", "x5u": "https://evil/c.pem"})
+        self.assertTrue(any("x5u" in t for t in txt))
+        # x5c embedded cert → med
+        _, sev = issues({"alg": "RS256", "x5c": ["MIID..."]})
+        self.assertIn("med", sev)
+
+    def test_analyze_jwt_claims(self):
+        from origami.modules import authz
+        # missing exp → low; privilege claim captured
+        info = authz.analyze_jwt(self._jwt({"alg": "HS256"}, {"sub": "u", "role": "admin"}))
+        self.assertTrue(any("no exp" in t for _, t in info["issues"]))
+        self.assertEqual(info["sensitive"], {"role": "admin"})
+        self.assertEqual(info["sub"], "u")
+        # a clean HS256 token with exp and no privilege claim → no issues
+        clean = authz.analyze_jwt(self._jwt({"alg": "HS256"}, {"sub": "u", "exp": 9}))
+        self.assertEqual(clean["issues"], [])
+        self.assertEqual(clean["sensitive"], {})
+        # garbage → empty dict
+        self.assertEqual(authz.analyze_jwt("not.a.jwt"), {})
+
+    def test_find_oauth_issues(self):
+        from origami.modules import authz
+        base = ("https://h/authorize?client_id=abc&response_type=code"
+                "&redirect_uri=https%3A%2F%2Fh%2Fcb")
+        # missing state AND no PKCE
+        r = authz.find_oauth_issues(f'<a href="{base}&scope=openid">go</a>'.encode())
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]["client_id"], "abc")
+        self.assertTrue(any("missing state" in i for i in r[0]["issues"]))
+        self.assertTrue(any("no PKCE" in i for i in r[0]["issues"]))
+        # PKCE plain downgrade flagged; state present → no CSRF issue
+        r2 = authz.find_oauth_issues(
+            (base + "&state=xyz&code_challenge=q&code_challenge_method=plain").encode())
+        self.assertTrue(any("plain" in i for i in r2[0]["issues"]))
+        self.assertFalse(any("state" in i for i in r2[0]["issues"]))
+        # a proper flow (state + S256) → no issues
+        r3 = authz.find_oauth_issues(
+            (base + "&state=xyz&code_challenge=q&code_challenge_method=S256").encode())
+        self.assertEqual(r3[0]["issues"], [])
+        # a non-OAuth URL is ignored
+        self.assertEqual(authz.find_oauth_issues(b"https://h/page?client_id=only"), [])
+
+
 class TestWellKnown(unittest.TestCase):
     def test_extract_oidc_endpoints_same_host(self):
         from origami.modules.discovery import wellknown

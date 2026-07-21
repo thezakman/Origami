@@ -50,7 +50,7 @@ from origami.core.scope import same_host, same_site, path_tenant_host, same_tena
 from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      derive_vocabulary, load_wordlists,
                                      target_tokens)
-from origami.modules import bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
+from origami.modules import authz, bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
                                         graphql, js_parser, methods, mutate, odata, originip,
                                         robots, shortname, vcs, wayback, wellknown)
@@ -1030,6 +1030,11 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     await _guard(observer, "secrets",
                  _secrets_fold(engine, profile, result, opts, observer), None)
 
+    # 7.05 authz — JWT/OAuth weakness analysis on auth walls + login/token/OAuth
+    # pages (a token in a Set-Cookie/body, an authorize URL missing state/PKCE).
+    await _guard(observer, "authz",
+                 _authz_fold(engine, profile, result, opts, observer), None)
+
     # 7.1 cloud buckets — report S3/GCS/Azure refs seen in the bodies; with
     # --buckets, probe each for public listability (read-only GET, off-host).
     await _guard(observer, "buckets",
@@ -1723,6 +1728,107 @@ async def _secrets_fold(engine, profile, result, opts, observer) -> None:
                 observer.request(url, probe.status, False)
                 continue
             _report(observer, result, opts, finding, url)
+
+
+MAX_AUTHZ_FILES = 30      # cap endpoints re-read for JWT/OAuth weakness analysis
+_AUTHZ_HINT = ("oauth", "authoriz", "openid", "/token", "jwt", "login", "signin",
+               "sign-in", "/auth", "sso", "saml", "session", "bearer", "connect/")
+_SEV_STYLE = {"high": "bold red", "med": "yellow", "low": "dim"}
+
+
+def _authz_candidate(f) -> bool:
+    """A finding likely to carry a JWT or an OAuth authorize URL: an auth wall
+    (401/403 — where a token cookie / WWW-Authenticate lives) or a 2xx JSON/HTML
+    page (a token in the body, an OAuth login/authorize link). Auth-ish paths and
+    tags widen the net a little; static assets stay out."""
+    if f.status not in (200, 201, 202, 401, 403):
+        return False
+    ct = (f.content_type or "").lower()
+    path = urlparse(f.url).path.lower()
+    if any(path.endswith(e) for e in (".js", ".css", ".png", ".jpg", ".svg", ".woff", ".woff2", ".ico")):
+        return False
+    return ("json" in ct or "html" in ct or "jwt" in ct
+            or any(h in path for h in _AUTHZ_HINT)
+            or bool(set(getattr(f, "tags", []) or []) & {"auth", "oauth", "jwt", "api", "graphql"}))
+
+
+def _authz_report(finding, body, headers, observer, opts, result) -> int:
+    """Analyze one response (body + headers) for JWT / OAuth weaknesses and emit
+    findings. Returns the number of leads flagged."""
+    n = 0
+    for token in authz.find_jwts(body, headers):
+        info = authz.analyze_jwt(token)
+        if not info:
+            continue
+        issues = info["issues"]
+        sev = ("high" if any(s == "high" for s, _ in issues)
+               else "med" if any(s == "med" for s, _ in issues) else "low")
+        bits = [t for _, t in issues]
+        if info["sensitive"]:
+            bits.append("claims " + ", ".join(f"{k}={v}" for k, v in list(info["sensitive"].items())[:4]))
+        note = (f"JWT ({info['alg']}"
+                + (f", sub={info['sub']}" if info.get("sub") else "") + ")"
+                + (" — " + " · ".join(bits) if bits else " disclosed"))
+        tags = ["jwt", "disclosure"]
+        if any(s == "high" for s, _ in issues):
+            tags.append("auth-bypass")
+        f = Finding(finding.url, finding.status, len(token), "application/jwt",
+                    0.9 if sev == "high" else 0.75, "authz", note=note, tags=tags)
+        result.findings.append(f)
+        observer.finding(f)
+        observer.log(f"jwt: {observer.disp(finding.url)} ← {note}", 0,
+                     style=_SEV_STYLE.get(sev, "yellow"))
+        if opts.finding_sink is not None:
+            opts.finding_sink(f)
+        n += 1
+    for oa in authz.find_oauth_issues(body):
+        if not oa["issues"]:
+            continue
+        note = (f"OAuth authorize flow (client_id={oa['client_id']}) — "
+                + " · ".join(oa["issues"]))
+        f = Finding(oa["url"], finding.status, 0, "text/html", 0.85, "authz",
+                    note=note, tags=["oauth", "auth-bypass"])
+        result.findings.append(f)
+        observer.finding(f)
+        observer.log(f"oauth: {observer.disp(oa['url'])} ← {note}", 0, style="bold red")
+        if opts.finding_sink is not None:
+            opts.finding_sink(f)
+        n += 1
+    return n
+
+
+async def _authz_fold(engine, profile, result, opts, observer) -> None:
+    """Re-read auth-relevant endpoints (auth walls + login/token/OAuth pages) and
+    flag JWT + OAuth weaknesses in their bodies AND headers — a token in a `Set-Cookie`
+    or `{"token":…}`, an OAuth authorize URL missing `state`/PKCE. Read-only: nothing
+    is forged or replayed; this is the recon lead, not the exploit."""
+    cands = [f for f in result.findings if _authz_candidate(f)]
+    if not cands:
+        return
+    # auth walls + auth-ish paths first, then smaller bodies; cap the radius
+    cands.sort(key=lambda f: (f.status not in (401, 403)
+                              and not any(h in f.url.lower() for h in _AUTHZ_HINT), f.length))
+    cands = cands[:MAX_AUTHZ_FILES]
+    observer.phase("authz")
+    observer.log(f"authz: analyzing {len(cands)} endpoint(s) for JWT/OAuth weaknesses",
+                 0, style="cyan")
+    seen: set[str] = set()
+    total = 0
+    for f in cands:
+        if _over_budget(engine, opts):
+            break
+        key = f.url.split("?", 1)[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            pr = await engine.fetch(f.url, keep_body=True)
+        except Exception:
+            continue
+        total += _authz_report(f, pr.body or b"", pr.headers, observer, opts, result)
+    if total:
+        observer.log(f"authz: {total} JWT/OAuth lead(s) flagged — see the 'jwt'/'oauth' tags",
+                     0, style="bold yellow")
 
 
 MAX_CONFIG_SEEDS = 60   # cap paths enumerated from config-file references

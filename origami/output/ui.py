@@ -103,7 +103,7 @@ ORIGIN_STYLE = {
     "harvest": "bright_blue", "vhost": "bold cyan", "wayback": "bright_green",
     "cache-poison": "bold magenta", "vcs": "bold red", "bucket": "bold yellow",
     "config": "bright_cyan", "apiver": "bright_blue", "mutate": "yellow",
-    "index-hidden": "yellow",
+    "index-hidden": "yellow", "odata": "bold magenta", "authz": "bold red",
 }
 
 # Semantic tag colour — `disclosure` deliberately loud.
@@ -116,6 +116,9 @@ TAG_STYLE = {
     "param": "bold green", "xss-lead": "bold black on bright_red",
     "cache": "cyan", "poisonable": "bold white on magenta",
     "method": "bold cyan", "bucket": "bold yellow",
+    "auth-bypass": "bold black on bright_red", "odata-agg": "bold magenta",
+    "ssti-lead": "bold black on bright_red", "redirect-lead": "bold black on bright_yellow",
+    "jwt": "bold black on bright_red", "oauth": "bold black on bright_red",
 }
 
 
