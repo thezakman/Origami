@@ -32,6 +32,7 @@ class Finding:
     simhash: int = 0     # body fingerprint — for same-content collision collapse
     words: int = 0       # body word count (from the probe) — for --filter-word-count
     lines: int = 0       # body line count (from the probe) — for --filter-line-count
+    repro: str = ""      # exact reproducing curl (set by folds whose request is non-trivial — bypass headers/method); --curl falls back to `curl <url>`
 
 
 # needle → tag. A finding can carry several. Two needle kinds (see `_matches`):

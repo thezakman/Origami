@@ -419,6 +419,8 @@ async def run(args: argparse.Namespace) -> int:
                     streamed = getattr(observer, "streamed", False)
                     ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
                                     show_fingerprint=(not streamed) or args.fp)
+                    if args.curl:
+                        ui.print_curls(result)
                     if args.diff:
                         _print_diff(diff_baseline, result, urlparse(target).netloc,
                                     have_memory=memory is not None, out=_status_out)
@@ -592,6 +594,9 @@ def main() -> None:
                     help="show full URLs instead of just paths")
     ap.add_argument("--fp", "--fingerprint", action="store_true", dest="fp",
                     help="print the fingerprint panel (tech/WAF/folds/params) at the end")
+    ap.add_argument("--curl", action="store_true",
+                    help="after the scan, print a copy-paste curl to reproduce each finding "
+                         "(the exact header/method for a bypass, the payload URL for OData/…)")
     sc = ap.add_mutually_exclusive_group()
     sc.add_argument("--shortscan", action="store_true",
                     help="force the IIS 8.3 shortscan fold (default: auto when IIS detected)")

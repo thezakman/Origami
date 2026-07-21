@@ -5,6 +5,21 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.7.0]
+### Fixed
+- **403-bypass no longer false-flags an index/default-route "200".** The `X-Original-URL` /
+  `X-Rewrite-URL` header family often just routes the request to the app index (a generic
+  "restricted"/login page) — a `200` that is NOT the blocked resource. The homepage guard only
+  compared against `root_simhash` (the TARGET's body), which is useless when the target is a deep
+  or empty-bodied API endpoint (`…/api/…/document` returning `0B`). The fold now fetches the host
+  index once and rejects any bypass `200` whose body matches it — so `.aws/config`/`.aws/credentials`
+  "bypasses" that were really just the index page are no longer reported.
+### Added
+- **`--curl`** — after the scan, print a copy-paste `curl` to reproduce each finding. A
+  header/method bypass carries its exact `-H`/`-X` (`curl -sk -H 'X-Original-URL: …' '…'`), an
+  OData lead carries its payload URL (`…?$top=1`), everything else falls back to `curl -sk '<url>'`.
+  Findings now carry a `repro` field folds can populate with the precise reproducing request.
+
 ## [1.6.1]
 ### Fixed
 - **OAuth authorize URLs with HTML-encoded `&amp;` separators no longer false-flag.** An `href`

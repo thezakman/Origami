@@ -618,6 +618,31 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
     console.print(tbl)
 
 
+def _finding_curl(f) -> str:
+    """The reproducing curl for a finding: its exact `repro` (a header/method bypass)
+    or a plain `curl -sk '<url>'` — the URL already carries any payload query."""
+    repro = getattr(f, "repro", "") or ""
+    return repro if repro else f"curl -sk '{f.url}'"
+
+
+def print_curls(result) -> None:
+    """Print one copy-paste curl per finding — reproduce the whole run's findings.
+    Ordered highest-confidence first; the URL itself carries any payload (OData
+    `?$top=1`), and a bypass carries its exact `-H`/`-X`."""
+    findings = result.findings
+    if not findings:
+        return
+    lines = [f"# {f.origin} · {f.status} · {','.join(getattr(f, 'tags', []) or [])}\n{_finding_curl(f)}"
+             for f in findings]
+    body = "\n".join(lines)
+    if HAS_RICH and console:
+        console.print(Panel(body, title=f"[bold]Reproduce ({len(findings)})[/]",
+                            border_style="cyan", expand=False))
+    else:
+        print(f"\n=== Reproduce ({len(findings)}) ===")
+        print(body)
+
+
 def _plain_report(result, full_url: bool = False, show_findings: bool = True,
                   show_fingerprint: bool = True) -> None:
     p = result.profile

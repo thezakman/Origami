@@ -1109,6 +1109,50 @@ class TestBypass403(unittest.TestCase):
         self.assertNotIn(f, result.findings)             # …and supersedes the original 403
         self.assertTrue(any(s.origin == "bypass403" for s in streamed))  # and is streamed (JSONL)
 
+    def test_bypass_rejects_index_default_route(self):
+        # FP guard: X-Original-URL / X-Rewrite-URL tricks often just route to the
+        # site index (a generic 200 that is NOT the blocked resource). When the
+        # target is a deep/empty API endpoint, root_simhash can't catch it — the
+        # host-index simhash must. A 200 matching the index is rejected, not flagged.
+        import asyncio
+        from origami.core.scanner import _bypass_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        INDEX = b"<html><body><h1>Acesso restrito!</h1></body></html>"
+        url403 = "https://h/api/x/.aws/config"
+
+        class FakeEngine:                                    # host root AND every bypass
+            total_requests = 0                               # variant return the SAME index
+            async def fetch(self, u, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                return make_probe(200, INDEX, url=u)
+
+        prof = TargetProfile(host="h", base_url="https://h/api/x/document")
+        f = Finding(url403, 403, 20, "text/html", 0.85, "wordlist", simhash=12345)
+        result = ScanResult(profile=prof, findings=[f])
+        # root_simhash is the TARGET's (empty) body — only the host-index check catches this
+        asyncio.run(_bypass_fold(FakeEngine(), prof, result, ScanOptions(bypass403=True),
+                                 NullObserver(), root_simhash=999))
+        self.assertEqual([x for x in result.findings if x.origin == "bypass403"], [])
+        self.assertIn(f, result.findings)                    # the 403 is left intact
+
+    def test_curl_repro(self):
+        from origami.core.scanner import _curl_cmd
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import _finding_curl
+        # a header/method bypass reproduces with the exact -H / -X
+        self.assertEqual(
+            _curl_cmd("https://h/x", "GET", {"X-Original-URL": "/x"}),
+            "curl -sk -H 'X-Original-URL: /x' 'https://h/x'")
+        self.assertEqual(_curl_cmd("https://h/x", "POST"), "curl -sk -X POST 'https://h/x'")
+        # a finding with a stored repro uses it; otherwise falls back to curl <url>
+        self.assertEqual(_finding_curl(Finding("https://h/m?$top=1", 200, 5, "application/json",
+                                               0.9, "odata")), "curl -sk 'https://h/m?$top=1'")
+        f = Finding("https://h/x", 200, 5, "text/html", 0.9, "bypass403", repro="curl -sk -H 'a: b' 'https://h/x'")
+        self.assertEqual(_finding_curl(f), "curl -sk -H 'a: b' 'https://h/x'")
+
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the
         # same on another so it's fired first there (with the per-resource early-exit).

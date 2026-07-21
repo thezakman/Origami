@@ -91,6 +91,19 @@ def _host_root(url: str) -> str:
     return f"{p.scheme}://{p.netloc}/"
 
 
+def _curl_cmd(url: str, method: str = "GET", headers: dict | None = None) -> str:
+    """A copy-paste curl that reproduces a request — the exact method + headers a
+    fold used, so a header/method bypass is runnable as-is. `-sk`: quiet + insecure
+    (targets under test often have self-signed / legacy TLS)."""
+    parts = ["curl", "-sk"]
+    if method and method.upper() != "GET":
+        parts += ["-X", method.upper()]
+    for k, v in (headers or {}).items():
+        parts += ["-H", "'" + f"{k}: {v}".replace("'", "'\\''") + "'"]
+    parts.append("'" + url.replace("'", "'\\''") + "'")
+    return " ".join(parts)
+
+
 def _join_candidate(root: str, prefix: str, path: str) -> str:
     """Build the absolute URL for a candidate path.
 
@@ -2979,6 +2992,18 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
     total = sum(len(_vars_for(f)) for f in blocked)
     observer.start_prefix("403-bypass", total)
     root = _host_root(profile.base_url)
+    # The site's DEFAULT route: the X-Original-URL / X-Rewrite-URL family often just
+    # routes the request to the app index (a generic "restricted"/login/index page),
+    # and `root_simhash` is the TARGET's body — useless when the target is a deep or
+    # empty-bodied API endpoint (as here: /api/…/document returned 0B). Fetch the host
+    # index once so an index-routing "200" is rejected, not flagged as a bypass.
+    home_simhash = 0
+    try:
+        hp = await engine.fetch(root)
+        if hp.ok and 200 <= hp.status < 300 and hp.length > 0:
+            home_simhash = hp.body_simhash
+    except Exception:
+        pass
     for f in blocked:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
@@ -2993,14 +3018,17 @@ async def _bypass_fold(engine, profile, result, opts, observer, root_simhash) ->
             if not (probe.ok and 200 <= probe.status < 300 and probe.length > 0):
                 observer.tick(hit=False); continue        # 2xx with actual content only
             if hamming(probe.body_simhash, root_simhash) <= bl.SIMHASH_MISS_DISTANCE:
-                observer.tick(hit=False); continue        # just the homepage — not a bypass
+                observer.tick(hit=False); continue        # just the target's body — not a bypass
+            if home_simhash and hamming(probe.body_simhash, home_simhash) <= bl.SIMHASH_MISS_DISTANCE:
+                observer.tick(hit=False); continue        # the site index / default route — not the blocked resource
             if f.simhash and hamming(probe.body_simhash, f.simhash) <= bl.SIMHASH_MISS_DISTANCE:
                 observer.tick(hit=False); continue        # same body as the 403 page — only the status flipped
             if await _confirm(engine, profile, prefix, probe, "bypass403") is None:
                 observer.tick(hit=False); continue        # soft-404 / catch-all
             bf = Finding(f.url, probe.status, probe.length, probe.content_type, 0.9,
                          "bypass403", note=f"403→{probe.status} bypass: {label}",
-                         tags=sorted(set(f.tags) | {"bypass"}), simhash=probe.body_simhash)
+                         tags=sorted(set(f.tags) | {"bypass"}), simhash=probe.body_simhash,
+                         repro=_curl_cmd(url, method, headers))   # the exact header/method trick
             # A confirmed bypass SUPERSEDES the wall it came from: drop the original
             # 403 (and clear it from the live-dedup set) so the bypass — which reuses
             # the blocked URL — is actually appended/streamed/reported instead of
