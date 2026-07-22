@@ -5,6 +5,21 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.7.1]
+### Fixed
+- **Cache-poison no longer flags a "behaviour-change" lead on a provably un-cacheable response.**
+  On a Cloudflare target every endpoint was probed even when its response was `Cache-Control:
+  no-store` / `CF-Cache-Status: DYNAMIC`; an unkeyed header that merely *routed* the request
+  (e.g. `X-Original-URL`) then produced a "cacheability unconfirmed" lead that is not exploitable
+  (nothing gets cached, so nothing gets poisoned). Such behaviour-change leads are now suppressed
+  when the response is `no-store`/`private`/`no-cache` or the edge says `DYNAMIC`/`BYPASS`
+  (`cache_poison.provably_uncacheable`). A reflected canary or a confirmed cache-store still reports.
+- **Backup fold: a suffix catch-all defeated by a per-request nonce is now caught.** The
+  byte-identical guard (`swagger.json.bak == swagger.json`) compared by simhash, which a page with
+  a fresh CSRF token/timestamp each load evades (same length, different bytes). The fold now probes
+  one random extension first; a `.bak`/`.old`/… variant whose `(status, length)` matches that
+  catch-all is dropped instead of reported as a disclosure.
+
 ## [1.7.0]
 ### Fixed
 - **403-bypass no longer false-flags an index/default-route "200".** The `X-Original-URL` /

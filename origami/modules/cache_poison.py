@@ -76,6 +76,19 @@ def cache_status(headers: dict[str, str]) -> str:
     return ""
 
 
+def provably_uncacheable(headers: dict[str, str]) -> bool:
+    """The response the origin/edge will PROVABLY not store — so it can't be
+    poisoned. `Cache-Control: no-store/private/no-cache`, or an edge status that
+    says "not cached" (`cf-cache-status: DYNAMIC|BYPASS`). Distinct from an
+    ambiguous `MISS` (cacheable, just not stored yet) which stays a lead."""
+    h = headers or {}
+    cc = (h.get("cache-control") or "").lower()
+    if "no-store" in cc or "private" in cc or "no-cache" in cc:
+        return True
+    raw = ((h.get("cf-cache-status") or "") + " " + (h.get("x-cache-status") or "")).lower()
+    return "dynamic" in raw or "bypass" in raw
+
+
 def is_cacheable(headers: dict[str, str]) -> bool:
     """Conservative "could this response be stored by a shared cache?".
 

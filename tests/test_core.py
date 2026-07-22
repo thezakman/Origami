@@ -1138,6 +1138,43 @@ class TestBypass403(unittest.TestCase):
         self.assertEqual([x for x in result.findings if x.origin == "bypass403"], [])
         self.assertIn(f, result.findings)                    # the 403 is left intact
 
+    def test_backup_drops_suffix_catchall(self):
+        # a route that serves the same-length page for ANY suffix (/x.json.bak ==
+        # /x.json.<garbage> == /x.json) — its ".bak"/".old" aren't disclosures. A
+        # per-request nonce defeats the simhash guard, so the random-suffix
+        # (status,length) probe must catch it.
+        import asyncio
+        from origami.core import scanner
+        from origami.core.scanner import _backup_fold, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        LEN = 4000
+
+        class FakeEngine:                          # every suffix → same length, nonce'd bytes
+            n = 0
+            async def fetch(self, u, method="GET", keep_body=False, headers=None):
+                FakeEngine.n += 1
+                body = (b"<form>" + str(FakeEngine.n).encode() + b"z" * LEN)[:LEN]
+                return make_probe(200, body, url=u)
+
+        prof = TargetProfile(host="h", base_url="https://h/api/data.json")
+        f = Finding("https://h/api/data.json", 200, LEN, "application/json", 0.95,
+                    "wordlist", simhash=999)     # base simhash differs from the nonce'd bodies
+        result = ScanResult(profile=prof, findings=[f])
+        orig = scanner._confirm
+        async def fake_confirm(engine, profile, prefix, probe, origin):
+            return Finding(probe.url, probe.status, probe.length, probe.content_type, 0.9, origin)
+        scanner._confirm = fake_confirm
+        try:
+            asyncio.run(_backup_fold(FakeEngine(), prof, result, ScanOptions(backups=True),
+                                     NullObserver()))
+        finally:
+            scanner._confirm = orig
+        # NO backup variant reported — all matched the random-suffix catch-all
+        self.assertEqual([x for x in result.findings if x.origin == "backup"], [])
+
     def test_curl_repro(self):
         from origami.core.scanner import _curl_cmd
         from origami.core.response_classifier import Finding
@@ -4198,6 +4235,18 @@ class TestCachePoison(unittest.TestCase):
         self.assertTrue(is_cacheable({"age": "42"}))
         self.assertTrue(is_cacheable({"cf-cache-status": "HIT"}))
         self.assertTrue(is_cacheable({"expires": "Wed, 21 Oct 2099 07:28:00 GMT"}))
+
+    def test_provably_uncacheable(self):
+        from origami.modules.cache_poison import provably_uncacheable
+        # explicit no-store / private / no-cache → can't be poisoned
+        self.assertTrue(provably_uncacheable({"cache-control": "no-cache, no-store, max-age=0"}))
+        self.assertTrue(provably_uncacheable({"cache-control": "private"}))
+        # the edge says it did NOT cache it (Cloudflare DYNAMIC / BYPASS)
+        self.assertTrue(provably_uncacheable({"cf-cache-status": "DYNAMIC"}))
+        self.assertTrue(provably_uncacheable({"x-cache-status": "BYPASS"}))
+        # an ambiguous MISS (cacheable, just not stored yet) stays a lead — NOT suppressed
+        self.assertFalse(provably_uncacheable({"cf-cache-status": "MISS", "cache-control": "max-age=60"}))
+        self.assertFalse(provably_uncacheable({}))
 
     def test_header_set_intensity_and_custom(self):
         from origami.modules.cache_poison import header_set

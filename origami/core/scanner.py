@@ -2476,6 +2476,15 @@ async def _cache_poison_fold(engine, profile, result, opts, observer, root_simha
                 cached = (_differs(base, confirm) and not _differs(probe, confirm))
             cached = cached or cache_poison.cache_status(confirm.headers) == "HIT"
             where = ctx or "behaviour-change"
+            # A response the origin/edge PROVABLY won't cache — Cache-Control
+            # no-store/private/no-cache, or CF-Cache-Status DYNAMIC/BYPASS (the edge
+            # saying "not cached", vs an ambiguous MISS that still could be) — cannot
+            # be poisoned. A bare "behaviour-change" lead there is noise (the unkeyed
+            # header just routes the attacker's OWN request). Suppress it unless the
+            # canary actually reflected (still worth a look) or the cache confirmed it.
+            if not cached and not ctx and cache_poison.provably_uncacheable(base.headers):
+                observer.tick(hit=False)
+                continue                        # not poisonable — no cache to store it
             if cached:
                 note = f"cache poisoning: unkeyed '{name}' reflected/cached ({where})"
                 f.tags = list(dict.fromkeys(list(f.tags) + ["cache", "poisonable"]))
@@ -2730,14 +2739,30 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
     observer.phase("backups")
     total = sum(len(backups.variations(urlparse(f.url).path)) for f in file_hits)
     observer.start_prefix("backups", total)   # own progress total (don't overflow)
+    host = _host_root(profile.base_url)
     for f in file_hits:
         path = urlparse(f.url).path
         prefix = path.rsplit("/", 1)[0] + "/"
         observer.substep(path.rsplit("/", 1)[-1] or path)   # backups: <file>
+        # Suffix-catch-all guard: probe a RANDOM extension on this base once. If the
+        # route serves 2xx content for `<path>.<garbage>`, it serves the same page for
+        # ANY suffix (a form platform's /f/<slug>.<anything>), so its .bak/.old/… are
+        # that page, not disclosures. A per-request nonce (fresh CSRF/timestamp) defeats
+        # the simhash check but NOT the length — the catch-all keeps it constant — so
+        # gate the drop on (status, length) matching this probe.
+        catchall = None
+        if not _over_budget(engine, opts):
+            rnd = "".join(random.choices(string.ascii_lowercase, k=8))
+            try:
+                cp = await engine.fetch(f"{urljoin(host, path.lstrip('/'))}.{rnd}")
+                if cp.ok and 200 <= cp.status < 300 and cp.length > 0:
+                    catchall = (cp.status, cp.length)
+            except Exception:
+                pass
         for var in backups.variations(path):
             if _over_budget(engine, opts):
                 break
-            url = urljoin(_host_root(profile.base_url), var)
+            url = urljoin(host, var)
             if _excluded(urlparse(url).path, opts):
                 continue
             probe = await engine.fetch(url)
@@ -2753,6 +2778,12 @@ async def _backup_fold(engine, profile, result, opts, observer) -> None:
             # the original (a slightly older copy) is still kept.
             if (f.simhash and probe.length == f.length
                     and hamming(probe.body_simhash, f.simhash) <= bl.SIMHASH_MISS_DISTANCE):
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
+            # …and a variant matching the random-suffix catch-all is that same page
+            # served for any extension (simhash-proof against per-request nonces).
+            if catchall and (probe.status, probe.length) == catchall:
                 observer.tick(hit=False)
                 observer.request(url, probe.status, False)
                 continue
