@@ -212,7 +212,7 @@ async def run(args: argparse.Namespace) -> int:
         climb_brute = 1
     opts = ScanOptions(
         max_depth=args.depth, max_requests=args.max_requests, climb_brute=climb_brute,
-        wordlist_paths=wordlists, shortscan=shortscan,
+        wordlist_paths=wordlists, shortscan=shortscan, deep=args.deep,
         js=not args.no_js, apidocs=not args.no_apidocs, backups=not args.no_backups,
         max_folds=args.max_folds, scope=args.scope, economy=args.economy,
         exclude=args.exclude or [], exclude_ext=_ext_globs(args.exclude_ext),

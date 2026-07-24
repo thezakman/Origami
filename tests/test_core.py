@@ -1217,6 +1217,11 @@ class TestBypass403(unittest.TestCase):
         self.assertFalse(_should_shortscan(ScanOptions(shortscan="off"), set(), P(["iis"])))
         # the classic IIS-fold signal still works
         self.assertTrue(_should_shortscan(auto, {"shortscan"}, P(["nginx"])))
+        # --deep runs the (self-gating) vuln check on ANY target — full coverage for
+        # an IIS-behind-nginx host with no .NET fingerprint at all…
+        self.assertTrue(_should_shortscan(ScanOptions(deep=True), set(), P(["nginx", "php"], exts=[".php"])))
+        # …but an explicit --no-shortscan still wins even under --deep
+        self.assertFalse(_should_shortscan(ScanOptions(deep=True, shortscan="off"), set(), P(["iis"])))
 
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the

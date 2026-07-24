@@ -208,6 +208,7 @@ class ScanOptions:
     filter_similar_urls: tuple[str, ...] = ()  # --filter-similar-to: pages whose simhash drops look-alikes
     wordlist_paths: list[str] = field(default_factory=list)  # -w (repeatable); merged. Empty = builtin base
     shortscan: str = "auto"       # "auto" (IIS fold OR any Windows/.NET signal) | "on" (force) | "off"
+    deep: bool = False            # --deep: thorough mode — e.g. always spend the shortscan vuln check
     js: bool = True               # harvest endpoints from HTML/JS
     apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
     backups: bool = True          # VCS/dotfile probes + backup-name folding
@@ -3128,6 +3129,11 @@ def _should_shortscan(opts: ScanOptions, folds: set[str], profile) -> bool:
     if opts.shortscan == "off":
         return False
     if opts.shortscan == "on":
+        return True
+    # --deep is a thorough sweep: spend shortscan's own (cheap, self-gating) vuln
+    # check on EVERY target, so an IIS-behind-nginx host with no detectable .NET
+    # fingerprint (a bare API / static front) is still caught. `off` above still wins.
+    if opts.deep:
         return True
     if "shortscan" in folds:             # auto: IIS confirmed the fold
         return True

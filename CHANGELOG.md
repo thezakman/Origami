@@ -5,6 +5,12 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.7.3]
+### Changed
+- **`--deep` now always spends shortscan's vuln check** — full coverage for an IIS-behind-nginx
+  host that has *no* detectable .NET fingerprint (a bare API / static front). The check is cheap
+  and self-gating on a non-vulnerable target; an explicit `--no-shortscan` still wins.
+
 ## [1.7.2]
 ### Fixed
 - **Shortscan (IIS 8.3 short-name enumeration) now fires on a Windows/.NET app behind an
