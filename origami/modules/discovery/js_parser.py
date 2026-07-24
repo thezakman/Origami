@@ -18,7 +18,12 @@ from urllib.parse import urljoin, urlparse
 from origami.core.scope import same_host, same_site
 
 # Quoted absolute paths: "/api/v1/users", '/admin/login'
-_ABS = re.compile(rb"""["'`](/[A-Za-z0-9_\-./]{1,100})["'`]""")
+# A quoted absolute path. An optional `?query`/`#frag` may sit inside the quotes
+# (`'/x/edit.aspx?id='` — a URL the JS builds by concatenation); consume it so the
+# PATH is still captured (the query is stripped downstream, its param names are
+# harvested separately). Without this, exactly the interesting parameterised
+# endpoints (`?id=`, `?license_key=`) were the ones missed.
+_ABS = re.compile(rb"""["'`](/[A-Za-z0-9_\-./]{1,100})(?:[?#][^"'`]{0,200})?["'`]""")
 # href/src/action attributes
 _ATTR = re.compile(rb"""(?:href|src|action)\s*=\s*["']([^"'#?]+)["']""", re.I)
 # fetch()/axios/url: "..."  call targets

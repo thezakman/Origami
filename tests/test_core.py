@@ -3469,6 +3469,22 @@ class TestJsParser(unittest.TestCase):
         self.assertIn("/js/chunk.2f3a.js", paths)
         self.assertIn("/js/app.js.map", paths)
 
+    def test_extract_paths_with_query_in_quotes(self):
+        # a URL the JS builds by concatenation: '/x/edit.aspx?id=' + n — the quoted
+        # literal carries a `?query`, which used to make the path-matcher miss it
+        # entirely (exactly the parameterised endpoints we most want).
+        base = "https://t/scripts.js"
+        js = (b".open('/account/licensemanager/editors/storelocater.aspx?license_key=' + k);"
+              b"var u='/account/agreements/agreement.aspx?id='+id;"
+              b"go('/account/tools/finder.aspx');")            # no-query still works
+        paths = js_parser.extract_paths(js, base)
+        self.assertIn("/account/licensemanager/editors/storelocater.aspx", paths)  # query stripped
+        self.assertIn("/account/agreements/agreement.aspx", paths)
+        self.assertIn("/account/tools/finder.aspx", paths)
+        self.assertFalse(any("?" in p or "=" in p for p in paths))   # query never leaks into a path
+        # the param names are still harvested separately
+        self.assertEqual(js_parser.extract_params(js) & {"license_key", "id"}, {"license_key", "id"})
+
     def test_protocol_relative_offhost_dropped(self):
         # regression: //evil.com/x must NOT pass as a same-host root-absolute path
         # (it would leak an off-host endpoint into the --graph edges)

@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.7.4]
+### Fixed
+- **JS scraping now captures a path that carries a `?query` inside its quotes.** A URL the
+  script builds by concatenation — `'/account/.../editor.aspx?id=' + n`, `.open('/x.aspx?license_key='
+  + k)` — has the query glued to the path in the string literal, and the absolute-path matcher
+  required the closing quote right after the path, so it missed exactly the **parameterised**
+  endpoints (the most interesting ones). The matcher now consumes an optional `?query`/`#frag`
+  before the closing quote; the path is kept (query stripped) and the param names are still
+  harvested separately. On one real `scripts.js` this went from 19 → 28 `.aspx` endpoints
+  extracted (`editor`, `storelocater`, `agreement`, `accountsummary`, `logdownload`, …).
+
 ## [1.7.3]
 ### Changed
 - **`--deep` now always spends shortscan's vuln check** — full coverage for an IIS-behind-nginx
