@@ -1223,6 +1223,41 @@ class TestBypass403(unittest.TestCase):
         # …but an explicit --no-shortscan still wins even under --deep
         self.assertFalse(_should_shortscan(ScanOptions(deep=True, shortscan="off"), set(), P(["iis"])))
 
+    def test_shortscan_recurses_into_dirs_under_deep(self):
+        # 8.3 enumeration is per-directory, so a vulnerable host must be re-scanned
+        # inside each directory shortscan reveals — but only under --deep (it's
+        # expensive). Verifies the bounded BFS over discovered dir URLs.
+        import asyncio
+        from origami.core import scanner
+        from origami.core.scanner import _shortscan_pass, ScanOptions, ScanResult
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        calls = []
+        async def fake_one(engine, profile, url, words, result, opts, observer,
+                           memory=None, is_root=True):
+            calls.append(url)
+            if url.endswith("/SALESFORCE/HONEYWELL/"):
+                return True, []                       # deepest dir, nothing more
+            if url.endswith("/SALESFORCE/"):
+                return True, [url + "HONEYWELL/"]     # this dir reveals a deeper one
+            return True, [url + "SALESFORCE/"]         # root reveals a dir
+        orig = scanner._shortscan_one
+        scanner._shortscan_one = fake_one
+        try:
+            prof = TargetProfile(host="h", base_url="https://h/")
+            res = ScanResult(profile=prof)
+            asyncio.run(_shortscan_pass(None, prof, "https://h/", [], res,
+                                        ScanOptions(deep=True), NullObserver()))
+            self.assertEqual(calls, ["https://h/", "https://h/SALESFORCE/",
+                                     "https://h/SALESFORCE/HONEYWELL/"])   # recursed the tree
+            calls.clear()
+            asyncio.run(_shortscan_pass(None, prof, "https://h/", [], res,
+                                        ScanOptions(deep=False), NullObserver()))
+            self.assertEqual(calls, ["https://h/"])   # no --deep → root only
+        finally:
+            scanner._shortscan_one = orig
+
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the
         # same on another so it's fired first there (with the per-resource early-exit).

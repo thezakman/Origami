@@ -3148,10 +3148,44 @@ def _should_shortscan(opts: ScanOptions, folds: set[str], profile) -> bool:
     return bool({e.lower() for e in getattr(profile, "enabled_extensions", ())} & _ASPNET_EXTS)
 
 
+MAX_SHORTSCAN_DIRS = 12   # cap total shortscan runs (root + recursed dirs) under --deep
+MAX_SHORTSCAN_DEPTH = 3    # how deep the 8.3 dir recursion goes
+
+
 async def _shortscan_pass(engine, profile, base_url, words, result, opts, observer,
                           memory=None) -> None:
-    """Gate on shortscan's own vuln check, expand 8.3 names, scan the seeds."""
+    """Run shortscan at the base, then — under --deep — recurse into each DIRECTORY
+    it reveals: 8.3 enumeration is per-directory, so `/SALESFORCE/` leaks its own
+    short names the root run can't see. Bounded by MAX_SHORTSCAN_DIRS / _DEPTH."""
     observer.phase("shortscan")
+    seen: set[str] = {base_url.rstrip("/")}
+    queue: list[tuple[str, int]] = [(base_url, 0)]
+    runs = 0
+    while queue and runs < MAX_SHORTSCAN_DIRS:
+        if _over_budget(engine, opts):
+            break
+        url, depth = queue.pop(0)
+        ran, dir_urls = await _shortscan_one(engine, profile, url, words, result, opts,
+                                             observer, memory, is_root=(runs == 0))
+        runs += 1
+        if runs == 1 and not ran:
+            return                                # root not vulnerable/available → stop
+        if opts.deep and ran and depth < MAX_SHORTSCAN_DEPTH:
+            for d in dir_urls:                    # recurse into confirmed 8.3 directories
+                k = d.rstrip("/")
+                if k not in seen:
+                    seen.add(k)
+                    queue.append((d, depth + 1))
+    if runs > 1:
+        observer.log(f"shortscan: recursed into {runs - 1} discovered "
+                     f"director{'y' if runs == 2 else 'ies'} (--deep)", 1, style="cyan")
+
+
+async def _shortscan_one(engine, profile, base_url, words, result, opts, observer,
+                         memory=None, is_root=True) -> tuple[bool, list[str]]:
+    """Run shortscan at ONE url: gate on its vuln check, expand 8.3 names, scan the
+    seeds. Returns (ran, dir_urls) — dir_urls are the DIRECTORY entries (named, no
+    extension) to recurse into. Verbose banner/evidence only on the root run."""
     res = await shortname.run_shortscan(
         base_url,
         insecure=not engine.cfg.verify_tls,
@@ -3160,17 +3194,22 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
         timeout=int(engine.cfg.timeout),
     )
     if not res.available:
-        observer.log(f"shortscan: skipped ({res.error})", 1, style="yellow")
-        return
-    if res.error:
+        if is_root:
+            observer.log(f"shortscan: skipped ({res.error})", 1, style="yellow")
+        return False, []
+    if res.error and is_root:
         observer.log(f"shortscan: {res.error}", 1, style="yellow")
     if not res.vulnerable:
-        observer.log("shortscan: target not vulnerable to 8.3 enumeration", 1)
-        return
+        if is_root:
+            observer.log("shortscan: target not vulnerable to 8.3 enumeration", 1)
+        return False, []
 
-    observer.log(f"shortscan: VULNERABLE · {len(res.entries)} 8.3 names leaked", 1, style="cyan")
-    profile.add_evidence(Evidence(source="shortscan", tech="iis",
-                                  detail=f"8.3 leak · {len(res.entries)} names", weight=20))
+    where = urlparse(base_url).path or "/"
+    observer.log(f"shortscan: VULNERABLE · {len(res.entries)} 8.3 names leaked"
+                 + ("" if is_root else f" at {where}"), 1, style="cyan")
+    if is_root:
+        profile.add_evidence(Evidence(source="shortscan", tech="iis",
+                                      detail=f"8.3 leak · {len(res.entries)} names", weight=20))
     # 8.3 short names only exist on Windows/NTFS, which is case-insensitive —
     # a definitive signal, available NOW (before the first main-scan hit that
     # detect_case_sensitivity would otherwise wait for). Setting it here makes
@@ -3181,6 +3220,10 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     for e in res.entries:
         observer.log(f"  8.3: {e.tilde}.{e.ext}"
                      + (f" → {e.fullname}" if e.fullname else ""), 2)
+    # directory entries (a reconstructed name with NO extension) → recurse targets
+    root = base_url if base_url.endswith("/") else base_url + "/"
+    dir_urls = [urljoin(root, e.fullname + "/")
+                for e in res.entries if e.fullname and not e.ext]
 
     tech_exts = tuple(sorted(profile.enabled_extensions))
     # Cross-target memory: real names seen on past targets help reverse an 8.3
@@ -3208,8 +3251,9 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
                 n_gen += 1
     cands = list(dict.fromkeys(cands))          # de-dupe, preserve order
     if not cands:
-        observer.log("shortscan: no candidates after expansion", 1)
-        return
+        if is_root:
+            observer.log("shortscan: no candidates after expansion", 1)
+        return True, dir_urls
     observer.log(f"shortscan: {len(cands)} candidates "
                  f"({n_gen} from n-gram completion)", 1, style="cyan")
 
@@ -3253,3 +3297,4 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
             observer.request(url, probe.status, False)
             continue
         _report(observer, result, opts, finding, url)
+    return True, dir_urls

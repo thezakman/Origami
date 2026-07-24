@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.8.0]
+### Added
+- **Recursive shortscan under `--deep`.** IIS 8.3 short-name enumeration is *per-directory* — a
+  vulnerable host leaks a different set of names inside every folder (`/SALESFORCE/` reveals
+  `HONEYWELL`, `WEBSERVICES`, `ALERT.ASPX`… that the root run can't see). The fold now, under
+  `--deep`, recurses into each **directory** shortscan reveals (a reconstructed name with no
+  extension) and re-runs the enumeration there — a bounded BFS (`MAX_SHORTSCAN_DIRS=12`,
+  `MAX_SHORTSCAN_DEPTH=3`), so it walks the 8.3 tree without exploding. Each run still self-gates
+  on shortscan's own vuln check; the root pass is unchanged when not under `--deep`.
+
 ## [1.7.4]
 ### Fixed
 - **JS scraping now captures a path that carries a `?query` inside its quotes.** A URL the
