@@ -5,6 +5,21 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.8.1]
+### Fixed
+Hardening from an adversarial review of the 1.6–1.8 changes:
+- **Recursive shortscan verifies a candidate is a real directory before recursing.** An
+  extensionless 8.3 name can be a FILE (`README`, `LICENSE`), not a folder; the fold now probes
+  `<name>/` and only recurses on a 2xx/3xx/403 (a real dir), so a `404` doesn't burn a slot of the
+  `MAX_SHORTSCAN_DIRS` budget.
+- **A failing sub-directory no longer aborts the whole shortscan recursion.** Each recursed run is
+  wrapped so one erroring directory is logged and skipped; a root error still ends the pass.
+- **Dropped `optimizely` from the Windows/.NET shortscan trigger** — Optimizely Web Experimentation
+  is a cross-platform JS A/B-testing snippet, unrelated to the .NET Optimizely/EPiServer CMS, and
+  was a spurious `auto` trigger on non-Windows sites.
+- **`--curl` fallback now POSIX-escapes a single quote in the URL** (`_finding_curl`), so a finding
+  URL containing `'` (a param payload) can't produce a malformed copy-paste command.
+
 ## [1.8.0]
 ### Added
 - **Recursive shortscan under `--deep`.** IIS 8.3 short-name enumeration is *per-directory* — a

@@ -3119,8 +3119,8 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
 # extension, is enough to spend shortscan's own (cheap, self-gating) vuln check.
 _WINDOWS_STACKS = frozenset({
     "iis", "asp.net", "aspnet", "asp.net mvc", "dnn", "dotnetnuke", "sharepoint",
-    "umbraco", "sitecore", "kentico", "sitefinity", "telerik", "orchard",
-    "nopcommerce", "episerver", "optimizely", "windows", ".net", "blazor",
+    "umbraco", "sitecore", "kentico", "sitefinity", "orchard",
+    "nopcommerce", "episerver", "windows", ".net", "blazor",
 })
 _ASPNET_EXTS = frozenset({".asp", ".aspx", ".ashx", ".asmx", ".axd", ".cshtml", ".vbhtml"})
 
@@ -3165,8 +3165,17 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
         if _over_budget(engine, opts):
             break
         url, depth = queue.pop(0)
-        ran, dir_urls = await _shortscan_one(engine, profile, url, words, result, opts,
-                                             observer, memory, is_root=(runs == 0))
+        try:
+            ran, dir_urls = await _shortscan_one(engine, profile, url, words, result, opts,
+                                                 observer, memory, is_root=(runs == 0))
+        except Exception as ex:                   # one bad subdir must not kill the recursion
+            if runs == 0:                         # …but a root error ends the pass
+                observer.log(f"shortscan: skipped ({type(ex).__name__})", 1, style="yellow")
+                return
+            observer.log(f"shortscan: {urlparse(url).path} errored, skipping "
+                         f"({type(ex).__name__})", 2, style="yellow")
+            runs += 1
+            continue
         runs += 1
         if runs == 1 and not ran:
             return                                # root not vulnerable/available → stop
@@ -3220,10 +3229,22 @@ async def _shortscan_one(engine, profile, base_url, words, result, opts, observe
     for e in res.entries:
         observer.log(f"  8.3: {e.tilde}.{e.ext}"
                      + (f" → {e.fullname}" if e.fullname else ""), 2)
-    # directory entries (a reconstructed name with NO extension) → recurse targets
+    # directory entries (a reconstructed name with NO extension) → recurse targets.
+    # An extensionless 8.3 name can also be a FILE (README, LICENSE); verify each
+    # candidate actually resolves to a directory before spending a whole recursive
+    # run (and a slot of the MAX_SHORTSCAN_DIRS budget) on a 404.
     root = base_url if base_url.endswith("/") else base_url + "/"
-    dir_urls = [urljoin(root, e.fullname + "/")
-                for e in res.entries if e.fullname and not e.ext]
+    dir_urls: list[str] = []
+    for e in res.entries:
+        if not (e.fullname and not e.ext):
+            continue
+        d = urljoin(root, e.fullname + "/")
+        try:
+            pr = await engine.fetch(d)
+            if pr.status != 404 and pr.status < 500:   # a real dir answers 2xx/3xx/403
+                dir_urls.append(d)
+        except Exception:
+            pass
 
     tech_exts = tuple(sorted(profile.enabled_extensions))
     # Cross-target memory: real names seen on past targets help reverse an 8.3

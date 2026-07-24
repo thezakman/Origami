@@ -620,9 +620,14 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
 
 def _finding_curl(f) -> str:
     """The reproducing curl for a finding: its exact `repro` (a header/method bypass)
-    or a plain `curl -sk '<url>'` — the URL already carries any payload query."""
+    or a plain `curl -sk '<url>'` — the URL already carries any payload query. The URL
+    is single-quote-escaped (POSIX `'\\''`) so a URL containing a `'` can't break out
+    of the quoting into a malformed command."""
     repro = getattr(f, "repro", "") or ""
-    return repro if repro else f"curl -sk '{f.url}'"
+    if repro:
+        return repro
+    url = f.url.replace("'", "'\\''")
+    return f"curl -sk '{url}'"
 
 
 def print_curls(result) -> None:

@@ -1189,6 +1189,10 @@ class TestBypass403(unittest.TestCase):
                                                0.9, "odata")), "curl -sk 'https://h/m?$top=1'")
         f = Finding("https://h/x", 200, 5, "text/html", 0.9, "bypass403", repro="curl -sk -H 'a: b' 'https://h/x'")
         self.assertEqual(_finding_curl(f), "curl -sk -H 'a: b' 'https://h/x'")
+        # a URL containing a single quote must be POSIX-escaped, not break the command
+        import shlex
+        q = _finding_curl(Finding("https://h/p?q=o'brien", 200, 5, "text/html", 0.9, "wordlist"))
+        self.assertEqual(shlex.split(q), ["curl", "-sk", "https://h/p?q=o'brien"])
 
     def test_should_shortscan_windows_stack_behind_nginx(self):
         # the 8.3 short-name leak lives on NTFS and survives ANY front server, so
