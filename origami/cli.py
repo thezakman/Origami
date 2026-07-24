@@ -278,7 +278,24 @@ async def run(args: argparse.Namespace) -> int:
             _hist = "" if args.no_history else " + wayback"
             print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params{_hist} + origin")
         if args.header:
-            print(f"  headers  : {len(args.header)} custom ({', '.join(h.split(':',1)[0].strip() for h in args.header)})")
+            def _fmt_hdr(h: str) -> str:
+                name, _, val = h.partition(":")
+                name, val = name.strip(), val.strip()
+                if not val:
+                    return name
+                # show the value so you can confirm the paste, but mask the MIDDLE of
+                # a long/secret-looking one (API key, bearer token, cookie) so the full
+                # secret doesn't land in terminal scrollback / a screenshot.
+                if len(val) > 20:
+                    val = f"{val[:6]}…{val[-4:]}"
+                return f"{name}: {val}"
+            hs = [_fmt_hdr(h) for h in args.header]
+            if len(hs) == 1:
+                print(f"  headers  : {hs[0]}")
+            else:
+                print(f"  headers  : {len(hs)} custom")
+                for h in hs:
+                    print(f"           · {h}")
         if args.user_agent:
             print(f"  user-agent: {args.user_agent}"
                   + ("  (--rotate-ua ignored: -A pins it)" if args.rotate_ua else ""))

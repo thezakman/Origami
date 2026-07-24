@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.8.2]
+### Changed
+- **The startup preamble now shows each custom `-H` header as `Name: value`**, with a long/secret
+  value (API key, bearer token, cookie) masked in the middle (`716ff6…afeb`) — clearer than the
+  old bare `1 custom (X-…-Api-Key)`, and lets you confirm you pasted the right key without dumping
+  the full secret into terminal scrollback / a screenshot. Multiple headers list one per line;
+  short (non-secret) values show in full.
+
 ## [1.8.1]
 ### Fixed
 Hardening from an adversarial review of the 1.6–1.8 changes:
