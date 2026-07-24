@@ -1190,6 +1190,34 @@ class TestBypass403(unittest.TestCase):
         f = Finding("https://h/x", 200, 5, "text/html", 0.9, "bypass403", repro="curl -sk -H 'a: b' 'https://h/x'")
         self.assertEqual(_finding_curl(f), "curl -sk -H 'a: b' 'https://h/x'")
 
+    def test_should_shortscan_windows_stack_behind_nginx(self):
+        # the 8.3 short-name leak lives on NTFS and survives ANY front server, so
+        # `auto` must not gate purely on an "iis" fingerprint — a .NET app (DNN,
+        # SharePoint…) behind nginx/CDN must still trigger the (self-gating) check.
+        from origami.core.scanner import _should_shortscan, ScanOptions
+        auto = ScanOptions()                                 # shortscan="auto"
+
+        class P:
+            def __init__(self, techs, exts=(), ci=None):
+                self.tech_scores = {t: 50 for t in techs}
+                self.enabled_extensions = set(exts)
+                self.case_sensitive = ci
+
+        # nginx front, DotNetNuke backend → run it (the reported bug)
+        self.assertTrue(_should_shortscan(auto, set(), P(["nginx", "dnn", "gitea"])))
+        # SharePoint / an ASP.NET extension → run it
+        self.assertTrue(_should_shortscan(auto, set(), P(["cloudflare", "sharepoint"])))
+        self.assertTrue(_should_shortscan(auto, set(), P(["apache"], exts=[".aspx"])))
+        # NTFS already proven case-insensitive → run it
+        self.assertTrue(_should_shortscan(auto, set(), P(["nginx"], ci=False)))
+        # a plain Linux/PHP stack → do NOT waste the probe
+        self.assertFalse(_should_shortscan(auto, set(), P(["nginx", "php"], exts=[".php"])))
+        # explicit on/off always win
+        self.assertTrue(_should_shortscan(ScanOptions(shortscan="on"), set(), P(["nginx"])))
+        self.assertFalse(_should_shortscan(ScanOptions(shortscan="off"), set(), P(["iis"])))
+        # the classic IIS-fold signal still works
+        self.assertTrue(_should_shortscan(auto, {"shortscan"}, P(["nginx"])))
+
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the
         # same on another so it's fired first there (with the per-resource early-exit).

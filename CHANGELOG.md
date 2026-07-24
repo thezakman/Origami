@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.7.2]
+### Fixed
+- **Shortscan (IIS 8.3 short-name enumeration) now fires on a Windows/.NET app behind an
+  nginx/CDN front.** `auto` gated purely on an `iis` fingerprint, so a DotNetNuke/SharePoint/
+  Sitecore/ASP.NET site reverse-proxied by nginx — where the short-name leak still lives on the
+  NTFS filesystem — was skipped even when `shortscan` (the standalone tool) confirms it vulnerable.
+  `auto` now also triggers on any Windows/.NET stack signal (`dnn`, `asp.net`, `sharepoint`,
+  `umbraco`, `sitecore`, …, substring-matched so `microsoft asp.net` counts), an ASP.NET extension
+  (`.aspx`/`.ashx`/…), or a proven case-insensitive (NTFS) filesystem. Shortscan's own vuln check
+  stays the real gate (cheap on non-vulnerable targets). Validated live against an nginx-fronted
+  DotNetNuke host: 27 8.3 names leaked (`MAP.ASPX`, `POPUP.ASPX`, …).
+
 ## [1.7.1]
 ### Fixed
 - **Cache-poison no longer flags a "behaviour-change" lead on a provably un-cacheable response.**

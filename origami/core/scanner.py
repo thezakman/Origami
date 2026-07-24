@@ -207,7 +207,7 @@ class ScanOptions:
     replay_codes: tuple[int, ...] = ()    # only replay these statuses (empty = all reported)
     filter_similar_urls: tuple[str, ...] = ()  # --filter-similar-to: pages whose simhash drops look-alikes
     wordlist_paths: list[str] = field(default_factory=list)  # -w (repeatable); merged. Empty = builtin base
-    shortscan: str = "auto"       # "auto" (if IIS fold) | "on" (force) | "off"
+    shortscan: str = "auto"       # "auto" (IIS fold OR any Windows/.NET signal) | "on" (force) | "off"
     js: bool = True               # harvest endpoints from HTML/JS
     apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
     backups: bool = True          # VCS/dotfile probes + backup-name folding
@@ -743,7 +743,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
                  f"extensions {len(exts) or 0} folded", 0)
 
     # 3. shortscan fold (IIS 8.3) — high-value seeds before the generic scan
-    if _should_shortscan(opts, folds):
+    if _should_shortscan(opts, folds, profile):
         await _guard(observer, "shortscan",
                      _shortscan_pass(engine, profile, base_url, words, result, opts,
                                      observer, memory),
@@ -3111,12 +3111,35 @@ async def _association_fold(engine, profile, result, opts, observer, memory) -> 
         _report(observer, result, opts, finding, probe.url)
 
 
-def _should_shortscan(opts: ScanOptions, folds: set[str]) -> bool:
+# The 8.3 short-name leak lives on the WINDOWS/NTFS filesystem, so it survives ANY
+# front server — an nginx (or a CDN) reverse-proxying IIS still leaks. Gating `auto`
+# purely on an "iis" fingerprint misses exactly that: a .NET app (DotNetNuke,
+# SharePoint, Sitecore…) behind nginx. Any of these stack signals, or an ASP.NET
+# extension, is enough to spend shortscan's own (cheap, self-gating) vuln check.
+_WINDOWS_STACKS = frozenset({
+    "iis", "asp.net", "aspnet", "asp.net mvc", "dnn", "dotnetnuke", "sharepoint",
+    "umbraco", "sitecore", "kentico", "sitefinity", "telerik", "orchard",
+    "nopcommerce", "episerver", "optimizely", "windows", ".net", "blazor",
+})
+_ASPNET_EXTS = frozenset({".asp", ".aspx", ".ashx", ".asmx", ".axd", ".cshtml", ".vbhtml"})
+
+
+def _should_shortscan(opts: ScanOptions, folds: set[str], profile) -> bool:
     if opts.shortscan == "off":
         return False
     if opts.shortscan == "on":
         return True
-    return "shortscan" in folds          # auto: IIS confirmed the fold
+    if "shortscan" in folds:             # auto: IIS confirmed the fold
+        return True
+    # …or any Windows/.NET signal, even behind an nginx/CDN front (shortscan's own
+    # vuln check is the real gate and is cheap on a non-vulnerable target). Substring
+    # match so a scored tech like "microsoft asp.net" still hits "asp.net".
+    techs = [t.lower() for t in getattr(profile, "tech_scores", {})]
+    if any(w in t for t in techs for w in _WINDOWS_STACKS):
+        return True
+    if profile.case_sensitive is False:  # NTFS/Windows already proven case-insensitive
+        return True
+    return bool({e.lower() for e in getattr(profile, "enabled_extensions", ())} & _ASPNET_EXTS)
 
 
 async def _shortscan_pass(engine, profile, base_url, words, result, opts, observer,
