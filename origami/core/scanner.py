@@ -52,8 +52,8 @@ from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
                                      target_tokens)
 from origami.modules import authz, bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
 from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
-                                        graphql, js_parser, methods, mutate, odata, originip,
-                                        robots, shortname, vcs, wayback, wellknown)
+                                        graphql, js_parser, methods, mutate, negotiation, odata,
+                                        originip, robots, shortname, vcs, wayback, wellknown)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -1421,11 +1421,22 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # here, so it never gets mistaken for a directory.
         finding = classify(profile, probe, cand.origin, prefix)
         if finding is None:
-            if ranker is not None:
-                ranker.observe(cand.path, hit=False)
-            observer.tick(hit=False)
-            observer.request(url, probe.status, False)
-            continue
+            # Apache mod_negotiation (MultiViews): a 300 whose body LISTS the real
+            # files behind an extensionless name — an info-disclosure AND a filename
+            # primitive (the true extension, no guessing). classify() drops a plain
+            # 3xx; keep this one so the harvest fold mines its choices.
+            if probe.status == 300 and negotiation.is_multiple_choices(probe.body_head):
+                nch = len(negotiation.parse_choices(probe.body_head, url))
+                finding = Finding(url, 300, probe.length, probe.content_type, 0.9, cand.origin,
+                                  note=f"mod_negotiation MultiViews — {nch} real filename(s) listed",
+                                  tags=["config", "disclosure", "negotiation"],
+                                  simhash=probe.body_simhash, words=probe.words, lines=probe.lines)
+            else:
+                if ranker is not None:
+                    ranker.observe(cand.path, hit=False)
+                observer.tick(hit=False)
+                observer.request(url, probe.status, False)
+                continue
 
         # Directory detection from a REAL response (trailing-slash candidate or a
         # self-redirect to the same path + "/"). Done before the soft-verify so a
@@ -1515,6 +1526,8 @@ def _harvestable(f) -> bool:
     a CSV is mined, not just files with a known extension); JSON/XML/JS by content
     type too. Vendor libraries, binary/asset responses, and config/secret files
     (which the secrets fold owns) are skipped."""
+    if f.status == 300 and "negotiation" in (getattr(f, "tags", None) or []):
+        return True                           # MultiViews 300 → its body lists real files
     if not (200 <= f.status < 300):
         return False
     if js_parser._is_vendor(f.url):           # jquery/bootstrap/etc. — not the app's own code
@@ -1567,6 +1580,8 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
         extracted = js_parser.extract_paths(pr.body, f.url)
         if is_dir_listing(pr.body):               # autoindex → read its TRUE contents, don't guess
             extracted |= js_parser.parse_listing(pr.body, f.url)
+        if negotiation.is_multiple_choices(pr.body):   # mod_negotiation 300 → the real filenames
+            extracted |= negotiation.parse_choices(pr.body, f.url)
         for p in extracted:
             new_paths.setdefault(p, urlparse(f.url).path)
 

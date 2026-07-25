@@ -119,6 +119,7 @@ TAG_STYLE = {
     "auth-bypass": "bold black on bright_red", "odata-agg": "bold magenta",
     "ssti-lead": "bold black on bright_red", "redirect-lead": "bold black on bright_yellow",
     "jwt": "bold black on bright_red", "oauth": "bold black on bright_red",
+    "negotiation": "bold yellow",
 }
 
 

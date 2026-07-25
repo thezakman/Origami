@@ -3524,6 +3524,26 @@ class TestJsParser(unittest.TestCase):
         # the param names are still harvested separately
         self.assertEqual(js_parser.extract_params(js) & {"license_key", "id"}, {"license_key", "id"})
 
+    def test_multiviews_negotiation(self):
+        from origami.modules.discovery import negotiation
+        body = (b'<html><head><title>300 Multiple Choices</title></head><body>'
+                b'<h1>Multiple Choices</h1>The document name you requested (<code>/composer</code>)'
+                b' could not be found. However, we found documents with names similar.'
+                b'<p>Available documents:<ul>'
+                b'<li><a href="/composer.json">/composer.json</a> (common basename)'
+                b'<li><a href="/composer.lock">/composer.lock</a> (common basename)'
+                b'</ul></body></html>')
+        self.assertTrue(negotiation.is_multiple_choices(body))
+        self.assertEqual(negotiation.parse_choices(body, "https://h/composer"),
+                         {"/composer.json", "/composer.lock"})
+        # a normal 404 body is not MultiViews
+        self.assertFalse(negotiation.is_multiple_choices(b"<html><h1>404 Not Found</h1></html>"))
+        # off-host choices and directory links are dropped
+        off = (b'<title>Multiple Choices</title>Available documents:'
+               b'<a href="https://evil.com/x.php">x</a><a href="/real.php">r</a>'
+               b'<a href="/sub/">dir</a>')
+        self.assertEqual(negotiation.parse_choices(off, "https://h/y"), {"/real.php"})
+
     def test_protocol_relative_offhost_dropped(self):
         # regression: //evil.com/x must NOT pass as a same-host root-absolute path
         # (it would leak an off-host endpoint into the --graph edges)

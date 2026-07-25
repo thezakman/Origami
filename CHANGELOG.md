@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.9.0]
+### Added
+- **Apache mod_negotiation (MultiViews) filename disclosure.** With MultiViews on, requesting an
+  extensionless name Apache can't resolve returns `300 Multiple Choices` whose body **lists the
+  real files** (`/script` → `/script.php`, `/composer` → `/composer.json` + `.lock`). Origami used
+  to drop the `300` as a plain redirect; it now detects it, reports it (`negotiation` /
+  `disclosure`), and — like the autoindex harvest — **mines the listed filenames as seeds and
+  probes them** (the true extension, incl. uncommon ones like `.php5`/`.inc`, with no guessing).
+  New `origami/modules/discovery/negotiation.py`; validated live (`/composer` → the two composer
+  files folded).
+
 ## [1.8.2]
 ### Changed
 - **The startup preamble now shows each custom `-H` header as `Name: value`**, with a long/secret
