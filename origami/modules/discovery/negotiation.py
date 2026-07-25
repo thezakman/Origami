@@ -18,6 +18,11 @@ import re
 from urllib.parse import urljoin, urlparse
 
 _HREF = re.compile(rb"""<a\s+href\s*=\s*["']([^"'>\s]+)["']""", re.I)
+# Apache's "common basename" fallback suggests the requested basename hoisted into
+# `.`/`..` — `/./config`, `/../config`, `/.`, `/..` — for ANY unresolvable name
+# (even random garbage). That's noise, not a real alternative document; drop it so
+# a MultiViews-on host doesn't turn every probed dotfile into a phantom disclosure.
+_TRAVERSAL = re.compile(r"^/?\.\.?(/|$)")
 
 
 def is_multiple_choices(body: bytes) -> bool:
@@ -34,8 +39,8 @@ def parse_choices(body: bytes, base_url: str) -> set[str]:
     out: set[str] = set()
     for m in _HREF.finditer((body or b"")[:8192]):
         href = m.group(1).decode("latin-1", "replace").strip()
-        if not href or href.startswith(("#", "mailto:", "javascript:")):
-            continue
+        if not href or href.startswith(("#", "mailto:", "javascript:")) or _TRAVERSAL.match(href):
+            continue                                        # traversal noise, not a real doc
         pu = urlparse(urljoin(base_url, href))
         if pu.netloc and pu.netloc != host:                # off-host link → skip
             continue

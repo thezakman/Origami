@@ -1421,22 +1421,49 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # here, so it never gets mistaken for a directory.
         finding = classify(profile, probe, cand.origin, prefix)
         if finding is None:
-            # Apache mod_negotiation (MultiViews): a 300 whose body LISTS the real
+            # Apache mod_negotiation (MultiViews): a 300 whose body LISTS the REAL
             # files behind an extensionless name — an info-disclosure AND a filename
-            # primitive (the true extension, no guessing). classify() drops a plain
-            # 3xx; keep this one so the harvest fold mines its choices.
-            if probe.status == 300 and negotiation.is_multiple_choices(probe.body_head):
-                nch = len(negotiation.parse_choices(probe.body_head, url))
-                finding = Finding(url, 300, probe.length, probe.content_type, 0.9, cand.origin,
-                                  note=f"mod_negotiation MultiViews — {nch} real filename(s) listed",
-                                  tags=["config", "disclosure", "negotiation"],
-                                  simhash=probe.body_simhash, words=probe.words, lines=probe.lines)
-            else:
+            # primitive (the true extension, no guessing). BUT a MultiViews-on host
+            # returns a 300 for ANY unresolvable name, suggesting only `/./x`/`/../x`
+            # traversal noise — parse_choices drops that, so require ≥1 real sibling
+            # before reporting (else every probed dotfile floods as a phantom leak).
+            choices = (negotiation.parse_choices(probe.body_head, url)
+                       if probe.status == 300 and negotiation.is_multiple_choices(probe.body_head)
+                       else set())
+            if not choices:
                 if ranker is not None:
                     ranker.observe(cand.path, hit=False)
                 observer.tick(hit=False)
                 observer.request(url, probe.status, False)
                 continue
+            shown = ", ".join(sorted(choices)[:3]) + (f" (+{len(choices) - 3})" if len(choices) > 3 else "")
+            negf = Finding(url, 300, probe.length, probe.content_type, 0.9, cand.origin,
+                           note=f"mod_negotiation MultiViews → {shown}",
+                           tags=["config", "disclosure", "negotiation"],
+                           simhash=probe.body_simhash, words=probe.words, lines=probe.lines)
+            observer.request(url, 300, True)
+            _report(observer, result, opts, negf, url)
+            # found → test: validate each disclosed filename RIGHT NOW, not a round later
+            for cp in sorted(choices):
+                if _over_budget(engine, opts):
+                    break
+                curl = _join_candidate(_host_root(profile.base_url), "/", cp)
+                ck = curl.lower() if ci else curl
+                if ck in fired:
+                    continue
+                fired.add(ck)
+                try:
+                    cpr = await engine.fetch(curl, keep_body=opts.filters.needs_body())
+                except Exception:
+                    continue
+                cpref = urlparse(curl).path.rsplit("/", 1)[0] + "/"
+                cf = classify(profile, cpr, "negotiation", cpref)
+                if cf is None or (not _over_budget(engine, opts)
+                                  and await _is_soft(engine, profile, cpref, cpr)):
+                    observer.request(curl, cpr.status, False)
+                    continue
+                _report(observer, result, opts, cf, curl)
+            continue
 
         # Directory detection from a REAL response (trailing-slash candidate or a
         # self-redirect to the same path + "/"). Done before the soft-verify so a
@@ -1526,8 +1553,6 @@ def _harvestable(f) -> bool:
     a CSV is mined, not just files with a known extension); JSON/XML/JS by content
     type too. Vendor libraries, binary/asset responses, and config/secret files
     (which the secrets fold owns) are skipped."""
-    if f.status == 300 and "negotiation" in (getattr(f, "tags", None) or []):
-        return True                           # MultiViews 300 → its body lists real files
     if not (200 <= f.status < 300):
         return False
     if js_parser._is_vendor(f.url):           # jquery/bootstrap/etc. — not the app's own code
@@ -1580,8 +1605,6 @@ async def _harvest_fold(engine, profile, result, opts, observer, base_prefix,
         extracted = js_parser.extract_paths(pr.body, f.url)
         if is_dir_listing(pr.body):               # autoindex → read its TRUE contents, don't guess
             extracted |= js_parser.parse_listing(pr.body, f.url)
-        if negotiation.is_multiple_choices(pr.body):   # mod_negotiation 300 → the real filenames
-            extracted |= negotiation.parse_choices(pr.body, f.url)
         for p in extracted:
             new_paths.setdefault(p, urlparse(f.url).path)
 

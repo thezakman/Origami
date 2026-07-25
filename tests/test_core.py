@@ -349,6 +349,54 @@ class TestDirListing(unittest.TestCase):
                                  listed_dirs=listed))
         self.assertIn("/images/", listed)
 
+    def test_scan_prefix_multiviews_validates_inline_and_skips_noise(self):
+        # a 300 MultiViews with REAL siblings is reported AND its files are probed
+        # right away (found → test); a 300 that lists only traversal noise (a probed
+        # dotfile on a MultiViews host) is dropped, not flooded as a phantom leak.
+        import asyncio
+        from origami.core.scanner import _scan_prefix, ScanResult, ScanOptions, ScanControl
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.scheduler import Candidate
+        from origami.output.ui import NullObserver
+        MV = (b'<title>300 Multiple Choices</title>Available documents:'
+              b'<a href="/composer.json">x</a><a href="/composer.lock">y</a>')
+        NOISE = (b'<title>300 Multiple Choices</title>Available documents:'
+                 b'<a href="/./env">a</a><a href="/../env">b</a>')
+
+        class FakeEngine:
+            cfg = type("C", (), {"verify_tls": False})()
+            total_requests = 0
+            async def fetch(self, url, method="GET", keep_body=False, headers=None):
+                FakeEngine.total_requests += 1
+                from urllib.parse import urlparse
+                p = urlparse(url).path
+                if p == "/composer":
+                    return make_probe(300, MV, url=url, ctype="text/html")
+                if p == "/.env":
+                    return make_probe(300, NOISE, url=url, ctype="text/html")
+                if p == "/composer.json":
+                    return make_probe(200, b'{"secret":"leaked"}', url=url, ctype="application/json")
+                return make_probe(404, b"not found", url=url)
+            async def gather(self, urls, method="GET"):
+                return [await self.fetch(u) for u in urls]
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        result = ScanResult(profile=p)
+        asyncio.run(_scan_prefix(
+            FakeEngine(), p, "/",
+            [Candidate("composer", 2, "wordlist"), Candidate(".env", 2, "backup")],
+            result, ScanOptions(), NullObserver(), ScanControl()))
+        urls = {f.url for f in result.findings}
+        self.assertIn("http://h/composer", urls)              # the MultiViews disclosure
+        self.assertIn("http://h/composer.json", urls)         # …validated inline (found → test)
+        self.assertNotIn("http://h/.env", urls)               # traversal-only noise → NOT reported
+        neg = next(f for f in result.findings if f.url == "http://h/composer")
+        self.assertIn("negotiation", neg.tags)
+        self.assertIn("composer.json", neg.note)              # real filenames in the note
+
 
 class TestVhost(unittest.TestCase):
     def test_registrable_handles_multi_label_suffixes(self):
@@ -3543,6 +3591,13 @@ class TestJsParser(unittest.TestCase):
                b'<a href="https://evil.com/x.php">x</a><a href="/real.php">r</a>'
                b'<a href="/sub/">dir</a>')
         self.assertEqual(negotiation.parse_choices(off, "https://h/y"), {"/real.php"})
+        # THE FP GUARD: Apache's "common basename" traversal noise (/./x, /../x, /.,
+        # /..) returned for ANY unresolvable name is NOT a real document → dropped,
+        # so a MultiViews host doesn't flood every probed dotfile as a phantom leak
+        noise = (b'<title>Multiple Choices</title>Available documents:'
+                 b'<a href="/./config">a</a><a href="/../config">b</a>'
+                 b'<a href="/.">c</a><a href="/..">d</a>')
+        self.assertEqual(negotiation.parse_choices(noise, "https://h/.git/config"), set())
 
     def test_protocol_relative_offhost_dropped(self):
         # regression: //evil.com/x must NOT pass as a same-host root-absolute path

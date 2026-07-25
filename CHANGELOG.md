@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.9.1]
+### Fixed
+- **MultiViews no longer floods every probed dotfile as a phantom disclosure.** A MultiViews-on
+  Apache returns `300 Multiple Choices` for ANY unresolvable name (even random garbage), suggesting
+  only the "common basename" traversal fallback — `/./config`, `/../config`, `/.`, `/..`. 1.9.0
+  reported each such `300` (`.env`, `.git/config`, `.aws/credentials`, `.npmrc`… — ~15 false
+  positives). `parse_choices` now drops those traversal suggestions, and a MultiViews `300` is only
+  reported when ≥1 REAL sibling file remains (`/composer` → `/composer.json`+`.lock`).
+### Changed
+- **MultiViews choices are validated inline — found → test.** When a `300` lists real files,
+  Origami now probes each one immediately (reporting the hits under origin `negotiation`) instead
+  of deferring to a later harvest round.
+
 ## [1.9.0]
 ### Added
 - **Apache mod_negotiation (MultiViews) filename disclosure.** With MultiViews on, requesting an
