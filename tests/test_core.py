@@ -349,33 +349,36 @@ class TestDirListing(unittest.TestCase):
                                  listed_dirs=listed))
         self.assertIn("/images/", listed)
 
-    def test_scan_prefix_multiviews_validates_inline_and_skips_noise(self):
-        # a 300 MultiViews with REAL siblings is reported AND its files are probed
-        # right away (found → test); a 300 that lists only traversal noise (a probed
-        # dotfile on a MultiViews host) is dropped, not flooded as a phantom leak.
+    def test_scan_prefix_multiviews_notice_validate_dedup(self):
+        # MultiViews: flag the misconfig ONCE (not per-300), validate each disclosed
+        # file inline exactly once (dedup across extension variants), never report the
+        # per-request 300s (a MultiViews host 300s every /x.bak /x.inc … → one real
+        # file, which would flood), and drop traversal-only noise.
         import asyncio
         from origami.core.scanner import _scan_prefix, ScanResult, ScanOptions, ScanControl
         from origami.core.evidence import TargetProfile, ContextBaseline
         from origami.core.scheduler import Candidate
         from origami.output.ui import NullObserver
         MV = (b'<title>300 Multiple Choices</title>Available documents:'
-              b'<a href="/composer.json">x</a><a href="/composer.lock">y</a>')
+              b'<a href="/script.php">x</a>')                 # every /script.* → /script.php
         NOISE = (b'<title>300 Multiple Choices</title>Available documents:'
                  b'<a href="/./env">a</a><a href="/../env">b</a>')
 
         class FakeEngine:
             cfg = type("C", (), {"verify_tls": False})()
             total_requests = 0
+            fetched = []
             async def fetch(self, url, method="GET", keep_body=False, headers=None):
                 FakeEngine.total_requests += 1
+                FakeEngine.fetched.append(url)
                 from urllib.parse import urlparse
                 p = urlparse(url).path
-                if p == "/composer":
+                if p in ("/script.bak", "/script.inc"):
                     return make_probe(300, MV, url=url, ctype="text/html")
                 if p == "/.env":
                     return make_probe(300, NOISE, url=url, ctype="text/html")
-                if p == "/composer.json":
-                    return make_probe(200, b'{"secret":"leaked"}', url=url, ctype="application/json")
+                if p == "/script.php":
+                    return make_probe(200, b'echo("hi");', url=url, ctype="text/plain")
                 return make_probe(404, b"not found", url=url)
             async def gather(self, urls, method="GET"):
                 return [await self.fetch(u) for u in urls]
@@ -387,15 +390,22 @@ class TestDirListing(unittest.TestCase):
         result = ScanResult(profile=p)
         asyncio.run(_scan_prefix(
             FakeEngine(), p, "/",
-            [Candidate("composer", 2, "wordlist"), Candidate(".env", 2, "backup")],
+            [Candidate("script.bak", 2, "wordlist"), Candidate("script.inc", 2, "wordlist"),
+             Candidate(".env", 2, "backup")],
             result, ScanOptions(), NullObserver(), ScanControl()))
-        urls = {f.url for f in result.findings}
-        self.assertIn("http://h/composer", urls)              # the MultiViews disclosure
-        self.assertIn("http://h/composer.json", urls)         # …validated inline (found → test)
-        self.assertNotIn("http://h/.env", urls)               # traversal-only noise → NOT reported
-        neg = next(f for f in result.findings if f.url == "http://h/composer")
-        self.assertIn("negotiation", neg.tags)
-        self.assertIn("composer.json", neg.note)              # real filenames in the note
+        negs = [f for f in result.findings if f.origin == "negotiation"]
+        # exactly ONE "MultiViews ENABLED" misconfig notice — not one per probed 300
+        notices = [f for f in negs if "ENABLED" in (f.note or "")]
+        self.assertEqual(len(notices), 1)
+        # the disclosed /script.php validated inline exactly once (dedup across variants)
+        self.assertIn("http://h/script.php", {f.url for f in result.findings})
+        self.assertEqual(FakeEngine.fetched.count("http://h/script.php"), 1)
+        # the SECOND variant (/script.inc) adds no finding (dedup — no per-300 flood),
+        # and traversal-only noise is dropped
+        self.assertNotIn("http://h/script.inc", {f.url for f in result.findings})
+        self.assertNotIn("http://h/.env", {f.url for f in result.findings})
+        # total negotiation findings = 1 notice + 1 validated file (not one per variant)
+        self.assertEqual(len(negs), 2)
 
 
 class TestVhost(unittest.TestCase):

@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.9.2]
+### Fixed
+- **MultiViews no longer floods a finding per extension-variant.** On a MultiViews host EVERY
+  extension the scan folds — `/script.bak`, `/script.inc`, `/script.php5`, `/script.txt`… — returns
+  its own `300` pointing at the *same* real file (`/script.php`), so 1.9.1 reported ~80 near-identical
+  `300 → /script.php` lines. The `300` is only the mechanism now: Origami flags "MultiViews ENABLED"
+  **once** (a misconfig finding), then validates each disclosed file **inline exactly once** (deduped
+  across all the variants that point to it, reported under origin `negotiation`), and never reports
+  the per-request `300`s. Net: one notice + the real files, instead of a wall of duplicates.
+
 ## [1.9.1]
 ### Fixed
 - **MultiViews no longer floods every probed dotfile as a phantom disclosure.** A MultiViews-on

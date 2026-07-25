@@ -265,6 +265,8 @@ class ScanResult:
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
     twin_sig: dict = field(default_factory=dict, compare=False, repr=False)       # slash-normalized URL → response sig, to suppress an identical /x vs /x/ twin live
     odata_probed: set = field(default_factory=set, compare=False, repr=False)     # collection paths already OData-probed (early target + late fold don't double-probe)
+    multiviews_seen: bool = field(default=False, compare=False, repr=False)       # reported the "MultiViews enabled" misconfig once already
+    multiviews_choices: set = field(default_factory=set, compare=False, repr=False)  # MultiViews-disclosed files already validated (dedup: /x.bak, /x.inc … all → /x.php)
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -1427,42 +1429,46 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
             # returns a 300 for ANY unresolvable name, suggesting only `/./x`/`/../x`
             # traversal noise — parse_choices drops that, so require ≥1 real sibling
             # before reporting (else every probed dotfile floods as a phantom leak).
-            choices = (negotiation.parse_choices(probe.body_head, url)
-                       if probe.status == 300 and negotiation.is_multiple_choices(probe.body_head)
-                       else set())
-            if not choices:
-                if ranker is not None:
-                    ranker.observe(cand.path, hit=False)
-                observer.tick(hit=False)
-                observer.request(url, probe.status, False)
-                continue
-            shown = ", ".join(sorted(choices)[:3]) + (f" (+{len(choices) - 3})" if len(choices) > 3 else "")
-            negf = Finding(url, 300, probe.length, probe.content_type, 0.9, cand.origin,
-                           note=f"mod_negotiation MultiViews → {shown}",
-                           tags=["config", "disclosure", "negotiation"],
-                           simhash=probe.body_simhash, words=probe.words, lines=probe.lines)
-            observer.request(url, 300, True)
-            _report(observer, result, opts, negf, url)
-            # found → test: validate each disclosed filename RIGHT NOW, not a round later
-            for cp in sorted(choices):
-                if _over_budget(engine, opts):
-                    break
-                curl = _join_candidate(_host_root(profile.base_url), "/", cp)
-                ck = curl.lower() if ci else curl
-                if ck in fired:
-                    continue
-                fired.add(ck)
-                try:
-                    cpr = await engine.fetch(curl, keep_body=opts.filters.needs_body())
-                except Exception:
-                    continue
-                cpref = urlparse(curl).path.rsplit("/", 1)[0] + "/"
-                cf = classify(profile, cpr, "negotiation", cpref)
-                if cf is None or (not _over_budget(engine, opts)
-                                  and await _is_soft(engine, profile, cpref, cpr)):
-                    observer.request(curl, cpr.status, False)
-                    continue
-                _report(observer, result, opts, cf, curl)
+            # Apache mod_negotiation (MultiViews): a 300 lists the REAL files behind a
+            # name the server can't resolve. The 300 itself is just the mechanism — and
+            # on a MultiViews host EVERY extension-fold variant (/x.bak, /x.inc, /x.php…)
+            # 300s toward the same real file, which would flood the report. So DON'T
+            # report the 300s; instead flag the misconfig ONCE, then validate each
+            # DISCLOSED file inline exactly once (found → test), reporting the real hits.
+            mv = probe.status == 300 and negotiation.is_multiple_choices(probe.body_head)
+            if mv:
+                if not result.multiviews_seen:
+                    result.multiviews_seen = True
+                    _report(observer, result, opts,
+                            Finding(url, 300, probe.length, probe.content_type, 0.8, "negotiation",
+                                    note="mod_negotiation MultiViews ENABLED — extensionless / wrong-"
+                                         "extension requests enumerate real filenames (server misconfig)",
+                                    tags=["config", "negotiation"], simhash=probe.body_simhash,
+                                    words=probe.words, lines=probe.lines), url)
+                for cp in sorted(negotiation.parse_choices(probe.body_head, url)):
+                    if cp in result.multiviews_choices or _over_budget(engine, opts):
+                        continue
+                    result.multiviews_choices.add(cp)
+                    curl = _join_candidate(_host_root(profile.base_url), "/", cp)
+                    ck = curl.lower() if ci else curl
+                    if ck in fired:
+                        continue
+                    fired.add(ck)
+                    try:
+                        cpr = await engine.fetch(curl, keep_body=opts.filters.needs_body())
+                    except Exception:
+                        continue
+                    cpref = urlparse(curl).path.rsplit("/", 1)[0] + "/"
+                    cf = classify(profile, cpr, "negotiation", cpref)
+                    if cf is None or (not _over_budget(engine, opts)
+                                      and await _is_soft(engine, profile, cpref, cpr)):
+                        observer.request(curl, cpr.status, False)
+                        continue
+                    _report(observer, result, opts, cf, curl)
+            if ranker is not None:
+                ranker.observe(cand.path, hit=False)
+            observer.tick(hit=False)
+            observer.request(url, probe.status, False)     # the 300 request itself: mechanism, not a finding
             continue
 
         # Directory detection from a REAL response (trailing-slash candidate or a
