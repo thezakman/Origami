@@ -85,7 +85,11 @@ async def fetch_db(base: str = SOURCE_BASE, timeout: float = 20.0) -> dict:
                 r = await client.get(f"{base}/{shard}.json")
                 if r.status_code == 200:
                     return json.loads(r.text)
-            except (httpx.HTTPError, json.JSONDecodeError):
+            except Exception:
+                # Best-effort like every other network fetcher (wayback._safe,
+                # originip): a dead/slow shard — or a bare anyio stream error that
+                # escapes httpx's wrapping — contributes {} instead of aborting the
+                # whole asyncio.gather over the shards.
                 pass
             return {}
         for part in await asyncio.gather(*(one(s) for s in _SHARDS)):
