@@ -23,9 +23,26 @@ import ssl
 import time
 from dataclasses import dataclass, field
 
+import anyio
 import httpx
 
 from origami.core.normalize import simhash
+
+# Low-level stream errors that can escape httpx's own exception wrapping.
+# httpcore's anyio backend re-raises anyio.EndOfStream / BrokenResourceError /
+# ClosedResourceError RAW when the peer drops the socket mid-TLS-handshake or
+# mid-read (common with WAF/CDN tarpits and hosts that reset the scan). These
+# are bare Exception subclasses — NOT httpx.HTTPError or OSError — so without
+# catching them a single flaky target crashes the whole scan. Treat them as a
+# transient transport failure: retry, then fall back to an error probe.
+_TRANSPORT_ERRORS = (
+    httpx.TransportError,
+    httpx.HTTPError,
+    OSError,
+    anyio.EndOfStream,
+    anyio.BrokenResourceError,
+    anyio.ClosedResourceError,
+)
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -338,10 +355,11 @@ class Engine:
                 await self._sleep_before()
                 try:
                     probe = await self._stream_probe(url, method, keep_body, kw)
-                except (httpx.TransportError, httpx.HTTPError, OSError) as e:
+                except _TRANSPORT_ERRORS as e:
                     # Transient transport failure (timeout, connection reset/refused,
-                    # DNS, or a raw ssl.SSLError — a subclass of OSError — that escapes
-                    # httpx's wrapping on a flaky TLS read, common with CDN/WAF
+                    # DNS, a raw ssl.SSLError — a subclass of OSError — that escapes
+                    # httpx's wrapping on a flaky TLS read, or a bare anyio stream
+                    # error when the peer drops mid-handshake, common with CDN/WAF
                     # tarpitting). Retry, but do NOT treat it as throttle pushback: a
                     # handful of slow/dead URLs must not collapse global concurrency
                     # (and inflate pushback_events) for the whole, otherwise-healthy
