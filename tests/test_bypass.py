@@ -175,14 +175,14 @@ class TestBypass403(unittest.TestCase):
 
         streamed = []
         opts = ScanOptions(bypass403=True, finding_sink=streamed.append)
-        orig = scanner._confirm
+        orig = scanner.folds._confirm
         async def fake_confirm(engine, profile, prefix, probe, origin):
             return Finding(probe.url, probe.status, probe.length, probe.content_type, 0.9, origin)
-        scanner._confirm = fake_confirm
+        scanner.folds._confirm = fake_confirm
         try:
             asyncio.run(_bypass_fold(FakeEngine(), prof, result, opts, NullObserver(), root_simhash=999))
         finally:
-            scanner._confirm = orig
+            scanner.folds._confirm = orig
 
         byp = [x for x in result.findings if x.origin == "bypass403"]
         self.assertEqual(len(byp), 1)                     # the bypass is recorded…
@@ -245,15 +245,15 @@ class TestBypass403(unittest.TestCase):
         f = Finding("https://h/api/data.json", 200, LEN, "application/json", 0.95,
                     "wordlist", simhash=999)     # base simhash differs from the nonce'd bodies
         result = ScanResult(profile=prof, findings=[f])
-        orig = scanner._confirm
+        orig = scanner.folds._confirm
         async def fake_confirm(engine, profile, prefix, probe, origin):
             return Finding(probe.url, probe.status, probe.length, probe.content_type, 0.9, origin)
-        scanner._confirm = fake_confirm
+        scanner.folds._confirm = fake_confirm
         try:
             asyncio.run(_backup_fold(FakeEngine(), prof, result, ScanOptions(backups=True),
                                      NullObserver()))
         finally:
-            scanner._confirm = orig
+            scanner.folds._confirm = orig
         # NO backup variant reported — all matched the random-suffix catch-all
         self.assertEqual([x for x in result.findings if x.origin == "backup"], [])
 
@@ -328,8 +328,8 @@ class TestBypass403(unittest.TestCase):
             if url.endswith("/SALESFORCE/"):
                 return True, [url + "HONEYWELL/"]     # this dir reveals a deeper one
             return True, [url + "SALESFORCE/"]         # root reveals a dir
-        orig = scanner._shortscan_one
-        scanner._shortscan_one = fake_one
+        orig = scanner.folds._shortscan_one
+        scanner.folds._shortscan_one = fake_one
         try:
             prof = TargetProfile(host="h", base_url="https://h/")
             res = ScanResult(profile=prof)
@@ -342,7 +342,7 @@ class TestBypass403(unittest.TestCase):
                                         ScanOptions(deep=False), NullObserver()))
             self.assertEqual(calls, ["https://h/"])   # no --deep → root only
         finally:
-            scanner._shortscan_one = orig
+            scanner.folds._shortscan_one = orig
 
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the
