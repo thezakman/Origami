@@ -32,7 +32,7 @@ def _int_set(s: str | None) -> set[int] | None:
     try:
         return {int(x) for x in s.replace(" ", "").split(",") if x}
     except ValueError:
-        raise SystemExit(f"[!] expected a comma list of integers, got: {s!r}")
+        raise SystemExit(f"[!] expected a comma list of integers, got: {s!r}") from None
 
 
 def _ext_list(items) -> list[str]:
@@ -89,7 +89,7 @@ def _build_filters(args) -> Filters:
         try:
             f.filter_regex = re.compile(args.filter_regex)
         except re.error as e:
-            raise SystemExit(f"[!] bad --filter-regex: {e}")
+            raise SystemExit(f"[!] bad --filter-regex: {e}") from None
     # similar_hashes are resolved in the scanner (needs a live fetch); the URLs
     # travel via ScanOptions.filter_similar_urls.
     return f
@@ -104,7 +104,7 @@ def _parse_duration(s: str | None) -> float:
     try:
         return float(s[:-1]) * mult if mult else float(s)
     except ValueError:
-        raise SystemExit(f"[!] bad --time-limit (use 30s/10m/1h or seconds): {s!r}")
+        raise SystemExit(f"[!] bad --time-limit (use 30s/10m/1h or seconds): {s!r}") from None
 
 
 def _normalize_url(raw: str) -> str:
@@ -247,6 +247,7 @@ async def run(args: argparse.Namespace) -> int:
     _status_out = sys.stderr if jsonl_stdout else sys.stdout   # keep stdout pure JSONL in pipe mode
     if args.jsonl:
         import json as _json
+
         from origami.output.json_report import finding_record
         if jsonl_stdout:
             jsonl_fh = sys.stdout
@@ -364,7 +365,7 @@ async def run(args: argparse.Namespace) -> int:
                 if ln and not ln.startswith("#"):
                     proxy_list.append(ln)
         except OSError as e:
-            raise SystemExit(f"[!] --proxy-file unreadable: {e}")
+            raise SystemExit(f"[!] --proxy-file unreadable: {e}") from None
         if not proxy_list:
             raise SystemExit(f"[!] --proxy-file {args.proxy_file} has no proxies")
         if not jsonl_stdout:

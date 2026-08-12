@@ -25,7 +25,7 @@ class NGram:
         self.order = order
         self.model: dict[str, Counter] = defaultdict(Counter)
 
-    def train(self, names) -> "NGram":
+    def train(self, names) -> NGram:
         for raw in names:
             n = "".join(c for c in str(raw).lower() if c.isalnum() or c in "-_")
             if not n:

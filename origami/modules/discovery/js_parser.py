@@ -166,9 +166,10 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
             found |= extract_paths(blob, base_url, _depth + 1)
 
     def consider(s: str) -> None:
-        s = _clean(s)
-        if s is None:
+        cleaned = _clean(s)
+        if cleaned is None:
             return
+        s = cleaned
         if s.startswith(("http://", "https://", "//")):   # absolute OR protocol-relative URL
             u = urlparse(s)                  # urlparse("//evil.com/x") → netloc=evil.com
             if u.netloc and not same_site(u.netloc, host):

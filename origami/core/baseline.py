@@ -81,7 +81,7 @@ async def calibrate_context(
     cb.length_lo = min(p.length for p in probes)
     cb.length_hi = max(p.length for p in probes)
     cb.content_type = max(
-        set(p.content_type for p in probes), key=[p.content_type for p in probes].count
+        {p.content_type for p in probes}, key=[p.content_type for p in probes].count
     )
     cb.samples = len(probes)
 

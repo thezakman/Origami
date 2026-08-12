@@ -99,10 +99,10 @@ def scan(body: bytes, js: bool = False) -> list[tuple[str, str]]:
         else:
             if kind in seen_kind:            # same framework matched twice → once
                 continue
-            m = pat.search(body)
-            if m:
+            hit = pat.search(body)
+            if hit:
                 seen_kind.add(kind)
-                out.append((kind, _snippet(m.group(0))))
+                out.append((kind, _snippet(hit.group(0))))
         if len(out) >= _MAX_HITS:
             break
     return out

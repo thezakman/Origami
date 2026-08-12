@@ -91,7 +91,7 @@ async def run_shortscan(url: str, *, insecure: bool = True, user_agent: str | No
     # must always be reaped (killed + awaited) — never left running detached.
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=_SHORTSCAN_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await _reap(proc)
         return ShortscanResult(available=True, error=f"timed out after {_SHORTSCAN_TIMEOUT:.0f}s")
     except BaseException:                         # cancellation / loop teardown

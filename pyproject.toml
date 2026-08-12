@@ -36,6 +36,11 @@ dependencies = [
 
 [project.optional-dependencies]
 http2 = ["h2>=4"]                 # enables --http2 (HTTP/2 via ALPN)
+dev = [                           # `pip install -e ".[dev]"` — full contributor setup
+    "pytest>=8",
+    "ruff>=0.16",
+    "mypy>=1.15",
+]
 
 [project.urls]
 Homepage = "https://github.com/thezakman/Origami"
@@ -45,6 +50,27 @@ Changelog = "https://github.com/thezakman/Origami/blob/main/CHANGELOG.md"
 
 [project.scripts]
 origami = "origami.cli:main"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100                 # advisory; E501 is not enforced (see lint.ignore)
+
+[tool.ruff.lint]
+# A curated ruleset that catches real bugs and staleness without fighting the
+# codebase's deliberate style. Notably we do NOT enable BLE001/S110/S112 — the
+# `except Exception: pass` best-effort blocks (wayback._safe, originip, the
+# per-shard KB fetch) are intentional, not smells.
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = [
+    "E501",   # line length — long rich-UI strings and comments are intentional
+    "E402",   # module import not at top — several files lazy/conditionally import
+    "E701",   # multiple statements on one line (colon) — compact style
+    "E702",   # multiple statements on one line (semicolon) — compact style
+]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true     # optional deps (mmh3, h2) and untyped libs don't gate
 
 [tool.setuptools.dynamic]
 version = {attr = "origami.__version__"}   # single source of truth (origami/__init__.py)

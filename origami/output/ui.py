@@ -30,8 +30,8 @@ try:
     console = Console()
 except ImportError:  # rich is optional; NullObserver / plain-text observer work without it
     HAS_RICH = False
-    console = None
-    ProgressColumn = object   # so the rich-only classes below still DEFINE at import
+    console = None            # type: ignore[assignment]  # rich-optional fallback
+    ProgressColumn = object   # type: ignore[assignment,misc]  # so the rich-only classes below still DEFINE at import
     #                          (they're never instantiated unless HAS_RICH — see make_observer)
 
 
@@ -143,7 +143,7 @@ class _CountColumn(ProgressColumn):
     """`done/total` for a determinate phase; blank when indeterminate (the
     pulsing bar already says 'working') so it never reads a stuck '0/1'."""
 
-    def render(self, task) -> "Text":
+    def render(self, task) -> Text:
         if task.total is None:
             return Text("", style="dim")
         return Text(f"{int(task.completed)}/{int(task.total)}", style="dim")
@@ -155,7 +155,7 @@ class _LiveDashboard:
     the progress bar continuously — otherwise they only move on an explicit
     refresh and freeze during a slow request."""
 
-    def __init__(self, ui: "RichUI") -> None:
+    def __init__(self, ui: RichUI) -> None:
         self._ui = ui
 
     def __rich__(self):
@@ -198,7 +198,7 @@ class RichUI(NullObserver):
 
     # ---- lifecycle ----------------------------------------------------------
 
-    def __enter__(self) -> "RichUI":
+    def __enter__(self) -> RichUI:
         self._live.start()
         return self
 
@@ -327,7 +327,7 @@ class RichUI(NullObserver):
     _PHASES = ["calibrate", "fingerprint", "recon", "shortscan", "scan",
                "harvest", "403-bypass", "backups", "associations", "params", "vhost"]
 
-    def _phase_text(self) -> "Text":
+    def _phase_text(self) -> Text:
         # header shows only the position (the name lives in the status-bar chip)
         if self.phase_name in self._PHASES:
             return Text(f"phase {self._PHASES.index(self.phase_name) + 1}/{len(self._PHASES)}",
@@ -451,7 +451,7 @@ class PlainLiveObserver(NullObserver):
         self.skippable = False
         self._last_draw = 0.0
 
-    def __enter__(self) -> "PlainLiveObserver":
+    def __enter__(self) -> PlainLiveObserver:
         return self
 
     def __exit__(self, *a) -> None:

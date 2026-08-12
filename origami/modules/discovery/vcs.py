@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import struct
 
-
 # ---- .git/index (DIRC) --------------------------------------------------------
 
 def _read_varint(body: bytes, off: int) -> tuple[int, int]:

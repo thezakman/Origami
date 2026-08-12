@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from origami.brain.memory import _is_asset       # canonical static-asset filter
+from origami.brain.memory import _is_asset  # canonical static-asset filter
 from origami.core.scope import same_site
 
 # A plain, honest UA — archives rate-limit/great-wall anonymous floods.
@@ -236,7 +236,7 @@ async def from_gau(host: str, binaries=_GAU_BINARIES, cap: int = _FETCH_ROWS,
             continue                             # binary not installed — try the next
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=_GAU_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await _reap(proc)
             return None                          # gau hung → treat as unavailable, try native
 

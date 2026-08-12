@@ -275,7 +275,7 @@ class Memory:
     def load_word_stats(self, techs: list[str]) -> dict[str, tuple[int, int]]:
         """Pool (hits, misses) per candidate word across the host's confirmed
         techs plus the context-free '*' row — the prior the ranker scores with."""
-        keys = list(dict.fromkeys(["*"] + [t for t in techs]))
+        keys = list(dict.fromkeys(["*"] + list(techs)))
         qm = ",".join("?" * len(keys))
         rows = self.db.execute(
             f"SELECT word, SUM(hits), SUM(misses) FROM word_stats "
@@ -386,6 +386,7 @@ class Memory:
         for p in stale:
             self.db.execute("DELETE FROM corpus WHERE host = ? AND path = ?", (host, p))
         self.db.commit()
+        assert run_id is not None       # lastrowid is always set right after an INSERT
         return run_id
 
     def prune_fingerprinted(self) -> int:

@@ -51,7 +51,7 @@ async def resolve_ips(host: str, *, port: int = 443) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for info in infos:
-        ip = info[4][0]
+        ip = str(info[4][0])            # sockaddr[0] is the address string (AF_INET/AF_INET6)
         if ip and ip not in seen:
             seen.add(ip)
             out.append(ip)

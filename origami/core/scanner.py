@@ -38,22 +38,59 @@ from origami.brain.bandit import word_of
 from origami.brain.kb import load_kb
 from origami.brain.ngram import NGram
 from origami.core import baseline as bl
+from origami.core import fingerprint as fp
 from origami.core import overlays
 from origami.core import resume as resume_mod
-from origami.core import fingerprint as fp
 from origami.core.evidence import Evidence, TargetProfile
 from origami.core.httpclient import Engine
 from origami.core.normalize import hamming, simhash
-from origami.core.response_classifier import (NOT_FOUND_STATUS, Filters, Finding,
-                                               classify, is_dir_listing, resolve_baseline)
-from origami.core.scope import same_host, same_site, path_tenant_host, same_tenant_path
-from origami.core.scheduler import (BASE_EXTS, Candidate, build_candidates,
-                                     derive_vocabulary, load_wordlists,
-                                     target_tokens)
-from origami.modules import authz, bypass403, cache_poison, leaks, paramfuzz, secrets, session, vhost, waf
-from origami.modules.discovery import (apidocs, apiver, backups, buckets, clientapp,
-                                        graphql, js_parser, methods, mutate, negotiation, odata,
-                                        originip, robots, shortname, vcs, wayback, wellknown)
+from origami.core.response_classifier import (
+    NOT_FOUND_STATUS,
+    Filters,
+    Finding,
+    classify,
+    is_dir_listing,
+    resolve_baseline,
+)
+from origami.core.scheduler import (
+    BASE_EXTS,
+    Candidate,
+    build_candidates,
+    derive_vocabulary,
+    load_wordlists,
+    target_tokens,
+)
+from origami.core.scope import path_tenant_host, same_host, same_site, same_tenant_path
+from origami.modules import (
+    authz,
+    bypass403,
+    cache_poison,
+    leaks,
+    paramfuzz,
+    secrets,
+    session,
+    vhost,
+    waf,
+)
+from origami.modules.discovery import (
+    apidocs,
+    apiver,
+    backups,
+    buckets,
+    clientapp,
+    graphql,
+    js_parser,
+    methods,
+    mutate,
+    negotiation,
+    odata,
+    originip,
+    robots,
+    shortname,
+    vcs,
+    wayback,
+    wellknown,
+)
 from origami.output.ui import NullObserver
 
 # Extension classes we always calibrate at a prefix before scanning it.
@@ -592,7 +629,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # sensitive operations, and (queries only) probe which respond without auth.
     if opts.apidocs:
         _recon("graphql")
-        _empty_meta = {"fields": set(), "args": set(), "queries": [], "mutations": [], "sensitive": []}
+        _empty_meta: dict[str, object] = {"fields": set(), "args": set(), "queries": [], "mutations": [], "sensitive": []}
         gql_url, gql_fields, gql_meta = await _guard(
             observer, "graphql", graphql.harvest(engine, base_url), (None, set(), _empty_meta))
         if gql_url:
@@ -1283,7 +1320,7 @@ def _dedupe_and_collapse(findings, observer, ci=False):
             clusters[(f.status, f.length)].append(f)
 
     collapsed = 0
-    for (status, length), group in clusters.items():
+    for (_status, length), group in clusters.items():
         if len(group) > COLLISION_MAX:
             rep = min(group, key=lambda f: len(f.url))
             rep.note = (rep.note + " " if rep.note else "") + f"+{len(group) - 1} paths, same {length}B response"
@@ -2368,7 +2405,7 @@ async def _param_fold(engine, profile, result, opts, observer) -> None:
         if not (found or redirect_params or header_hits):
             continue
 
-        def _verdict(param: str, ctx: str) -> str:
+        def _verdict(param: str, ctx: str, verified=verified) -> str:
             v = verified.get(param)
             bits = []
             if v:

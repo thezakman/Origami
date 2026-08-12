@@ -21,7 +21,7 @@ from origami.core.httpclient import Engine, Probe
 try:
     import mmh3
 except ImportError:
-    mmh3 = None
+    mmh3 = None   # type: ignore[assignment]  # optional dep; favicon-hash fp degrades gracefully
 
 # Tiny seed map of Shodan-style favicon mmh3 hashes → tech. The full DB
 # (FingerprintHub) is a v2 ingestion; even without a match we surface the hash

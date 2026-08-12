@@ -210,6 +210,10 @@ class Engine:
         self.total_requests = 0      # every logical fetch THIS run (calibration, harvests, scan)
         self.prior_requests = 0      # requests spent on earlier runs of this target (set on --resume)
         self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
+        # Scan wall-clock deadline (monotonic seconds) or None for no limit. Set
+        # once by the scanner at scan start (--time-limit) and read in every
+        # fold's hot loop; lives here so all folds share one budget.
+        self.deadline: float | None = None
         # Legacy-TLS: some (often enterprise/legacy) servers negotiate a weak DH
         # key or an old cipher that a default OpenSSL security level rejects — the
         # handshake fails where curl succeeds. We start strict and, on the first
@@ -249,7 +253,7 @@ class Engine:
         The caller owns it and must aclose() it."""
         return self._new_client(proxy)
 
-    async def __aenter__(self) -> "Engine":
+    async def __aenter__(self) -> Engine:
         # One client per proxy when --proxy-file gives a pool (requests spread
         # across egress IPs — a per-source rate-limit/ban can't pin the scan);
         # otherwise a single client (the --proxy one, or none).

@@ -194,7 +194,7 @@ def _tree(m: GraphModel):
     def layout(k: str, depth: int) -> float:
         ch = children.get(k, [])
         if not ch:
-            y = row[0]
+            y: float = row[0]
             row[0] += 1
         else:
             ys = [layout(c, depth + 1) for c in ch]

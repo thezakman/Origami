@@ -149,7 +149,7 @@ class Filters:
     # or line counts, matches this regex, or is ~identical (simhash) to a reference.
     filter_words: set[int] = field(default_factory=set)
     filter_lines: set[int] = field(default_factory=set)
-    filter_regex: "re.Pattern[str] | None" = None
+    filter_regex: re.Pattern[str] | None = None
     similar_hashes: tuple[int, ...] = ()
     similar_distance: int = 4
 
