@@ -13,8 +13,6 @@ import random
 import string
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from urllib.parse import urljoin, urlparse
 
 # More than this many byte-identical results (same status+simhash) = a catch-all
@@ -46,11 +44,29 @@ from origami.core.httpclient import Engine
 from origami.core.normalize import hamming, simhash
 from origami.core.response_classifier import (
     NOT_FOUND_STATUS,
-    Filters,
     Finding,
     classify,
     is_dir_listing,
     resolve_baseline,
+)
+from origami.core.scanner.types import ScanControl, ScanOptions, ScanResult
+from origami.core.scanner.util import (
+    _climb_brute_split,
+    _curl_cmd,
+    _excluded,
+    _ext_of,
+    _guard,
+    _host_root,
+    _is_self_redirect_dir,
+    _join_candidate,
+    _over_budget,
+    _path_climb,
+    _rel_depth,
+    _scope_paths,
+    _strips_trailing_slash,
+)
+from origami.core.scanner.util import (
+    _ext_excluded as _ext_excluded,  # re-export for tests (not used in this module)
 )
 from origami.core.scheduler import (
     BASE_EXTS,
@@ -60,7 +76,7 @@ from origami.core.scheduler import (
     load_wordlists,
     target_tokens,
 )
-from origami.core.scope import path_tenant_host, same_host, same_site, same_tenant_path
+from origami.core.scope import path_tenant_host, same_host, same_tenant_path
 from origami.modules import (
     authz,
     bypass403,
@@ -97,23 +113,6 @@ from origami.output.ui import NullObserver
 _BASE_CALIB_EXTS = ["", ".txt", ".html"]
 
 
-def _ext_of(path: str) -> str:
-    last = path.rstrip("/").rsplit("/", 1)[-1]
-    return ("." + last.rsplit(".", 1)[-1]) if "." in last else ""
-
-
-def _ext_excluded(path: str, patterns) -> bool:
-    """True if `path`'s file extension matches a `--exclude-ext` glob (e.g. `jpg`,
-    `png`, `jpg*`). Directories (no extension) are never excluded by this."""
-    if not patterns:
-        return False
-    last = path.rstrip("/").rsplit("/", 1)[-1]
-    if "." not in last:
-        return False
-    ext = last.rsplit(".", 1)[-1].lower()
-    return any(fnmatch(ext, pat) for pat in patterns)
-
-
 # Sanity ceiling on harvested seeds. These are REAL references the app uses
 # (high value), so the cap is generous — overall volume is bounded by
 # --max-requests, not by starving the best candidates.
@@ -121,189 +120,6 @@ MAX_HARVEST_SEEDS = 2000
 MAX_WAYBACK_SEEDS = 2000   # cap historical (Wayback/gau) paths folded as candidates
 WAYBACK_BUDGET = 12.0      # total wall-clock budget for the (optional) history lookup —
                            # bounds how long the scan will BLOCK on it before starting
-
-
-def _host_root(url: str) -> str:
-    p = urlparse(url)
-    return f"{p.scheme}://{p.netloc}/"
-
-
-def _curl_cmd(url: str, method: str = "GET", headers: dict | None = None) -> str:
-    """A copy-paste curl that reproduces a request — the exact method + headers a
-    fold used, so a header/method bypass is runnable as-is. `-sk`: quiet + insecure
-    (targets under test often have self-signed / legacy TLS)."""
-    parts = ["curl", "-sk"]
-    if method and method.upper() != "GET":
-        parts += ["-X", method.upper()]
-    for k, v in (headers or {}).items():
-        parts += ["-H", "'" + f"{k}: {v}".replace("'", "'\\''") + "'"]
-    parts.append("'" + url.replace("'", "'\\''") + "'")
-    return " ".join(parts)
-
-
-def _join_candidate(root: str, prefix: str, path: str) -> str:
-    """Build the absolute URL for a candidate path.
-
-    An absolute-URL candidate (a same-site CDN seed) is used as-is; a leading-/
-    path is root-absolute; anything else resolves under `prefix`.
-
-    Uses `startswith`, NOT `"://" in path`: a wordlist/payload candidate whose
-    body merely CONTAINS `://` (e.g. a Struts2 OGNL `${...http://x...}`) is still
-    a relative path — treating it as an absolute URL sends a schemeless URL to
-    httpx and crashes the scan. Here it becomes `https://host/${...}` (absolute),
-    which is what a vuln payload should be anyway.
-    """
-    if path.startswith(("http://", "https://")):
-        return path
-    if path.startswith("/"):
-        return urljoin(root, path.lstrip("/"))
-    return urljoin(root, prefix.lstrip("/") + path)
-
-
-def _excluded(path: str, opts) -> bool:
-    """True if `path` matches a user `--exclude` pattern (case-insensitive
-    substring) — never fired, never recursed. Safety rail for destructive or
-    out-of-scope endpoints (/logout, /delete, /admin/shutdown)."""
-    if _ext_excluded(path, getattr(opts, "exclude_ext", ())):
-        return True                       # --exclude-ext: drop static assets (jpg/png/css…)
-    if not opts.exclude:
-        return False
-    low = path.lower()
-    return any(pat.lower() in low for pat in opts.exclude)
-
-
-def _is_self_redirect_dir(location: str, path: str) -> bool:
-    """True when the Location ADDS a trailing slash to this same path (/x → /x/)
-    — the canonical "this is a directory" signal. Compares the parsed path for
-    EQUALITY (so /login → /gateway/login is not a self-redirect), matches an
-    absolute Location (http://host/x/), and — crucially — requires the slash to
-    be *added*: a STRIP (/x/ → /x) is framework canonicalization, not a directory.
-    """
-    lp = urlparse(location).path
-    return lp.rstrip("/") == path.rstrip("/") and lp.endswith("/") and not path.endswith("/")
-
-
-def _strips_trailing_slash(location: str, path: str) -> bool:
-    """A redirect that removes this path's trailing slash (/x/ → /x) — blanket URL
-    canonicalization (Next.js etc.), so a trailing-slash candidate that gets it is
-    NOT a real directory and must not be recursed."""
-    if not location:
-        return False
-    lp = urlparse(location).path
-    return path.endswith("/") and lp.rstrip("/") == path.rstrip("/") and not lp.endswith("/")
-
-
-async def _guard(observer, label, coro, default):
-    """Run a discovery fold in isolation. A parser bug or a pathological response
-    on one fold (malformed JSON spec, weird JS, broken sitemap) skips just that
-    fold with a note — the scan keeps going instead of dying on one bad target."""
-    try:
-        return await coro
-    except Exception as e:                       # noqa: BLE001 — isolation is the point
-        observer.log(f"{label}: skipped ({type(e).__name__}: {e})", 0, style="yellow")
-        return default
-
-
-def _rel_depth(prefix: str, base_prefix: str) -> int:
-    """How many directory levels `prefix` is below the scan base."""
-    base = [s for s in base_prefix.strip("/").split("/") if s]
-    segs = [s for s in prefix.strip("/").split("/") if s]
-    return max(0, len(segs) - len(base))
-
-
-def _scope_paths(paths, host: str, scope: str) -> set[str]:
-    """Reduce harvested references to what we'll SCAN.
-
-    Relative + same-host paths are always in scope. A same-site absolute URL
-    (the CDN) is kept as a full URL only when scope == "site" — otherwise we
-    read the CDN's JS but never fire requests at it (scope == "host").
-    """
-    out: set[str] = set()
-    for p in paths:
-        if p.startswith(("http://", "https://")):   # same-site CDN full URL (js kept it)
-            if scope == "site" and same_site(urlparse(p).netloc, host):
-                out.add(p)
-            continue
-        if p.startswith("//"):
-            continue
-        if p.lstrip("/"):
-            out.add(p)                       # keep leading-/ (root-abs vs relative); a
-            #                                  payload with an internal :// stays relative
-    return out
-
-
-@dataclass
-class ScanOptions:
-    max_depth: int = 1            # 0 = root only
-    climb_brute: int = 0          # ancestor dirs above the target swept with the FULL wordlist
-                                  # (not just single-probed): 0 = off, N = N levels up (deepest-first),
-                                  # <0 = all the way to root. CLI resolves it: 1 plain, all under --deep.
-    max_requests: int = 0         # hard cap per run (§3.11); 0 = unlimited (default)
-    time_limit: float = 0.0       # wall-clock cap in seconds (--time-limit); 0 = unlimited
-    replay_proxy: str | None = None       # send confirmed findings through this proxy (--replay-proxy)
-    replay_codes: tuple[int, ...] = ()    # only replay these statuses (empty = all reported)
-    filter_similar_urls: tuple[str, ...] = ()  # --filter-similar-to: pages whose simhash drops look-alikes
-    wordlist_paths: list[str] = field(default_factory=list)  # -w (repeatable); merged. Empty = builtin base
-    shortscan: str = "auto"       # "auto" (IIS fold OR any Windows/.NET signal) | "on" (force) | "off"
-    deep: bool = False            # --deep: thorough mode — e.g. always spend the shortscan vuln check
-    js: bool = True               # harvest endpoints from HTML/JS
-    apidocs: bool = True          # probe + parse OpenAPI/Swagger specs into seeds
-    backups: bool = True          # VCS/dotfile probes + backup-name folding
-    extensions: list[str] = field(default_factory=list)  # user-forced extensions (".php" form)
-    ext_only: bool = False        # use ONLY `extensions` (ignore fingerprint + learned)
-    max_folds: int = 40           # cap on learned vocabulary names folded into the scan
-    scope: str = "host"           # "host" (target only) | "site" (also scan same-site CDN)
-    economy: str = "auto"         # bandit candidate ranking: "auto" (WAF/throttle) | "on" | "off"
-    exclude: list[str] = field(default_factory=list)  # skip any path containing one of these (safety: /logout, /delete…)
-    exclude_ext: list[str] = field(default_factory=list)  # skip paths with these file extensions (glob: jpg,png,jpg* — static-asset noise)
-    graph: bool = False           # track provenance edges for the endpoint graph (--graph)
-    bypass403: bool = False        # try to bypass 403/401 findings (path/header/method tricks)
-    bypass_intensity: str = "auto" # "light" (core only) | "auto" (fingerprint-gated) | "full" (all)
-    bypass_headers: bool = False   # use a header-bypass wordlist for the header axis (--bypass-headers)
-    bypass_headers_path: str | None = None  # custom header wordlist path (None → bundled 403-headers.txt)
-    bypass_prefixes_path: str | None = None  # custom route-prefix wordlist (--bypass-prefixes) for the api/matrix families
-    openapi_source: str | None = None  # explicit OpenAPI/Swagger/JSON:API spec (URL or file) to fold (--openapi)
-    param_fuzz: bool = False       # fire harvested + common param names at dynamic endpoints (--params)
-    cache_poison: str = ""         # "" = off; "light"|"auto"|"full" — probe unkeyed inputs for cache poisoning (--cache-poison)
-    cache_headers: str | None = None  # custom unkeyed-header wordlist for --cache-poison (None → bundled set)
-    probe_405: bool = False        # on each 405, replay with POST/PATCH (empty & {} body) to find the accepted method (--probe-405)
-    buckets: bool = False          # probe referenced S3/GCS/Azure buckets for public listability (--buckets)
-    wayback: bool = False          # fold historical URLs (Wayback CDX + Common Crawl) as seeds (--wayback)
-    gau: bool = False              # prefer the gau/waybackurls binary for history, native fallback (--gau)
-    vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
-    origin: bool = False           # origin-IP discovery + IP-based WAF bypass (--origin)
-    overlays: bool = True          # fold tech-specific path packs from the fingerprint (--no-overlays off)
-    filters: Filters = field(default_factory=Filters)
-    finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
-
-
-@dataclass
-class ScanControl:
-    """Interactive control shared with the keyboard listener (dirb-style).
-
-    `n` skips the rest of the current directory; `q` ends the scan early.
-    """
-    skip_prefix: bool = False
-    quit: bool = False
-
-
-@dataclass
-class ScanResult:
-    profile: TargetProfile
-    findings: list[Finding] = field(default_factory=list)
-    requests_made: int = 0
-    folds: set[str] = field(default_factory=set)
-    pushbacks: int = 0            # 429/reset events — target throttled us
-    completed: bool = False       # False if interrupted (quit/cap) → resumable
-    error: str = ""               # transport error when the root was unreachable (surfaced to the user)
-    edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
-    seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
-    seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
-    wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
-    twin_sig: dict = field(default_factory=dict, compare=False, repr=False)       # slash-normalized URL → response sig, to suppress an identical /x vs /x/ twin live
-    odata_probed: set = field(default_factory=set, compare=False, repr=False)     # collection paths already OData-probed (early target + late fold don't double-probe)
-    multiviews_seen: bool = field(default=False, compare=False, repr=False)       # reported the "MultiViews enabled" misconfig once already
-    multiviews_choices: set = field(default_factory=set, compare=False, repr=False)  # MultiViews-disclosed files already validated (dedup: /x.bak, /x.inc … all → /x.php)
 
 
 async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
@@ -1180,63 +996,6 @@ async def _is_soft(engine, profile, prefix, probe) -> bool:
                 cb.soft_signatures.append(sig)
         return True
     return False
-
-
-def _path_climb(raw_path: str) -> tuple[str, str | None, list[str]]:
-    """Path regression from a deep target URL → (base_dir, file_seed, ancestors).
-
-    Given `/caminho/path/arquivo.pdf`, Origami should scan the *directory* (the
-    file's PARENT, not treat the file as a folder), fetch the file itself, and
-    walk every ancestor directory up to root so `/caminho/path/`, `/caminho/` and
-    `/` are all explored — "climb the path". The segment names (caminho/path/…)
-    are folded into the dynamic vocabulary separately by `target_tokens`.
-
-      * base_dir   — the directory to calibrate/scan at (parent dir for a file)
-      * file_seed  — the file path to fetch/harvest, or None when the target is a dir
-      * ancestors  — directories strictly ABOVE base_dir, deepest-first, incl. "/"
-    """
-    path = raw_path or "/"
-    last = path.rsplit("/", 1)[-1]
-    is_file = bool(last) and "." in last and not path.endswith("/")
-    if is_file:
-        base_dir = path[: len(path) - len(last)] or "/"
-        file_seed: str | None = path
-    else:
-        base_dir = path if path.endswith("/") else path + "/"
-        file_seed = None
-    ancestors: list[str] = []
-    cur = base_dir.rstrip("/")
-    while cur:
-        cur = cur.rsplit("/", 1)[0]
-        anc = f"{cur}/" if cur else "/"
-        ancestors.append(anc)
-        if anc == "/":
-            break
-    return base_dir, file_seed, ancestors
-
-
-def _climb_brute_split(ancestors: list[str], climb_brute: int) -> tuple[list[str], list[str]]:
-    """Split climbed ancestors into (brute_dirs, seed_only) by the climb-brute level.
-
-    `ancestors` is deepest-first (immediate parent … root). `climb_brute` levels of
-    them (from the deepest) are promoted to full-wordlist prefixes; the rest stay
-    single-probe seeds. 0 = none promoted; negative = all promoted (to root).
-    """
-    if climb_brute < 0:
-        n = len(ancestors)
-    else:
-        n = max(0, min(climb_brute, len(ancestors)))
-    return ancestors[:n], ancestors[n:]
-
-
-def _over_budget(engine, opts) -> bool:
-    """True when the run must stop firing — the request cap (--max-requests) or the
-    wall-clock deadline (--time-limit) is reached. Checked in every fold's hot loop
-    (the deadline lives on the engine, set once at scan start)."""
-    if opts.max_requests and engine.spent >= opts.max_requests:
-        return True
-    dl = getattr(engine, "deadline", None)
-    return dl is not None and time.monotonic() >= dl
 
 
 async def _confirm(engine, profile, prefix, probe, origin):
