@@ -46,6 +46,7 @@ from origami.core.scanner.folds import (
     _apiver_fold,
     _association_fold,
     _authz_candidate,
+    _authz_diff_fold,
     _authz_fold,
     _authz_report,
     _backup_fold,
@@ -184,6 +185,7 @@ __all__ = [
     "_authz_candidate",
     "_authz_report",
     "_authz_fold",
+    "_authz_diff_fold",
     "_graphql_probe",
     "_odata_probe",
     "_odata_query_candidate",
@@ -999,6 +1001,15 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
     # pages (a token in a Set-Cookie/body, an authorize URL missing state/PKCE).
     await _guard(observer, "authz",
                  _authz_fold(engine, profile, result, opts, observer), None)
+
+    # 7.06 authz-diff — multi-identity access-control differential (BOLA/BFLA/broken
+    # auth). Replay the discovered surface under the --as identities (+ implicit anon)
+    # and flag where a lesser identity reaches what only the privileged session should.
+    # Runs when extra identities are given, or the scan itself is authenticated (free
+    # anon-vs-authed diff). Read-only GETs.
+    if opts.identities or session.has_auth(engine.cfg.headers):
+        await _guard(observer, "authz-diff",
+                     _authz_diff_fold(engine, profile, result, opts, observer), None)
 
     # 7.1 cloud buckets — report S3/GCS/Azure refs seen in the bodies; with
     # --buckets, probe each for public listability (read-only GET, off-host).

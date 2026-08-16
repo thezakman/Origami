@@ -549,6 +549,129 @@ async def _authz_fold(engine, profile, result, opts, observer) -> None:
                      0, style="bold yellow")
 
 
+# Tags that mark a resource as plausibly non-public — the convergence signal
+# (a lesser identity reaching the same content) only fires on these, so a
+# legitimately-shared public page isn't flagged.
+_AUTHZ_SENSITIVE_TAGS = frozenset({"auth", "admin", "api", "config", "disclosure",
+                                   "upload", "debug", "source", "secret", "leak", "listing"})
+# Static-asset extensions — public by design, skipped unless a sensitive tag says otherwise.
+_AUTHZ_STATIC_EXT = frozenset({".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg",
+                               ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2", ".ttf",
+                               ".eot", ".otf", ".mp4", ".webm", ".pdf"})
+MAX_AUTHZ_DIFF_ENDPOINTS = 40   # cap endpoints replayed under every identity
+
+
+def _authz_diff_candidate(f) -> bool:
+    """An endpoint worth replaying under each identity: a reachable app resource
+    (2xx/3xx) or an auth wall (401/403). Static assets are skipped unless a
+    sensitive tag overrides — they're public by design and only add noise."""
+    if not (200 <= f.status < 400 or f.status in (401, 403)):
+        return False
+    path = urlparse(f.url).path
+    if path.rstrip("/") == "":
+        return False                          # the site root is public by nature — no authz bug there
+    if _ext_of(path) in _AUTHZ_STATIC_EXT and not (set(f.tags) & _AUTHZ_SENSITIVE_TAGS):
+        return False
+    return True
+
+
+async def _authz_diff_fold(engine, profile, result, opts, observer) -> None:
+    """Multi-identity authorization differential (§ authz_diff). Replay each
+    discovered endpoint under the primary session + every `--as` identity (+ an
+    implicit anon), then flag where they CONVERGE but should diverge — a lesser
+    identity reaching the same content as the privileged session (BOLA/BFLA/broken
+    auth) — or the inverse (the privileged session denied where a lesser one is
+    served). Read-only GETs; findings enrich the existing endpoint in place."""
+    import httpx
+
+    from origami.modules import authz_diff as az
+    ids = az.build_identities(engine.cfg.headers, opts.identities or {},
+                              include_anon=opts.authz_anon)
+    if len(ids) < 2:
+        return                                # nothing to diff against
+    cands = [f for f in result.findings if _authz_diff_candidate(f)]
+    if not cands:
+        return
+    # sensitive-tagged and auth-wall endpoints first; then dedupe by resource (no query).
+    cands.sort(key=lambda f: (not (set(f.tags) & _AUTHZ_SENSITIVE_TAGS),
+                              f.status not in (401, 403), f.url))
+    seen_urls: set[str] = set()
+    uniq = []
+    for f in cands:
+        k = f.url.split("?", 1)[0]
+        if k not in seen_urls:
+            seen_urls.add(k)
+            uniq.append(f)
+    cands = uniq[:MAX_AUTHZ_DIFF_ENDPOINTS]
+
+    observer.phase("authz-diff")
+    label_str = ", ".join(i.label + ("*" if i.authed else "") for i in ids)
+    observer.log(f"authz-diff: replaying {len(cands)} endpoint(s) under {len(ids)} "
+                 f"identities ({label_str}) — * = authenticated", 0, style="cyan")
+    observer.start_prefix("authz-diff", len(cands))
+
+    # areas known to enforce access control: parent dirs where SOME finding is a wall.
+    protected = {urlparse(f.url).path.rsplit("/", 1)[0] + "/"
+                 for f in result.findings if f.status in (401, 403)}
+
+    clients: dict[str, httpx.AsyncClient] = {}
+    found = 0
+    try:
+        for i in ids:
+            clients[i.label] = httpx.AsyncClient(
+                verify=False, timeout=engine.cfg.timeout, follow_redirects=False,
+                headers={"User-Agent": engine.cfg.user_agent, **i.headers})
+        for f in cands:
+            if _over_budget(engine, opts):
+                break
+            observer.substep(observer.disp(f.url))
+            obs: dict[str, az.Obs] = {}
+            for i in ids:
+                try:
+                    r = await clients[i.label].get(f.url)
+                except Exception:
+                    continue                  # this identity couldn't reach it — omit its row
+                body = r.content or b""
+                obs[i.label] = az.Obs(i.label, r.status_code, simhash(body),
+                                      len(body), True, i.authed)
+            primary = obs.get("primary")
+            observer.request(f.url, primary.status if primary else 0, False)
+            if primary is None:
+                observer.tick(hit=False)
+                continue
+            parent = urlparse(f.url).path.rsplit("/", 1)[0] + "/"
+            mixed = (any(az._blocked(o) for o in obs.values())
+                     and any(az._reached(o) for o in obs.values()))
+            sensitive = (bool(set(f.tags) & _AUTHZ_SENSITIVE_TAGS)
+                         or parent in protected or mixed)
+            verdict = az.diff_verdict(obs, sensitive=sensitive)
+            if verdict is None:
+                observer.tick(hit=False)
+                continue
+            matrix = " · ".join(f"{o.label}={o.status}" for o in obs.values())
+            # Enrich the EXISTING finding in place (its URL is already reported, so a
+            # fresh Finding would be deduped away) — same pattern as secrets/leaks/authz.
+            f.tags = sorted(set(f.tags) | set(verdict["tags"]))
+            f.note = (f.note + " · " if f.note else "") + verdict["note"] + f" [{matrix}]"
+            if verdict["kind"] == "broken-auth":
+                f.confidence = max(f.confidence, verdict["confidence"])
+            if opts.finding_sink is not None:
+                opts.finding_sink(f)          # re-emit so a JSONL consumer sees the authz tag
+            found += 1
+            observer.tick(hit=True)
+            observer.log(f"authz-diff: {verdict['kind']} → {observer.disp(f.url)} [{matrix}]",
+                         0, style="bold yellow" if verdict["kind"] == "bola-lead" else "bold red")
+    finally:
+        for c in clients.values():
+            try:
+                await c.aclose()
+            except Exception:
+                pass
+    if found:
+        observer.log(f"authz-diff: {found} access-control lead(s) flagged — see the 'authz' tag",
+                     0, style="bold red")
+
+
 MAX_CONFIG_SEEDS = 60   # cap paths enumerated from config-file references
 MAX_VHOSTS = 60   # cap Host-header candidates probed
 

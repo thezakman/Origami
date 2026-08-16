@@ -95,6 +95,16 @@ def _build_filters(args) -> Filters:
     return f
 
 
+def _parse_identities(specs) -> dict[str, dict[str, str]]:
+    """`--as 'label: Header: value'` (repeatable) → {label: {Header: value}} for
+    the authz-diff fold. Exits cleanly on a malformed spec."""
+    from origami.modules.authz_diff import parse_as_specs
+    try:
+        return parse_as_specs(specs)
+    except ValueError as e:
+        raise SystemExit(f"[!] {e}") from None
+
+
 def _parse_duration(s: str | None) -> float:
     """'30s' / '10m' / '1h' / bare seconds → seconds. 0.0 when unset."""
     if not s:
@@ -227,6 +237,8 @@ async def run(args: argparse.Namespace) -> int:
         openapi_source=args.openapi, vhost=args.vhost, origin=args.origin or args.deep,
         overlays=not args.no_overlays,
         param_fuzz=args.params or args.deep,
+        identities=_parse_identities(args.as_identities),
+        authz_anon=not args.no_anon,
         wayback=(args.wayback or args.gau or args.deep) and not args.no_history,
         gau=args.gau and not args.no_history,
         cache_poison=(args.cache_poison or ("auto" if (args.cache_headers or args.deep) else "")),
@@ -333,6 +345,11 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  bypass-pfx: {args.bypass_prefixes} (api-prefix + matrix carriers)")
         if args.params:
             print("  params   : reflection fuzzing on dynamic endpoints")
+        if args.as_identities:
+            ids = _parse_identities(args.as_identities)
+            anon = "" if args.no_anon else " + anon"
+            print(f"  authz-diff: {len(ids)} extra identit{'y' if len(ids) == 1 else 'ies'} "
+                  f"({', '.join(ids)}){anon} — access-control differential (BOLA/BFLA)")
         if args.cache_poison or args.cache_headers:
             lvl = args.cache_poison or "auto"
             extra = f" + {args.cache_headers}" if args.cache_headers else ""
@@ -664,6 +681,17 @@ def main() -> None:
     ap.add_argument("--params", action="store_true",
                     help="parameter discovery: fire harvested + common parameter names at "
                          "dynamic endpoints and flag the ones that reflect (XSS/SSTI/redirect leads)")
+    ap.add_argument("--as", action="append", dest="as_identities", metavar="'label: Header: value'",
+                    help="add a request IDENTITY for the authorization differential (BOLA/BFLA/"
+                         "broken-auth): the discovered endpoints are replayed under this identity's "
+                         "credentials and Origami flags where a LESSER identity reaches what only "
+                         "the authenticated session should. Repeatable; reuse a label to give one "
+                         "identity several headers (--as 'low: Cookie: sid=2' --as 'low: X-Api-Key: k'). "
+                         "Enables the authz-diff fold — which also auto-runs when the scan itself is "
+                         "authenticated (a free anon-vs-authed diff)")
+    ap.add_argument("--no-anon", action="store_true",
+                    help="don't add the implicit UNAUTHENTICATED identity to the authz differential "
+                         "(by default anon is compared against the authenticated session)")
     ap.add_argument("--cache-poison", nargs="?", const="auto", default=None,
                     choices=["light", "auto", "full"], metavar="light|auto|full",
                     help="web cache poisoning: probe cacheable endpoints for UNKEYED inputs "

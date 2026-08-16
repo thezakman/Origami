@@ -5,6 +5,32 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.10.0]
+### Added
+- **Multi-identity authorization differential (`--as`).** The bridge from discovery to
+  access-control bugs (BOLA / BFLA / broken authentication — OWASP API #1/#3/#5). After the scan
+  maps the endpoint surface, the new `authz-diff` fold **replays each discovered endpoint under
+  several identities** — the primary scan session, every `--as 'label: Header: value'` identity,
+  plus an implicit `anon` (auth headers stripped) — and diffs the responses. It flags CONVERGENCE
+  where identities should DIVERGE: a lesser/unauthenticated identity that reaches the **same
+  content** as the privileged session (`broken-auth` when anon reaches it, `bola-lead` when a
+  distinct authed identity does), and the inverse anomaly (`authz-diff` — the privileged session
+  denied where a lesser one is served). Convergence findings are gated to non-public resources
+  (sensitive tag / protected area / mixed verdicts) to keep false positives low; per-user
+  divergent bodies are correctly treated as good scoping, not a bug. Runs automatically when the
+  scan is authenticated (a free anon-vs-authed diff) or when any `--as` identity is given;
+  `--no-anon` drops the implicit anon. Read-only GETs — nothing is forged or replayed onward.
+  New: `origami/modules/authz_diff.py`, the `_authz_diff_fold`, and the `authz`/`broken-auth`/
+  `bola-lead`/`authz-diff` tags.
+
+### Fixed
+- **A real directory no longer vanishes on a redirect-soft-404 host.** On a target whose *misses*
+  are 3xx (a constant-target catch-all `301 → /home`, or a slash-canonicalizing framework), a
+  genuine directory `/admin → /admin/` (also `301`, a DIR-confirming redirect) was suppressed as a
+  miss: both redirect bodies are empty boilerplate, so `looks_like_miss`'s body-simhash fallback
+  matched and masked the directory. The DIR redirect kind now wins over the body comparison, so the
+  directory is reported. Regression-tested.
+
 ## [1.9.2]
 ### Fixed
 - **MultiViews no longer floods a finding per extension-variant.** On a MultiViews host EVERY

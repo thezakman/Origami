@@ -54,6 +54,8 @@ class ScanOptions:
     vhost: bool = False            # virtual-host discovery (Host-header fuzzing on the target IP)
     origin: bool = False           # origin-IP discovery + IP-based WAF bypass (--origin)
     overlays: bool = True          # fold tech-specific path packs from the fingerprint (--no-overlays off)
+    identities: dict = field(default_factory=dict)  # --as: {label: {header: value}} extra identities for the authz-diff fold
+    authz_anon: bool = True        # include an implicit unauthenticated identity in the authz-diff (--no-anon off)
     filters: Filters = field(default_factory=Filters)
     finding_sink: object = field(default=None, compare=False, repr=False)  # optional callable(finding) — streamed per confirmed finding (JSONL)
 

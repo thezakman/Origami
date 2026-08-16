@@ -196,6 +196,26 @@ class TestClassify(unittest.TestCase):
         self.assertIsNotNone(f)                 # /admin → /admin/ confirms a directory
         self.assertEqual(f.status, 301)
 
+    def test_dir_redirect_survives_redirect_soft404_baseline(self):
+        # Regression: on a host whose MISSES are 3xx (a constant-target catch-all
+        # 301 → /home, or a slash-canonicalizing framework), a real directory
+        # `/admin → /admin/` (also 301, DIR) must still be a hit. Both redirect
+        # bodies are empty boilerplate, so their simhash matches — the miss-body
+        # fallback in looks_like_miss would otherwise mask the DIR redirect and
+        # suppress the directory. The DIR redirect kind wins over the body match.
+        p = TargetProfile(host="t", base_url="http://t/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=301, samples=4,
+                             simhashes=[simhash(b"")], content_type="",
+                             redirect_to="->/home", is_soft404=True)
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        probe = make_probe(status=301, body=b"", url="http://t/admin", location="/admin/")
+        f = classify(p, probe, "wordlist", "/")
+        self.assertIsNotNone(f, "a real /admin → /admin/ directory was suppressed as a miss")
+        self.assertEqual(f.status, 301)
+        # a genuine miss on this host (same constant-target 301) stays suppressed
+        miss = make_probe(status=301, body=b"", url="http://t/rand987", location="/home")
+        self.assertIsNone(classify(p, miss, "wordlist", "/"))
+
 class TestDirListing(unittest.TestCase):
     APACHE = (b'<html><head><title>Index of /images</title></head><body>'
               b'<h1>Index of /images</h1><pre><a href="?C=N;O=D">Name</a><hr>'

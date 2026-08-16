@@ -19,6 +19,8 @@ html/
 # stray run artifacts (streamed JSONL, scratch output)
 leftovers/
 *.jsonl
+# stray session/scratch dumps (e.g. 2026-08-12-190248-corrige.txt)
+*-corrige.txt
 # local source list — bundled as origami/wordlists/403-headers.txt
 /403-bypass.txt
 

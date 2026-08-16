@@ -187,7 +187,15 @@ def looks_like_miss(probe: Probe, cb: ContextBaseline) -> bool:
     if probe.status != cb.status:
         return False
     if 300 <= probe.status < 400:
-        if _redirect_kind(probe.url, probe.location) == cb.redirect_to:
+        kind = _redirect_kind(probe.url, probe.location)
+        # A directory-confirming redirect (/x → /x/) is a real discovery, never a
+        # miss. On a host whose misses are ALSO 3xx (a constant-target catch-all or
+        # a slash-canonicalizing framework), both redirect bodies are empty
+        # boilerplate, so the body-simhash fallback below would match and wrongly
+        # mask the directory — the DIR kind must win first.
+        if kind == "DIR":
+            return False
+        if kind == cb.redirect_to:
             return True
     # same status family: compare body structure against known miss bodies
     if cb.simhashes and any(
