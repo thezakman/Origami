@@ -289,7 +289,7 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  filters  : codes {fdesc}")
         if args.deep:
             _hist = "" if args.no_history else " + wayback"
-            print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params{_hist} + origin")
+            print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params{_hist} + origin + shortscan --auto")
         if args.header:
             def _fmt_hdr(h: str) -> str:
                 name, _, val = h.partition(":")
@@ -704,9 +704,10 @@ def main() -> None:
                          "lines), added to the built-in set (implies --cache-poison)")
     ap.add_argument("--deep", action="store_true",
                     help="aggressive discovery preset: turns on --bypass-403, --cache-poison, "
-                         "--probe-405, --buckets, --params, --wayback and --origin at once "
-                         "(state-changing probes, off-host bucket GETs and origin-IP probing "
-                         "included). Just: origami --deep -u <url>")
+                         "--probe-405, --buckets, --params, --wayback and --origin at once, and "
+                         "drives shortscan in --auto mode (full 8.3 long-name recovery cascade + "
+                         "recursion) when the target isn't throttling. State-changing probes, "
+                         "off-host bucket GETs and origin-IP probing included. Just: origami --deep -u <url>")
     ap.add_argument("--buckets", action="store_true",
                     help="probe S3/GCS/Azure buckets referenced in the target's code for public "
                          "listability (read-only GET, off-host) and enumerate exposed objects; "

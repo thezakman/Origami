@@ -140,7 +140,8 @@ def diff_verdict(obs: dict[str, Obs], *, sensitive: bool) -> dict | None:
         got = sorted(o.label for o in others if _reached(o))
         if got:
             who = ", ".join(f"'{x}'" for x in got)
-            return {"kind": "authz-diff", "confidence": 0.55, "tags": ["authz"],
+            return {"kind": "authz-diff", "confidence": 0.55, "tags": ["authz", "authz-diff"],
+                    "repro_label": got[0],
                     "note": f"{who} reach content the primary session is DENIED "
                             f"({primary.status}) — access-control inconsistency"}
         return None
@@ -155,11 +156,13 @@ def diff_verdict(obs: dict[str, Obs], *, sensitive: bool) -> dict | None:
         return None
     anon = [o for o in same if not o.authed]
     if anon:
-        return {"kind": "broken-auth", "confidence": 0.65, "tags": ["authz", "disclosure"],
+        return {"kind": "broken-auth", "confidence": 0.65,
+                "tags": ["authz", "broken-auth", "disclosure"], "repro_label": anon[0].label,
                 "note": f"unauthenticated ('{anon[0].label}') reaches the SAME content as the "
                         f"authenticated session — likely missing authentication/authorization"}
     labels = sorted(o.label for o in same)
     who = ", ".join(f"'{x}'" for x in labels)
-    return {"kind": "bola-lead", "confidence": 0.5, "tags": ["authz"],
+    return {"kind": "bola-lead", "confidence": 0.5, "tags": ["authz", "bola-lead"],
+            "repro_label": labels[0],
             "note": f"identit{'y' if len(labels) == 1 else 'ies'} {who} see the SAME content as "
                     f"'primary' — possible broken object/function-level authz (verify ownership)"}

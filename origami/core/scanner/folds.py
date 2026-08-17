@@ -627,6 +627,9 @@ async def _authz_diff_fold(engine, profile, result, opts, observer) -> None:
             observer.substep(observer.disp(f.url))
             obs: dict[str, az.Obs] = {}
             for i in ids:
+                engine.total_requests += 1    # count the replay so --max-requests + the report include it
+                if engine.on_request is not None:
+                    engine.on_request()
                 try:
                     r = await clients[i.label].get(f.url)
                 except Exception:
@@ -655,6 +658,11 @@ async def _authz_diff_fold(engine, profile, result, opts, observer) -> None:
             f.note = (f.note + " · " if f.note else "") + verdict["note"] + f" [{matrix}]"
             if verdict["kind"] == "broken-auth":
                 f.confidence = max(f.confidence, verdict["confidence"])
+            # A copy-paste curl that reproduces the bug AS the offending identity —
+            # runnable straight from the report (--curl). Anon → no auth headers.
+            off = next((i for i in ids if i.label == verdict.get("repro_label")), None)
+            if off is not None:
+                f.repro = _curl_cmd(f.url, "GET", off.headers)
             if opts.finding_sink is not None:
                 opts.finding_sink(f)          # re-emit so a JSONL consumer sees the authz tag
             found += 1
@@ -1972,6 +1980,68 @@ def _should_shortscan(opts: ScanOptions, folds: set[str], profile) -> bool:
 
 MAX_SHORTSCAN_DIRS = 12   # cap total shortscan runs (root + recursed dirs) under --deep
 MAX_SHORTSCAN_DEPTH = 3    # how deep the 8.3 dir recursion goes
+_SHORTSCAN_AUTO_MAXTIME = 240   # graceful --auto stop, below shortname.py's 300s hard reap
+
+
+def _shortscan_maxtime(engine) -> int:
+    """Wall-clock cap (s) handed to shortscan's `--maxtime` under --auto: the lesser
+    of a graceful default and whatever remains of the scan's own --time-limit, so the
+    heavy recovery cascade can't overrun the budget or stall behind the hard reap."""
+    import time
+    cap = _SHORTSCAN_AUTO_MAXTIME
+    if getattr(engine, "deadline", None) is not None:
+        return max(30, min(cap, int(engine.deadline - time.monotonic())))
+    return cap
+
+
+def _shortscan_loot_dir(profile) -> str:
+    """Scratch dir for shortscan's --auto source-disclosure loot (CVE-2023-36899).
+    Kept out of the CWD; per-host so a run's loot is easy to find."""
+    import os
+    import tempfile
+    host = (profile.host or "target").replace(":", "_").replace("/", "_")
+    return os.path.join(tempfile.gettempdir(), "origami-shortscan-loot", host)
+
+
+def _shortscan_extra_args(engine, profile, opts) -> tuple[list[str], str | None]:
+    """Governed extra flags for the shortscan subprocess. Returns (args, loot_dir).
+
+    Always mirrors Origami's aggregate `--rate` so the child honors the same req/s
+    ceiling. Under **--deep** (and only when the target isn't throttling us — the
+    cascade is request-heavy and the subprocess doesn't share Origami's adaptive
+    backoff) it adds **--auto**: shortscan's full cheap→expensive long-name recovery
+    (wordlist → known-extensions → sibling → references → tilde-continuation →
+    collision/checksum → webdav → brute), so it hands back reconstructed FULL names
+    as tier-0 seeds instead of Origami falling back to its weaker n-gram completer.
+    Bounded by --maxtime; any precondition-gated source-disclosure loot is redirected
+    to a scratch dir, never the CWD."""
+    args: list[str] = []
+    cfg = getattr(engine, "cfg", None)         # fail-safe to lean flags if the engine is absent
+    if cfg is not None and cfg.rate:
+        args += ["--rate", f"{cfg.rate:g}"]
+    loot: str | None = None
+    if opts.deep and cfg is not None and not _throttled(engine, profile, opts):
+        args.append("--auto")
+        args += ["--maxtime", str(_shortscan_maxtime(engine))]
+        loot = _shortscan_loot_dir(profile)
+        args += ["--loot-dir", loot]
+    return args, loot
+
+
+def _note_shortscan_loot(loot: str | None, observer) -> None:
+    """Best-effort: if shortscan's --auto disclosed source into the loot dir, say so
+    (loud) so the operator finds it. Never raises — a missing dir just means nothing
+    was retrieved."""
+    if not loot:
+        return
+    try:
+        import os
+        files = [os.path.join(dp, f) for dp, _, fs in os.walk(loot) for f in fs]
+    except OSError:
+        return
+    if files:
+        observer.log(f"shortscan: --auto RETRIEVED {len(files)} disclosed source file(s) "
+                     f"→ {loot} (analyse with shortloot)", 0, style="bold red")
 
 
 async def _shortscan_pass(engine, profile, base_url, words, result, opts, observer,
@@ -1980,6 +2050,13 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     it reveals: 8.3 enumeration is per-directory, so `/SALESFORCE/` leaks its own
     short names the root run can't see. Bounded by MAX_SHORTSCAN_DIRS / _DEPTH."""
     observer.phase("shortscan")
+    # Build the governed extra flags ONCE (shared across the root + every recursed
+    # dir): --rate mirror always, and under --deep (unless throttled) --auto's full
+    # long-name recovery cascade → tier-0 reconstructed-name seeds.
+    extra_args, loot = _shortscan_extra_args(engine, profile, opts)
+    if "--auto" in extra_args:
+        observer.log("shortscan: --auto — full long-name recovery cascade "
+                     "(wordlist→siblings→references→tilde→collision→brute)", 1, style="cyan")
     seen: set[str] = {base_url.rstrip("/")}
     queue: list[tuple[str, int]] = [(base_url, 0)]
     runs = 0
@@ -1989,7 +2066,8 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
         url, depth = queue.pop(0)
         try:
             ran, dir_urls = await _shortscan_one(engine, profile, url, words, result, opts,
-                                                 observer, memory, is_root=(runs == 0))
+                                                 observer, memory, is_root=(runs == 0),
+                                                 extra_args=extra_args)
         except Exception as ex:                   # one bad subdir must not kill the recursion
             if runs == 0:                         # …but a root error ends the pass
                 observer.log(f"shortscan: skipped ({type(ex).__name__})", 1, style="yellow")
@@ -2010,19 +2088,23 @@ async def _shortscan_pass(engine, profile, base_url, words, result, opts, observ
     if runs > 1:
         observer.log(f"shortscan: recursed into {runs - 1} discovered "
                      f"director{'y' if runs == 2 else 'ies'} (--deep)", 1, style="cyan")
+    _note_shortscan_loot(loot, observer)     # --auto may have disclosed source (CVE-2023-36899)
 
 
 async def _shortscan_one(engine, profile, base_url, words, result, opts, observer,
-                         memory=None, is_root=True) -> tuple[bool, list[str]]:
+                         memory=None, is_root=True, extra_args=None) -> tuple[bool, list[str]]:
     """Run shortscan at ONE url: gate on its vuln check, expand 8.3 names, scan the
     seeds. Returns (ran, dir_urls) — dir_urls are the DIRECTORY entries (named, no
     extension) to recurse into. Verbose banner/evidence only on the root run."""
+    if extra_args is None:
+        extra_args, _ = _shortscan_extra_args(engine, profile, opts)
     res = await shortname.run_shortscan(
         base_url,
         insecure=not engine.cfg.verify_tls,
         user_agent=engine.cfg.user_agent,
         concurrency=engine.cfg.concurrency,
         timeout=int(engine.cfg.timeout),
+        extra_args=extra_args or None,
     )
     if not res.available:
         if is_root:

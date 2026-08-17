@@ -79,6 +79,7 @@ class TestDiffVerdict(unittest.TestCase):
         v = diff_verdict(o, sensitive=True)
         self.assertEqual(v["kind"], "broken-auth")
         self.assertIn("disclosure", v["tags"])
+        self.assertIn("broken-auth", v["tags"])       # kind is a filterable tag, like xss-lead
         self.assertGreaterEqual(v["confidence"], 0.6)
 
     def test_public_content_not_flagged(self):
@@ -93,6 +94,7 @@ class TestDiffVerdict(unittest.TestCase):
         v = diff_verdict(o, sensitive=True)
         self.assertEqual(v["kind"], "bola-lead")
         self.assertIn("authz", v["tags"])
+        self.assertIn("bola-lead", v["tags"])
 
     def test_per_user_data_is_ok(self):
         # each identity sees its OWN (different) body → correct scoping, not a bug

@@ -321,7 +321,7 @@ class TestBypass403(unittest.TestCase):
 
         calls = []
         async def fake_one(engine, profile, url, words, result, opts, observer,
-                           memory=None, is_root=True):
+                           memory=None, is_root=True, extra_args=None):
             calls.append(url)
             if url.endswith("/SALESFORCE/HONEYWELL/"):
                 return True, []                       # deepest dir, nothing more
@@ -343,6 +343,33 @@ class TestBypass403(unittest.TestCase):
             self.assertEqual(calls, ["https://h/"])   # no --deep → root only
         finally:
             scanner.folds._shortscan_one = orig
+
+    def test_shortscan_auto_governance(self):
+        # --auto (the request-heavy full long-name recovery cascade) is gated: on
+        # only under --deep AND when the target isn't throttling us; the aggregate
+        # --rate is always mirrored; loot is redirected out of the CWD.
+        from origami.core.evidence import TargetProfile
+        from origami.core.httpclient import Engine, EngineConfig
+        from origami.core.scanner import ScanOptions
+        from origami.core.scanner.folds import _shortscan_extra_args
+        prof = TargetProfile(host="h.example", base_url="https://h.example/")
+        e = Engine(EngineConfig(rate=5.0))
+        # lean (no --deep): just the rate mirror, no --auto
+        args, loot = _shortscan_extra_args(e, prof, ScanOptions())
+        self.assertIn("--rate", args)
+        self.assertNotIn("--auto", args)
+        self.assertIsNone(loot)
+        # --deep on a healthy target: --auto + a maxtime cap + loot out of the CWD
+        args, loot = _shortscan_extra_args(e, prof, ScanOptions(deep=True))
+        self.assertIn("--auto", args)
+        self.assertIn("--maxtime", args)
+        self.assertIsNotNone(loot)
+        self.assertNotEqual(loot, "shortscan-loot")     # never shortscan's CWD default
+        # --deep but the target is throttling us → stay lean (don't unleash the cascade)
+        e.pushback_events = 5
+        args, loot = _shortscan_extra_args(e, prof, ScanOptions(deep=True))
+        self.assertNotIn("--auto", args)
+        self.assertIsNone(loot)
 
     def test_bypass_tech_key_transfers_across_resources(self):
         # cross-resource learning: a technique that works on one 403 must key the

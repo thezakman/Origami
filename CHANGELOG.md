@@ -5,6 +5,27 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.0]
+### Added
+- **shortscan driven in `--auto` under `--deep`.** When the shortscan fold runs under `--deep`
+  (and the target isn't throttling us), Origami now drives the binary in `--auto` — its full
+  cheap→expensive long-name recovery cascade (wordlist → known-extensions → sibling → references →
+  tilde-continuation → collision/checksum → webdav → brute stem-completion). shortscan reconstructs
+  the FULL names itself and returns them in the `fullname` field, so they fold in as **tier-0
+  seeds** (higher-confidence than Origami's own n-gram Regime-2, which stays the fallback).
+  Governed to fit Origami's politeness model: the aggregate `--rate` is always mirrored into the
+  child; `--auto` is bounded by `--maxtime` (derived from the remaining `--time-limit`), gated OFF
+  while the target is throttling (the subprocess doesn't share Origami's AIMD backoff), and any
+  precondition-gated source-disclosure loot (CVE-2023-36899) is redirected to a scratch dir and
+  surfaced — never left in the CWD.
+
+### Changed
+- **authz-diff polish.** The access-control differential now (a) tags findings with the specific
+  `broken-auth` / `bola-lead` / `authz-diff` kind (filterable, like `xss-lead`), not just the
+  umbrella `authz`; (b) attaches a copy-paste **`--curl` reproduction as the offending identity**
+  (anon → no auth headers; a lower user → its `-H`), so a flagged bug is runnable straight from the
+  report; and (c) counts its replay requests toward `--max-requests` and the request tally.
+
 ## [1.10.0]
 ### Added
 - **Multi-identity authorization differential (`--as`).** The bridge from discovery to
