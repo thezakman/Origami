@@ -202,7 +202,7 @@ Findings (10)  ·  247 requests
 **Recon & discovery**
 - Reads the target's own code → seeds: JS (webpack chunks, **source maps reconstructed** — `sourcesContent` mined for the original un-minified routes/params the bundle buried, skips vendor libs, RequireJS `data-main`), service worker, web-app manifest, CSP/`Link` headers, robots/sitemap.
 - Deep harvest + bounded recursion rounds (walk → harvest → recurse → harvest…), past the blind depth cap for evidence-based dirs; mines **any `text/*` response** (plain dumps/CSV, not just known extensions).
-- **API version pivot** — a confirmed `/api/v1/…` endpoint pivots to its adjacent versions (`v0`/`v2`/`v3`), the legacy/next surface still wired in the backend.
+- **API version pivot** — a confirmed versioned endpoint (`/v1/faq`, `/api/v2/…`) is swept across the **whole v0–v9 band** (extended upward around a high current version), not just the neighbours — an API on `/v1/` routinely still answers `/v3/`, `/v5/`, … that no wordlist reaches; already-found versions are deduped so the breadth costs a request only for the ones not yet confirmed.
 - **Naming-convention mutation** — a confirmed `/user` → `/users`, `report1` → `report2`, `data.json` → `data.xml`: high-signal siblings, not blind brute.
 - **Feeds & sitemap variants** — RSS/Atom feeds + sitemap-index variants parsed for content URLs, alongside robots.txt/sitemap.xml.
 - **Directory-listing aware** — parses an autoindex and folds its real contents instead of brute-forcing, probing only what `IndexIgnore` hides (`.git/`, `.env`, backups).

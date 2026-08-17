@@ -1494,9 +1494,11 @@ async def _mutate_fold(engine, profile, result, opts, observer) -> None:
 
 
 async def _apiver_fold(engine, profile, result, opts, observer) -> None:
-    """Pivot each confirmed versioned endpoint (`/api/v1/…`) to its adjacent API
-    versions — the legacy/next versions still wired in the backend. On-host,
-    bounded, honours `--exclude`."""
+    """Pivot each confirmed versioned endpoint (`/v1/faq`, `/api/v2/…`) across the
+    whole low version band (v0–v9, extended upward around a high current version) —
+    the legacy/next versions still wired in the backend. Already-found versions are
+    deduped against `seen_urls`, so the breadth costs a request only for versions
+    not already confirmed. On-host, bounded, honours `--exclude`."""
     targets = [f for f in result.findings
                if f.status in (200, 204, 301, 302, 401, 403, 405)
                and apiver.has_version(urlparse(f.url).path)]
@@ -1505,8 +1507,8 @@ async def _apiver_fold(engine, profile, result, opts, observer) -> None:
     targets = sorted(targets, key=lambda f: (-f.confidence, len(f.url)))[:MAX_APIVER_TARGETS]
     observer.phase("apiver")
     total = sum(len(apiver.version_variants(urlparse(f.url).path)) for f in targets)
-    observer.log(f"apiver: pivoting {len(targets)} versioned endpoint(s) to adjacent versions",
-                 0, style="cyan")
+    observer.log(f"apiver: sweeping {len(targets)} versioned endpoint(s) across the "
+                 f"v0–v9 band ({total} version probes)", 0, style="cyan")
     observer.start_prefix("apiver", total)
     host = _host_root(profile.base_url)
     for f in targets:

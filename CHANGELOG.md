@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.1]
+### Fixed
+- **API version pivot now sweeps the whole v0–v9 band, not just the neighbours.** A confirmed
+  versioned endpoint (`/v1/faq`, `/api/v2/…`) used to pivot only to `v0`/`v2`/`v3`, so an API that
+  also answered `/v4/`, `/v5/`, … `/v9/` was missed entirely. `apiver.version_variants` now
+  generates the full `v0`–`v9` band (skipping the current version), extended upward around a high
+  current version (`/v12/` → up to `v15`). Already-confirmed versions are still deduped against
+  `seen_urls`, so the extra breadth costs a request only for the versions not already found, and the
+  fold stays bounded by `MAX_APIVER_TARGETS`, the request budget, and the throttle gate.
+
 ## [1.11.0]
 ### Added
 - **shortscan driven in `--auto` under `--deep`.** When the shortscan fold runs under `--deep`

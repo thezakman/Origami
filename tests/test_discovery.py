@@ -1031,8 +1031,20 @@ class TestDiscoveryAdds(unittest.TestCase):
     # --- #2 API version pivot -------------------------------------------------
     def test_version_variants(self):
         from origami.modules.discovery import apiver
-        self.assertEqual(apiver.version_variants("/api/v1/users"),
-                         ["/api/v0/users", "/api/v2/users", "/api/v3/users"])
+        # sweeps the whole v0..v9 band (skipping the current), not just neighbours —
+        # /v1/ routinely still answers /v3/, /v5/, … a wordlist never reaches
+        self.assertEqual(apiver.version_variants("/v1/faq"),
+                         ["/v0/faq", "/v2/faq", "/v3/faq", "/v4/faq", "/v5/faq",
+                          "/v6/faq", "/v7/faq", "/v8/faq", "/v9/faq"])
+        # the current version is always skipped, the whole band otherwise present
+        v2 = apiver.version_variants("/api/v2/users")
+        self.assertNotIn("/api/v2/users", v2)
+        self.assertEqual(len(v2), 9)                       # v0,v1,v3..v9
+        self.assertIn("/api/v9/users", v2)
+        # a HIGH current version extends the sweep upward around itself
+        v12 = apiver.version_variants("/api/v12/users")
+        self.assertIn("/api/v15/users", v12)               # cur+span
+        self.assertNotIn("/api/v12/users", v12)
         self.assertEqual(apiver.version_variants("/no/version"), [])
 
     def test_apiver_fold(self):
