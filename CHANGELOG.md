@@ -8,19 +8,19 @@ All notable changes to Origami are documented here. The format follows
 ## [1.11.2]
 ### Fixed
 - **JS scraper missed most template-literal endpoint URLs.** Codegen'd TS/Angular API clients
-  build nearly every endpoint as a template literal — `` `${this.basePath}/api/v1/foo/${id}/bar` ``
-  — and the previous path/query regexes required the whole quoted content to be plain path
+  build nearly every endpoint as a template literal (`` `${this.basePath}/api/v1/foo/${id}/bar` ``),
+  and the previous path/query regexes required the whole quoted content to be plain path
   characters, so any literal starting with (or containing) a `${...}` interpolation was dropped
   outright. `extract_paths`/`extract_params` now scan backtick template literals directly, strip
   the `${...}` interpolations (a runtime base-path var, a path-param ID we can't know) and collapse
-  the resulting `//` gap, keeping the static segments around them — mirroring the "static prefix"
+  the resulting `//` gap, keeping the static segments around them, mirroring the "static prefix"
   handling `apidocs.py` already does for OpenAPI's `/users/{id}`. `${this.API}/setor/${idSetor}
   /ativos` now yields `/setor/ativos`, and interpolated query values (`?a=${x}`) still surface
   their param name.
 - **Large JS bundles were silently truncated at 2MB, losing everything past that point.** The
   engine's default `max_body` (an OOM guard against hostile/huge responses) applied to every JS/map
   fetch too, including scanning a `.js` file directly as the target. A webpack "common"/"vendor"
-  chunk routinely exceeds 2MB, so the scraper only ever saw the first 2MB of it — the rest of the
+  chunk routinely exceeds 2MB, so the scraper only ever saw the first 2MB of it: the rest of the
   API surface was never read, not just unmatched. `js_parser.harvest` now fetches scripts with a
   20MB cap (same reasoning as `apidocs.SPEC_MAX_BODY`), and the root fetch does the same when the
   scan target itself is a `.js`/`.mjs` file. `Probe` now carries a `truncated` flag, and the scanner
