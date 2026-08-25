@@ -993,6 +993,51 @@ class TestSourceMap(unittest.TestCase):
         self.assertEqual(J.extract_paths(b'{"sourcesContent": [broken', "http://h/"), set())
         self.assertEqual(J.parse_sourcemap(b"not json"), [])
 
+
+class TestTemplateLiteralPaths(unittest.TestCase):
+    """Codegen'd TS/Angular API clients build endpoint URLs as template
+    literals — `${this.basePath}/api/v1/foo/${id}/bar` — which _ABS alone
+    can't see (the literal doesn't start with `/` right after the backtick,
+    or has `${id}` mid-path). extract_paths must reconstruct the static
+    segments around the `${...}` interpolations."""
+
+    def test_leading_basepath_var(self):
+        from origami.modules.discovery import js_parser as J
+        paths = J.extract_paths(b"const u = `${this.API}/paraFiltro`;", "http://h/")
+        self.assertIn("/paraFiltro", paths)
+
+    def test_mid_path_param(self):
+        from origami.modules.discovery import js_parser as J
+        paths = J.extract_paths(b"const u = `${this.API}/setor/${idSetor}/ativos`;", "http://h/")
+        self.assertIn("/setor/ativos", paths)
+
+    def test_multiple_params_and_basepath(self):
+        from origami.modules.discovery import js_parser as J
+        body = (b"return this.http.get(`${this.apiConfiguration.basePath}"
+                b"/api/v1/solicitacaoCompra/${idSolicitacaoCompra}"
+                b"/produtoSolicitacaoCompra/${idProdutoSolicitacaoCompra}/anexos`);")
+        paths = J.extract_paths(body, "http://h/")
+        self.assertIn("/api/v1/solicitacaoCompra/produtoSolicitacaoCompra/anexos", paths)
+
+    def test_query_string_with_interpolated_params(self):
+        from origami.modules.discovery import js_parser as J
+        body = (b"`${this.API}/recurso/${idRecurso}/ultimasImpressoes"
+                b"?quantidadeItens=${quantidadeItens}`")
+        paths = J.extract_paths(body, "http://h/")
+        self.assertIn("/recurso/ultimasImpressoes", paths)
+        self.assertIn("quantidadeitens", J.extract_params(body))
+
+    def test_plain_backtick_literal_still_works(self):
+        from origami.modules.discovery import js_parser as J
+        paths = J.extract_paths(b"const u = `/api/v1/seguranca/token/acesso`;", "http://h/")
+        self.assertIn("/api/v1/seguranca/token/acesso", paths)
+
+    def test_non_url_template_literal_not_added(self):
+        from origami.modules.discovery import js_parser as J
+        paths = J.extract_paths(b"const msg = `Ola ${nome}, tudo bem?`;", "http://h/")
+        self.assertEqual(paths, set())
+
+
 class TestConfigSeeds(unittest.TestCase):
     def test_config_refs_become_onhost_seeds(self):
         import asyncio

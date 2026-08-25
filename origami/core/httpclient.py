@@ -88,6 +88,7 @@ class Probe:
     body_head: bytes = b""                                   # first bytes, for error-page fp
     body: bytes = b""                                        # full body (only when keep_body=True)
     error: str = ""       # transport error, if the request never completed
+    truncated: bool = False   # body hit the max_body cap — more data existed past it
 
     @property
     def ok(self) -> bool:
@@ -414,10 +415,12 @@ class Engine:
         async with self._pick_client().stream(method, url, **kw) as r:
             chunks: list[bytes] = []
             total = 0
+            truncated = False
             async for chunk in r.aiter_bytes():
                 chunks.append(chunk)
                 total += len(chunk)
                 if total >= cap:
+                    truncated = True     # more body existed past the cap — caller should know
                     break
             body = b"".join(chunks)[:cap]
             text_ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -436,6 +439,7 @@ class Engine:
                 cookies=r.headers.get_list("set-cookie"),
                 body_head=body[:2048],
                 body=body if keep_body else b"",
+                truncated=truncated,
             )
 
     async def gather(self, urls: list[str], method: str = "GET") -> list[Probe]:

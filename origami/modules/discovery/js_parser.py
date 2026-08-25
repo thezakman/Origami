@@ -24,6 +24,15 @@ from origami.core.scope import same_host, same_site
 # harvested separately). Without this, exactly the interesting parameterised
 # endpoints (`?id=`, `?license_key=`) were the ones missed.
 _ABS = re.compile(rb"""["'`](/[A-Za-z0-9_\-./]{1,100})(?:[?#][^"'`]{0,200})?["'`]""")
+# Template-literal URLs: `${this.basePath}/api/v1/foo/${id}/bar`. Codegen'd
+# TS/Angular API clients build almost every endpoint this way — a runtime
+# base-path var up front and/or a path-param var mid-path — so the literal
+# never starts with `/` right after the backtick and _ABS can't see it at
+# all. Grab the whole backtick body (bounded — this must not swallow a giant
+# `template: \`<div>...\`` component template) and let _strip_template_exprs
+# below drop the `${...}` bits before it's handed to `consider()`.
+_TEMPLATE = re.compile(rb"`([^`]{1,300})`")
+_TPL_EXPR = re.compile(r"\$\{[^{}]*\}")
 # href/src/action attributes
 _ATTR = re.compile(rb"""(?:href|src|action)\s*=\s*["']([^"'#?]+)["']""", re.I)
 # fetch()/axios/url: "..."  call targets
@@ -63,6 +72,18 @@ _PARAM_NAME = re.compile(r"^[a-z_][\w.\-]{0,39}$")
 # Note: .map (source maps) is deliberately NOT here — it's high-value recon.
 _ASSET_EXT = (".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff",
               ".woff2", ".ttf", ".eot", ".mp4", ".webp", ".avif")
+
+
+def _strip_template_exprs(s: str) -> str:
+    """`${this.basePath}/api/v1/foo/${id}/bar` -> /api/v1/foo/bar.
+
+    Drops the `${...}` interpolations a JS template literal builds a URL
+    with (a runtime base-path variable, a path-param ID we can't know) and
+    collapses the `//` gap each one leaves behind, keeping the static
+    segments around them — the same "static prefix" idea apidocs.py already
+    applies to OpenAPI's `/users/{id}`, just for template-literal syntax."""
+    s = _TPL_EXPR.sub("", s)
+    return re.sub(r"/{2,}", "/", s)
 
 
 def _clean(raw: str) -> str | None:
@@ -193,7 +214,21 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
     for rx in (_ABS, _ATTR, _CALL, _SOURCEMAP, _JS_REF):
         for m in rx.findall(body):
             consider(m.decode("latin-1"))
+    for m in _TEMPLATE.findall(body):
+        s = m.decode("latin-1")
+        if "${" not in s:
+            continue                      # plain backtick literal — _ABS already covers it
+        s = _strip_template_exprs(s)
+        if s.startswith("/"):             # only keep root-absolute reconstructions — anything
+            consider(s)                   # else is a non-URL template (HTML/CSV/text) false hit
     return found
+
+
+def _harvest_query(q: bytes, out: set[str]) -> None:
+    for pair in q.split(b"&"):
+        name = pair.split(b"=")[0].decode("latin-1").strip().lower()
+        if _PARAM_NAME.match(name):
+            out.add(name)
 
 
 def extract_params(body: bytes) -> set[str]:
@@ -206,10 +241,20 @@ def extract_params(body: bytes) -> set[str]:
             if not _looks_sourcemap(blob):          # one level only — no nested-map recursion
                 out |= extract_params(blob)
     for q in _QUERY.findall(body):
-        for pair in q.split(b"&"):
-            name = pair.split(b"=")[0].decode("latin-1").strip().lower()
-            if _PARAM_NAME.match(name):
-                out.add(name)
+        _harvest_query(q, out)
+    # `${...}`-interpolated query values (`?a=${x}&b=${y}` in a template
+    # literal) fail _QUERY outright — its char class deliberately excludes
+    # `$`/`{`/`}` to avoid matching minified ternaries. Strip the
+    # interpolations first (same as extract_paths) and re-run _QUERY against
+    # the now-plain `?a=&b=` string — the param NAMES survive even though
+    # their runtime values don't.
+    for m in _TEMPLATE.findall(body):
+        s = m.decode("latin-1")
+        if "${" not in s or "?" not in s:
+            continue
+        stripped = _strip_template_exprs(s).encode("latin-1", "replace")
+        for q in _QUERY.findall(b"`" + stripped + b"`"):
+            _harvest_query(q, out)
     return out
 
 
@@ -230,6 +275,12 @@ def script_urls(body: bytes, base_url: str, limit: int = 40) -> list[str]:
 
 
 _FOLLOW_EXT = (".js", ".mjs", ".map")
+# App bundles (esp. webpack "common"/"vendor" chunks) routinely exceed the
+# engine's default 2MB OOM-guard cap, which silently truncates the body mid
+# stream — the same failure mode apidocs.py already raises SPEC_MAX_BODY for.
+# Every fetch below is already scoped to a same-site .js/.mjs/.map file (never
+# an arbitrary/hostile response), so a higher cap here is safe.
+JS_MAX_BODY = 20_000_000
 
 
 async def harvest(engine, base_url: str, root_body: bytes,
@@ -261,7 +312,7 @@ async def harvest(engine, base_url: str, root_body: bytes,
         if url in seen or not same_site(urlparse(url).netloc, host):
             continue
         seen.add(url)
-        pr = await engine.fetch(url, keep_body=True)
+        pr = await engine.fetch(url, keep_body=True, max_body=JS_MAX_BODY)
         fetched += 1
         if pr.ok and pr.body:
             src = urlparse(url).path                                # the script we're in

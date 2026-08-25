@@ -232,7 +232,15 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     result = ScanResult(profile=profile)
 
     # 1. baseline at root + fingerprint -----------------------------------
-    root = await engine.fetch(base_url, keep_body=True)
+    # A target that IS a .js/.mjs file (scanned directly, or a webpack
+    # common/vendor chunk) routinely exceeds the engine's default 2MB
+    # OOM-guard cap — same reasoning as apidocs.SPEC_MAX_BODY, just for the
+    # root fetch instead of a discovered spec.
+    _root_cap = {"max_body": js_parser.JS_MAX_BODY} if urlparse(base_url).path.lower().endswith((".js", ".mjs")) else {}
+    root = await engine.fetch(base_url, keep_body=True, **_root_cap)
+    if root.truncated:
+        observer.log(f"root: body truncated at {root.length}B — the response is larger than "
+                     f"that; endpoints past this point were not seen", 0, style="yellow")
     if getattr(engine, "legacy_tls_engaged", False):
         observer.log("tls: server negotiated a weak DH key / legacy cipher — dropped to a "
                      "lower OpenSSL security level to connect (as curl does); the transport "
