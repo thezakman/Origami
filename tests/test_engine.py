@@ -272,6 +272,53 @@ class TestEngineBackoff(unittest.TestCase):
         self.assertLess(e._limit, 40.0)
         self.assertGreater(e.pushback_events, 0)
 
+    def test_slow_trickle_body_does_not_hang_forever(self):
+        # regression: a target streaming bytes just under httpx's per-read
+        # timeout can hold a connection open indefinitely — httpx's `timeout`
+        # only bounds each individual read, not the request as a whole. This
+        # froze a real scan for 3+ hours (_scan_prefix awaits one candidate at
+        # a time, so a single hung fetch stalls everything behind it).
+        # _stream_probe's overall wall-clock deadline must catch this instead.
+        import asyncio
+        import time
+        from unittest.mock import patch
+        from origami.core.httpclient import Engine, EngineConfig
+
+        async def handle(reader, writer):
+            try:
+                await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=2.0)
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n")
+                await writer.drain()
+                while True:
+                    writer.write(b"A")
+                    await writer.drain()
+                    await asyncio.sleep(0.05)     # well under the 0.3s read timeout below
+            except (ConnectionError, asyncio.IncompleteReadError, TimeoutError):
+                pass
+            finally:
+                writer.close()
+
+        async def run():
+            server = await asyncio.start_server(handle, "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            async with server:
+                e = Engine(EngineConfig(timeout=0.3, max_retries=0, max_body=2_000))
+                async with e:
+                    t0 = time.perf_counter()
+                    pr = await e.fetch(f"http://127.0.0.1:{port}/slow")
+                    elapsed = time.perf_counter() - t0
+            server.close()
+            await server.wait_closed()
+            return pr, elapsed
+
+        # shrink the deadline floors so the test doesn't wait out the real
+        # (production-sane) 30s/200KB-per-sec defaults
+        with patch("origami.core.httpclient._MIN_STREAM_DEADLINE", 0.5), \
+             patch("origami.core.httpclient._MIN_STREAM_THROUGHPUT", 200_000):
+            pr, elapsed = asyncio.run(run())
+        self.assertFalse(pr.ok)          # must give up, not hang
+        self.assertLess(elapsed, 5.0)    # bounded — previously this would hang indefinitely
+
 class TestLegacyTLS(unittest.TestCase):
     """Weak-DH / legacy-cipher servers: detect the handshake error, drop SECLEVEL."""
 

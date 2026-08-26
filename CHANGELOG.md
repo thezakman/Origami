@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.3]
+### Fixed
+- **A single slow-trickling response could freeze an entire scan, indefinitely.** httpx's
+  `timeout` bounds each individual read, not the request as a whole, so a target sending bytes
+  just under that interval (a WAF tarpit, or simply a dead-slow backend) could hold one stream
+  open forever. `_scan_prefix` fires candidates one at a time within a directory (sequential, so
+  baseline learning stays adaptive), so a single such hang stalled everything behind it: reproduced
+  in the field as a scan stuck at the same request count for 3+ hours, one lone TCP connection
+  still open, CPU usage near zero. `Engine._stream_probe` now wraps the whole request (connect,
+  headers, body stream) in a wall-clock deadline (`anyio.fail_after`, scaled by the configured
+  `--timeout` and the body cap, floor 30s) that turns a hang into a retried, then reported,
+  transport error instead.
+
 ## [1.11.2]
 ### Fixed
 - **JS scraper missed most template-literal endpoint URLs.** Codegen'd TS/Angular API clients

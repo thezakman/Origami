@@ -119,6 +119,14 @@ class EngineConfig:
 # Statuses that mean "slow down", not "answer".
 _PUSHBACK = {429, 503}
 
+# Overall wall-clock deadline for a single fetch attempt (connect + headers +
+# full body stream). httpx's `timeout` only bounds each individual read, so a
+# target trickling bytes just under that interval can hold a stream open
+# forever; these floors bound the worst case instead. Module-level so tests
+# can shrink them instead of waiting out the real values.
+_MIN_STREAM_DEADLINE = 30.0        # floor — even a tiny/empty response gets this much slack
+_MIN_STREAM_THROUGHPUT = 200_000   # bytes/sec assumed minimum for the cap-scaled deadline
+
 # TLS handshake errors that a *lowered security level* (SECLEVEL=1) resolves —
 # a weak Diffie-Hellman key, an old cipher, or legacy renegotiation the modern
 # default rejects. These are the servers curl reaches but a strict Python OpenSSL
@@ -412,35 +420,44 @@ class Engine:
         # it to invalid JSON silently loses the whole declared API surface.
         cap = kw.get("max_body") or self.cfg.max_body
         kw = {k: v for k, v in kw.items() if k != "max_body"}
-        async with self._pick_client().stream(method, url, **kw) as r:
-            chunks: list[bytes] = []
-            total = 0
-            truncated = False
-            async for chunk in r.aiter_bytes():
-                chunks.append(chunk)
-                total += len(chunk)
-                if total >= cap:
-                    truncated = True     # more body existed past the cap — caller should know
-                    break
-            body = b"".join(chunks)[:cap]
-            text_ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
-            return Probe(
-                url=url,
-                method=method,
-                status=r.status_code,
-                length=len(body),
-                words=len(body.split()),
-                lines=body.count(b"\n") + 1,
-                content_type=text_ct,
-                location=r.headers.get("location", ""),
-                body_simhash=simhash(body),
-                elapsed_ms=(time.perf_counter() - t0) * 1000,
-                headers={k.lower(): v for k, v in r.headers.items()},
-                cookies=r.headers.get_list("set-cookie"),
-                body_head=body[:2048],
-                body=body if keep_body else b"",
-                truncated=truncated,
-            )
+        # _scan_prefix fires candidates one at a time (sequential, so baseline
+        # learning stays adaptive), so a single hung fetch freezes the entire
+        # scan with no recovery — it isn't just slow, it never returns. Cap the
+        # WHOLE request (connect + headers + body stream) by a wall-clock
+        # deadline; anyio raises TimeoutError (an OSError subclass) on expiry,
+        # which the retry loop in fetch() already treats as a transient
+        # transport failure.
+        deadline = max(self.cfg.timeout * 3, _MIN_STREAM_DEADLINE, cap / _MIN_STREAM_THROUGHPUT)
+        with anyio.fail_after(deadline):
+            async with self._pick_client().stream(method, url, **kw) as r:
+                chunks: list[bytes] = []
+                total = 0
+                truncated = False
+                async for chunk in r.aiter_bytes():
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= cap:
+                        truncated = True     # more body existed past the cap — caller should know
+                        break
+                body = b"".join(chunks)[:cap]
+                text_ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                return Probe(
+                    url=url,
+                    method=method,
+                    status=r.status_code,
+                    length=len(body),
+                    words=len(body.split()),
+                    lines=body.count(b"\n") + 1,
+                    content_type=text_ct,
+                    location=r.headers.get("location", ""),
+                    body_simhash=simhash(body),
+                    elapsed_ms=(time.perf_counter() - t0) * 1000,
+                    headers={k.lower(): v for k, v in r.headers.items()},
+                    cookies=r.headers.get_list("set-cookie"),
+                    body_head=body[:2048],
+                    body=body if keep_body else b"",
+                    truncated=truncated,
+                )
 
     async def gather(self, urls: list[str], method: str = "GET") -> list[Probe]:
         """Fire many requests; the semaphore bounds real concurrency."""
