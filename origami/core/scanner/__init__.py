@@ -449,7 +449,13 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
             result.edges += js_edges
         if js_paths:
             observer.log(f"js: {len(js_paths)} same-host endpoints harvested from HTML/JS",
-                         1, style="cyan")
+                         0, style="cyan")
+        else:
+            # silence here reads as "the fold didn't run", not "it ran and found
+            # nothing" — say so explicitly (e.g. a page with no <script> tags at all).
+            # Level 0 (not 1): this is the single most-asked "did the scraper find
+            # anything" question — it must show without needing -v.
+            observer.log("js: 0 endpoints harvested (no scripts/JS content found)", 0, style="dim")
         if js_params:
             observer.log(f"params: {len(js_params)} parameter names harvested "
                          f"(pentest input surface)", 0, style="cyan")

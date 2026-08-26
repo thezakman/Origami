@@ -410,6 +410,67 @@ class TestEndToEndScan(unittest.TestCase):
         self.assertTrue(any(f.url.rstrip("/").endswith("/admin-secret") for f in byp))
         self.assertTrue(any("bypass" in (f.tags or []) for f in byp))
 
+    def _run_scan_recording_logs(self, target_path):
+        # regression: the "js: N harvested" summary sat at verbosity level 1,
+        # so it never printed at the CLI's default verbosity (0) — a scan that
+        # genuinely harvested endpoints looked identical, at the terminal, to
+        # one that never ran the fold at all. Assert the level passed to
+        # observer.log() directly, not filtered output, so this can't silently
+        # regress back behind -v.
+        import asyncio, tempfile, threading, os
+        from origami.core.httpclient import Engine, EngineConfig
+        from origami.core.scanner import scan, ScanOptions
+        from origami.output.ui import NullObserver
+
+        httpd = self._server()
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        wl = tempfile.mktemp(suffix=".txt")
+        with open(wl, "w") as fh:
+            fh.write("admin\n")
+
+        class RecordingObserver(NullObserver):
+            def __init__(self):
+                super().__init__()
+                self.records = []
+            def log(self, msg, level=1, style=""):
+                self.records.append((msg, level))
+
+        obs = RecordingObserver()
+        try:
+            async def run():
+                async with Engine(EngineConfig(concurrency=20, timeout=5, jitter=(0.0, 0.0))) as e:
+                    return await scan(e, f"http://127.0.0.1:{port}{target_path}",
+                                      opts=ScanOptions(max_depth=1, wordlist_paths=[str(wl)],
+                                                       bypass403=False, js=True, apidocs=False,
+                                                       backups=False, max_folds=0),
+                                      observer=obs, memory=None)
+            asyncio.run(run())
+        finally:
+            httpd.shutdown(); httpd.server_close()
+            os.unlink(wl)
+        return obs.records
+
+    def test_js_harvest_summary_visible_at_default_verbosity(self):
+        # "/" carries <script src="/js/app.js"> with real endpoints inside
+        records = self._run_scan_recording_logs("/")
+        js_lines = [(m, lv) for m, lv in records if m.startswith("js: ")]
+        self.assertTrue(js_lines, "no 'js: ' summary line logged at all")
+        msg, level = js_lines[0]
+        self.assertIn("harvested", msg)
+        self.assertNotIn("0 endpoints", msg)
+        self.assertEqual(level, 0, "js: summary must show at default verbosity, not need -v")
+
+    def test_js_harvest_summary_shown_even_when_nothing_found(self):
+        # a page with no <script> tags and no absolute-path links — the fold
+        # ran and found nothing, which must read differently from "didn't run"
+        records = self._run_scan_recording_logs("/admin/login.aspx")
+        js_lines = [(m, lv) for m, lv in records if m.startswith("js: ")]
+        self.assertTrue(js_lines, "no 'js: ' summary line logged when harvest found nothing")
+        msg, level = js_lines[0]
+        self.assertIn("0 endpoints", msg)
+        self.assertEqual(level, 0)
+
 class TestDirRedirect(unittest.TestCase):
     def test_add_slash_is_a_dir(self):
         from origami.core.scanner import _is_self_redirect_dir

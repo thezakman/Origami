@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.4]
+### Fixed
+- **The JS-harvest summary line never printed at default verbosity.** `observer.log("js: N same-host
+  endpoints harvested...")` was gated at verbosity level 1, but the CLI defaults to 0, so it was
+  invisible unless you passed `-v`, even on a scan that genuinely harvested endpoints. Worse, when
+  the fold found nothing (a page with no `<script>` tags at all), the log call was skipped entirely,
+  so "ran and found nothing" looked identical to "the fold never ran." The summary now always prints
+  at the default verbosity, with an explicit "0 endpoints harvested (no scripts/JS content found)"
+  message for the empty case.
+
 ## [1.11.3]
 ### Fixed
 - **A single slow-trickling response could freeze an entire scan, indefinitely.** httpx's
