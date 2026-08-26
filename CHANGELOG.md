@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.5]
+### Fixed
+- **A discovered .js/.mjs/.map candidate was fetched twice, and the second fetch re-truncated it.**
+  `js_parser.harvest()` already fetches a script it found with the raised `JS_MAX_BODY` cap to scrape
+  it for endpoints, but that same URL also becomes a wordlist/priority candidate, and `_scan_prefix`
+  fetches it AGAIN, independently, to classify/report it, this time with no cap override, so a large
+  bundle was silently re-truncated back to the generic 2MB default in the reported hit even though
+  extraction upstream had already seen the whole file (a scan against a real target showed both
+  `chunk-common.js` and `chunk-vendors.js` reported at exactly `2000000B`, the old cap, despite the
+  1.11.2 fix). `_scan_prefix` now applies the same `JS_MAX_BODY` cap when a candidate's extension is
+  `.js`/`.mjs`/`.map` (`js_parser.FOLLOW_EXT`, now public).
+
 ## [1.11.4]
 ### Fixed
 - **The JS-harvest summary line never printed at default verbosity.** `observer.log("js: N same-host

@@ -1369,5 +1369,46 @@ class TestMethodProbe(unittest.TestCase):
         self.assertIn("POST (json) accepted", f.note)  # verdict + content-type on the finding
 
 
+class TestScanPrefixJsMaxBody(unittest.TestCase):
+    """js_parser.harvest() already fetches a discovered .js/.mjs/.map file with
+    the raised JS_MAX_BODY cap to scrape it — but _scan_prefix fetches that
+    SAME url again independently (to report/classify it as a candidate), and
+    without the same override that second fetch silently re-truncated a large
+    bundle back down to the generic 2MB default: the reported size looked
+    truncated again even though extraction had already seen the whole thing."""
+
+    def test_js_candidate_gets_raised_cap(self):
+        import asyncio
+        from origami.core.scanner import _scan_prefix, ScanResult, ScanOptions, ScanControl
+        from origami.core.evidence import TargetProfile, ContextBaseline
+        from origami.core.scheduler import Candidate
+        from origami.modules.discovery import js_parser
+        from origami.output.ui import NullObserver
+
+        class FakeEngine:
+            cfg = type("C", (), {"verify_tls": False})()
+            total_requests = 0
+            spent = 0
+            def __init__(self): self.seen_max_body = {}
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                FakeEngine.total_requests += 1
+                self.seen_max_body[url] = kw.get("max_body")
+                return make_probe(200, b"ok", url=url)
+
+        p = TargetProfile(host="h", base_url="http://h/")
+        cb = ContextBaseline(prefix="/", ext_class="none", status=404,
+                             simhashes=[simhash(b"not found")], content_type="text/html")
+        p.baseline[TargetProfile.context_key("/", "none")] = cb
+        result = ScanResult(profile=p)
+        eng = FakeEngine()
+        asyncio.run(_scan_prefix(
+            eng, p, "/",
+            [Candidate("chunk-common.js", 0, "js"), Candidate("index.html", 2, "wordlist")],
+            result, ScanOptions(), NullObserver(), ScanControl()))
+
+        self.assertEqual(eng.seen_max_body["http://h/chunk-common.js"], js_parser.JS_MAX_BODY)
+        self.assertIsNone(eng.seen_max_body["http://h/index.html"])   # unaffected — default cap
+
+
 if __name__ == "__main__":
     unittest.main()

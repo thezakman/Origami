@@ -274,7 +274,10 @@ def script_urls(body: bytes, base_url: str, limit: int = 40) -> list[str]:
     return cands[:limit]
 
 
-_FOLLOW_EXT = (".js", ".mjs", ".map")
+# Public — folds.py also checks a wordlist candidate's extension against this
+# to decide whether ITS fetch (independent of the harvest below) deserves the
+# same elevated cap.
+FOLLOW_EXT = (".js", ".mjs", ".map")
 # App bundles (esp. webpack "common"/"vendor" chunks) routinely exceed the
 # engine's default 2MB OOM-guard cap, which silently truncates the body mid
 # stream — the same failure mode apidocs.py already raises SPEC_MAX_BODY for.
@@ -304,7 +307,7 @@ async def harvest(engine, base_url: str, root_body: bytes,
     edges += [(root_src, urlparse(s).path) for s in scripts]       # root → <script src>
     queue = list(scripts)
     queue += [urljoin(base_url, p) for p in paths
-              if p.endswith(_FOLLOW_EXT) and not _is_vendor(p)]
+              if p.endswith(FOLLOW_EXT) and not _is_vendor(p)]
     seen: set[str] = set()
     fetched = 0
     while queue and fetched < max_scripts:
@@ -321,7 +324,7 @@ async def harvest(engine, base_url: str, root_body: bytes,
             params |= extract_params(pr.body)
             edges += [(src, np) for np in new]                      # script → path
             for np in new:
-                if np.endswith(_FOLLOW_EXT) and not _is_vendor(np):
+                if np.endswith(FOLLOW_EXT) and not _is_vendor(np):
                     nxt = urljoin(base_url, np)
                     if nxt not in seen:
                         queue.append(nxt)

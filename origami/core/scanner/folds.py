@@ -116,8 +116,14 @@ async def _scan_prefix(engine, profile, prefix, cands, result, opts, observer, c
         # keep the body only when --filter-regex needs to match it — word/line
         # counts and the simhash are already on every probe, so the main scan
         # otherwise stays body-light for speed/memory.
-        probe = await engine.fetch(url, keep_body=opts.filters.needs_body())
         path = urlparse(url).path
+        # A .js/.mjs/.map candidate here is a SEPARATE fetch from the one
+        # js_parser.harvest() already made to scrape it (that one already used
+        # JS_MAX_BODY) — without the same override this one silently re-caps a
+        # large bundle back down to the generic 2MB default, so the REPORTED
+        # size/hit for it looks truncated again even though extraction was fine.
+        js_kw = {"max_body": js_parser.JS_MAX_BODY} if _ext_of(path) in js_parser.FOLLOW_EXT else {}
+        probe = await engine.fetch(url, keep_body=opts.filters.needs_body(), **js_kw)
 
         # classify() = is this a REAL response (outside the calibrated miss
         # profile)? — no soft-verification yet. A 404 miss like /internal/ stops
