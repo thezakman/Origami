@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.6]
+### Fixed
+- **`chunk-vendors.<hash>.js`-style bundles (webpack/Vue-CLI's own name for "every third-party
+  dependency bundled together") were treated as an app bundle, not skipped as vendor.** The vendor
+  check already cancels itself when the filename also matches `_APP_HINT` ("chunk", "app.", "main.",
+  ...) so a named library's filename doesn't get skipped when it's clearly the app's own code
+  (`app.bootstrap.js`), but `chunk-vendors.js` contains "chunk" too, so that same cancellation waved
+  a genuine vendor bundle through. Confirmed on a real 28MB `chunk-vendors.js` (OpenLayers-heavy):
+  0 real endpoints, 400+ noise "paths" that were the library's own internal module references
+  (`../../geom/Point.js`), for a full 20MB-cap fetch. `vendor`/`vendors` in the filename is now
+  checked first and is never cancelled by `_APP_HINT`.
+
 ## [1.11.5]
 ### Fixed
 - **A discovered .js/.mjs/.map candidate was fetched twice, and the second fetch re-truncated it.**

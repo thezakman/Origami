@@ -55,10 +55,22 @@ _VENDOR = re.compile(
 # App-bundle hints get fetched first (highest endpoint yield). Note: "app." so
 # app.bootstrap.js is kept while the vendor bootstrap.js lib is still skipped.
 _APP_HINT = re.compile(r"(app\.|bundle|main\.|runtime|definitions|chunk|\bapp\b)", re.I)
+# webpack/Vue-CLI's own name for "every third-party dep bundled together"
+# (`chunk-vendors.<hash>.js`, `vendor.js`, `vendors~main.js`...) — a much
+# stronger, deliberate signal than the named-library list above, so it must
+# NOT be cancelled by _APP_HINT the way those are: "chunk-vendors" contains
+# "chunk" too, and without this override _is_vendor waved it through as an
+# "app" bundle. Confirmed on a real 28MB chunk-vendors.js (an OpenLayers-heavy
+# vendor bundle): 0 real endpoints, 400+ noise "paths" that were actually the
+# library's own internal module references (`../../geom/Point.js`) — pure
+# cost, no signal, for a full 20MB-cap fetch.
+_VENDOR_STRONG = re.compile(r"vendors?\b", re.I)
 
 
 def _is_vendor(url: str) -> bool:
     name = url.rsplit("/", 1)[-1]
+    if _VENDOR_STRONG.search(name):
+        return True
     return bool(_VENDOR.search(name)) and not _APP_HINT.search(name)
 # source maps + webpack/module chunk references (reveal more source files)
 _SOURCEMAP = re.compile(rb"""sourceMappingURL=([^\s"'*]+)""", re.I)

@@ -887,6 +887,23 @@ class TestJsParser(unittest.TestCase):
         self.assertTrue(any(u.endswith("/lms/app.bootstrap.js") for u in urls))  # data-main
         self.assertTrue(any("app.definitions.js" in u for u in urls))
 
+    def test_chunk_vendors_skipped_despite_chunk_app_hint(self):
+        # regression: "chunk-vendors.<hash>.js" (webpack/Vue-CLI's own name for
+        # "every third-party dep bundled together") also contains "chunk", which
+        # _APP_HINT treats as a signal to KEEP — that used to cancel out the
+        # vendor classification entirely, so a real ~28MB chunk-vendors.js (all
+        # third-party library code, zero app endpoints) was fetched and parsed
+        # like any other app bundle.
+        from origami.modules.discovery.js_parser import _is_vendor
+        self.assertTrue(_is_vendor("https://h/js/chunk-vendors.7e52595c.js"))
+        self.assertTrue(_is_vendor("https://h/js/vendor.js"))
+        self.assertTrue(_is_vendor("https://h/js/vendors~main.a1b2.js"))
+        self.assertFalse(_is_vendor("https://h/js/chunk-common.6c30318a.js"))  # NOT a vendor bundle
+        body = b'<script src="/js/chunk-vendors.7e52595c.js"></script><script src="/js/chunk-common.6c30318a.js"></script>'
+        urls = js_parser.script_urls(body, "http://x.com/")
+        self.assertFalse(any("chunk-vendors" in u for u in urls))
+        self.assertTrue(any("chunk-common" in u for u in urls))
+
     def test_sourcemap_and_chunk(self):
         body = (b'var c="/js/chunk.2f3a.js";'
                 b'//# sourceMappingURL=/js/app.js.map')
