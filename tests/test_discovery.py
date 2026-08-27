@@ -1041,21 +1041,26 @@ class TestTemplateLiteralPaths(unittest.TestCase):
         # regression: `${prefix}sistema/acessotoken.aspx?token=${t}` — a real,
         # confirmed-live endpoint (200, token-confirmation form) found verbatim
         # in a target's chunk-common.js. Stripping `${prefix}` leaves a path
-        # with NO leading slash (relative to the app base, not root-absolute) —
-        # the earlier `startswith("/")` guard discarded exactly this shape.
+        # with NO leading slash — but that stripped variable is the SITE
+        # ORIGIN, not "wherever this scan happens to be rooted", so the
+        # candidate must be forced root-absolute: resolving it relative to
+        # the current scan prefix instead doubled a path segment on the real
+        # target (.../sistema/sistema/acessotoken.aspx, a 404) instead of the
+        # real, working .../sistema/acessotoken.aspx.
         from origami.modules.discovery import js_parser as J
         body = b"return `${prefix}sistema/acessotoken.aspx?token=${criarTokenOutput.token}`;"
         paths = J.extract_paths(body, "http://h/")
-        self.assertIn("sistema/acessotoken.aspx", paths)
+        self.assertIn("/sistema/acessotoken.aspx", paths)
 
     def test_plain_relative_backtick_literal(self):
         # a bare relative literal with NO interpolation at all — missed before
         # by both _ABS (requires a leading /) and the template-literal path
-        # (which used to skip anything without `${`)
+        # (which used to skip anything without `${`); also forced root-absolute
+        # for the same reason as above.
         from origami.modules.discovery import js_parser as J
         body = b"const u = `sistema/autenticar.ashx?ignoreRedirect=true`;"
         paths = J.extract_paths(body, "http://h/")
-        self.assertIn("sistema/autenticar.ashx", paths)
+        self.assertIn("/sistema/autenticar.ashx", paths)
 
     def test_relative_noise_still_rejected(self):
         # a `/`-free label built the same way must NOT become a candidate

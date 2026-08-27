@@ -471,6 +471,50 @@ class TestEndToEndScan(unittest.TestCase):
         self.assertIn("0 endpoints", msg)
         self.assertEqual(level, 0)
 
+    def test_harvested_paths_populated_with_resolved_urls(self):
+        # ScanResult.harvested_paths must carry ready-to-curl URLs (not bare
+        # paths) for every JS-harvested endpoint, regardless of whether it
+        # became a distinct `finding` — that's the whole point of --out's
+        # js_endpoints.txt: an auth-gated route the classifier can't tell
+        # apart from a miss is still worth handing back by name.
+        import asyncio, tempfile, threading, os
+        from pathlib import Path
+        from origami.core.httpclient import Engine, EngineConfig
+        from origami.core.scanner import scan, ScanOptions
+        from origami.output.ui import NullObserver
+
+        httpd = self._server()
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        wl = tempfile.mktemp(suffix=".txt")
+        with open(wl, "w") as fh:
+            fh.write("admin\n")
+        quiet = NullObserver(stream=open(os.devnull, "w"))
+        try:
+            async def run():
+                async with Engine(EngineConfig(concurrency=20, timeout=5, jitter=(0.0, 0.0))) as e:
+                    return await scan(e, f"http://127.0.0.1:{port}/",
+                                      opts=ScanOptions(max_depth=1, wordlist_paths=[str(wl)],
+                                                       js=True, apidocs=False,
+                                                       backups=False, max_folds=0),
+                                      observer=quiet, memory=None)
+            res = asyncio.run(run())
+        finally:
+            httpd.shutdown(); httpd.server_close()
+            quiet.stream.close()
+            os.unlink(wl)
+
+        # /js/app.js references /api/v1/users among others — resolved as a
+        # full URL, not left as the bare "/api/v1/users" path
+        self.assertIn(f"http://127.0.0.1:{port}/api/v1/users", res.harvested_paths)
+
+        from origami.output import artifacts
+        out_dir = tempfile.mkdtemp()
+        info = artifacts.write_artifacts(res, out_dir)
+        self.assertGreater(info["js_endpoints"], 0)
+        content = (Path(out_dir) / "js_endpoints.txt").read_text()
+        self.assertIn(f"http://127.0.0.1:{port}/api/v1/users", content)
+
 class TestDirRedirect(unittest.TestCase):
     def test_add_slash_is_a_dir(self):
         from origami.core.scanner import _is_self_redirect_dir

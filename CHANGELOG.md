@@ -5,6 +5,25 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.12.0]
+### Fixed
+- **A relative template-literal endpoint was resolved against the wrong base, doubling a path
+  segment.** The 1.11.7 fix kept a stripped `${prefix}sistema/acessotoken.aspx` as the relative path
+  `sistema/acessotoken.aspx`, but firing it joined that path against the CURRENT scan prefix
+  (`/sistema/` for a scan rooted there), producing `.../sistema/sistema/acessotoken.aspx`, a 404,
+  instead of the real, working `.../sistema/acessotoken.aspx` confirmed live on the target. The
+  `${...}` variable being stripped (a base-path/API-root var) represents the site origin, not
+  "wherever this scan happens to be rooted", so extract_paths now forces these candidates
+  root-absolute at extraction time instead of leaving the ambiguity for the join step to get wrong.
+
+### Added
+- **`--out`'s artifact bundle now includes `js_endpoints.txt`**: every same-host URL
+  `js_parser.harvest()` pulled out of HTML/JS, resolved and ready to curl, regardless of whether
+  firing it ever surfaced a distinct `finding`. An auth-gated API routinely answers every real and
+  fake path identically, so the classifier correctly reports none of them individually, but the
+  endpoint NAMES are still the most useful thing the recon produced: re-test the list once you have
+  a valid session/token (`-H "Authorization: ..."`).
+
 ## [1.11.8]
 ### Fixed
 - **A path or query string with an escaped closing quote (`...\'`) was silently dropped.** A module

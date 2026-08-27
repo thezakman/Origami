@@ -189,7 +189,8 @@ def _write_outputs(args, result, target, multi: bool) -> None:
             info = artifacts.write_artifacts(result, d)
             print(f"[+] artifacts written to {info['dir']}/ "
                   f"(report.html, graph.html [{info['hidden']} hidden], findings.json, "
-                  f"params.txt={info['params']}, urls.txt={info['urls']})")
+                  f"params.txt={info['params']}, urls.txt={info['urls']}, "
+                  f"js_endpoints.txt={info['js_endpoints']})")
         if args.graph:
             path = _suffix(args.graph, _slug(target)) if multi else args.graph
             hp, dp, n_hidden = graph.write(result, path)
@@ -600,7 +601,7 @@ def main() -> None:
     ap.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     ap.add_argument("--out", metavar="DIR",
                     help="write pentest artifacts to DIR (findings.json, params.txt, urls.txt, "
-                         "report.html, graph.html)")
+                         "js_endpoints.txt, report.html, graph.html)")
     ap.add_argument("--graph", metavar="FILE",
                     help="write an endpoint graph (provenance + orphan/hidden endpoints) "
                          "to FILE.html, plus a Graphviz FILE.dot")

@@ -80,6 +80,14 @@ class ScanResult:
     completed: bool = False       # False if interrupted (quit/cap) → resumable
     error: str = ""               # transport error when the root was unreachable (surfaced to the user)
     edges: list[tuple[str, str]] = field(default_factory=list)  # provenance (src→dst) for --graph
+    # Resolved same-host URLs js_parser.harvest() pulled out of HTML/JS (root_seeds'
+    # "js" origin), regardless of whether firing them ever surfaced a distinct
+    # finding — an auth-gated API routinely answers every real AND fake path
+    # identically, so the classifier correctly reports none of them individually,
+    # yet the endpoint NAMES are still the single most useful thing recon produced
+    # (re-test once you have a session). Kept separately from `findings` so --out
+    # can still hand them over even when they never became one.
+    harvested_paths: set[str] = field(default_factory=set, compare=False, repr=False)
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
     seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression

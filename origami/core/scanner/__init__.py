@@ -444,6 +444,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         js_paths = _scope_paths(js_paths, profile.host, opts.scope)   # scope discipline
         js_paths = set(sorted(js_paths)[:MAX_HARVEST_SEEDS])          # cap the blast radius
         root_seeds += [(p, "js") for p in sorted(js_paths)]
+        # Resolved the same way _scan_prefix would fire it (root-absolute as-is,
+        # relative-to-app-prefix otherwise) — so --out's js_endpoints.txt is a
+        # ready-to-curl URL list, not bare paths the reader has to resolve by hand.
+        result.harvested_paths |= {_join_candidate(_host_root(base_url), base_prefix, p)
+                                    for p in js_paths}
         profile.parameters |= js_params
         if opts.graph:
             result.edges += js_edges

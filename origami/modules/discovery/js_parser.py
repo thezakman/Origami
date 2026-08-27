@@ -240,12 +240,21 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
         # Root-absolute ("/x") OR a bare relative build ("sistema/x.aspx" — no
         # leading `${basePath}`, or one that got stripped above): an Angular/TS
         # client routinely builds its OWN endpoints this way (`${prefix}sistema/
-        # acessotoken.aspx?token=${t}` — a real, working endpoint, confirmed
-        # against a live target). Require an actual '/' before any query/frag
-        # so a plain non-path template ("Order-${orderId}", prose with `${x}`)
-        # doesn't get treated as a candidate — those never contain one.
+        # acessotoken.aspx?token=${t}`). Require an actual '/' before any
+        # query/frag so a plain non-path template ("Order-${orderId}", prose
+        # with `${x}`) doesn't get treated as a candidate — those never
+        # contain one.
         head = s.split("?")[0].split("#")[0]
         if head.startswith("/") or "/" in head:
+            if not s.startswith("/"):
+                # The stripped `${prefix}`/`${this.API}` (or an un-interpolated
+                # literal following the same app convention) is the SITE
+                # ORIGIN, not "wherever this scan happens to be rooted" —
+                # resolving it relative to the current scan prefix instead
+                # doubled a path segment on a real target
+                # (sistema/acessotoken.aspx → .../sistema/sistema/…, a 404,
+                # when the real working URL is .../sistema/acessotoken.aspx).
+                s = "/" + s
             consider(s)
     return found
 
