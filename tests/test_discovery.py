@@ -1037,6 +1037,32 @@ class TestTemplateLiteralPaths(unittest.TestCase):
         paths = J.extract_paths(b"const msg = `Ola ${nome}, tudo bem?`;", "http://h/")
         self.assertEqual(paths, set())
 
+    def test_relative_path_with_unknown_prefix_var(self):
+        # regression: `${prefix}sistema/acessotoken.aspx?token=${t}` — a real,
+        # confirmed-live endpoint (200, token-confirmation form) found verbatim
+        # in a target's chunk-common.js. Stripping `${prefix}` leaves a path
+        # with NO leading slash (relative to the app base, not root-absolute) —
+        # the earlier `startswith("/")` guard discarded exactly this shape.
+        from origami.modules.discovery import js_parser as J
+        body = b"return `${prefix}sistema/acessotoken.aspx?token=${criarTokenOutput.token}`;"
+        paths = J.extract_paths(body, "http://h/")
+        self.assertIn("sistema/acessotoken.aspx", paths)
+
+    def test_plain_relative_backtick_literal(self):
+        # a bare relative literal with NO interpolation at all — missed before
+        # by both _ABS (requires a leading /) and the template-literal path
+        # (which used to skip anything without `${`)
+        from origami.modules.discovery import js_parser as J
+        body = b"const u = `sistema/autenticar.ashx?ignoreRedirect=true`;"
+        paths = J.extract_paths(body, "http://h/")
+        self.assertIn("sistema/autenticar.ashx", paths)
+
+    def test_relative_noise_still_rejected(self):
+        # a `/`-free label built the same way must NOT become a candidate
+        from origami.modules.discovery import js_parser as J
+        paths = J.extract_paths(b"const label = `Order-${orderId}`;", "http://h/")
+        self.assertEqual(paths, set())
+
 
 class TestConfigSeeds(unittest.TestCase):
     def test_config_refs_become_onhost_seeds(self):

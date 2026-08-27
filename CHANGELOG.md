@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.7]
+### Fixed
+- **Template-literal endpoints built as a RELATIVE path (no leading `/`) were dropped entirely.**
+  `` `${prefix}sistema/acessotoken.aspx?token=${t}` `` strips down to `sistema/acessotoken.aspx`,
+  which is relative to the app base, not root-absolute, and the previous fix only kept a stripped
+  result that started with `/`. Confirmed against a live target: this exact path is a real, working
+  endpoint (200, a token-confirmation form), found verbatim in the target's own `chunk-common.js`,
+  and it was silently discarded. A bare relative literal with no interpolation at all
+  (`` `sistema/autenticar.ashx?ignoreRedirect=true` ``) had the same problem from the other
+  direction: `_ABS` requires a leading `/`, and the template-literal path used to skip anything
+  without `${...}` in it. Both are now kept, requiring only an actual `/` somewhere in the path
+  (before any query/fragment) so a non-path template (`` `Order-${orderId}` ``) still isn't treated
+  as a candidate.
+
 ## [1.11.6]
 ### Fixed
 - **`chunk-vendors.<hash>.js`-style bundles (webpack/Vue-CLI's own name for "every third-party
