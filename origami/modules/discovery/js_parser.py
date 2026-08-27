@@ -23,7 +23,10 @@ from origami.core.scope import same_host, same_site
 # PATH is still captured (the query is stripped downstream, its param names are
 # harvested separately). Without this, exactly the interesting parameterised
 # endpoints (`?id=`, `?license_key=`) were the ones missed.
-_ABS = re.compile(rb"""["'`](/[A-Za-z0-9_\-./]{1,100})(?:[?#][^"'`]{0,200})?["'`]""")
+# The trailing `\\?` tolerates a stray escaped-quote backslash (`...\'`) right
+# before the real closing quote — seen in real bundles where a module's own
+# source is itself embedded as a string (eval()'d or JSON-serialized).
+_ABS = re.compile(rb"""["'`](/[A-Za-z0-9_\-./]{1,100})(?:[?#][^"'`]{0,200})?\\?["'`]""")
 # Template-literal URLs: `${this.basePath}/api/v1/foo/${id}/bar`. Codegen'd
 # TS/Angular API clients build almost every endpoint this way — a runtime
 # base-path var up front and/or a path-param var mid-path — so the literal
@@ -77,7 +80,11 @@ _SOURCEMAP = re.compile(rb"""sourceMappingURL=([^\s"'*]+)""", re.I)
 _JS_REF = re.compile(rb"""["'`]([\w./-]+\.(?:js|mjs|json|map))["'`]""", re.I)
 # query parameter names — ONLY from a quoted URL-query string ("…?a=1&b=2"),
 # not from minified `a?b:c` ternaries, so the intel is real, not JS-token noise.
-_QUERY = re.compile(rb"""["'`][^"'`\s]{0,200}\?([A-Za-z0-9_=&.%\[\]\-]+)["'`]""")
+# The trailing `\\?` tolerates a stray escaped-quote backslash (`...\'`) right
+# before the real closing quote — common when the JS itself is embedded as a
+# string (an eval()'d or JSON-serialized module, both seen in real bundles);
+# _ABS already tolerates this via its far more permissive query-tail class.
+_QUERY = re.compile(rb"""["'`][^"'`\s]{0,200}\?([A-Za-z0-9_=&.%\[\]\-]+)\\?["'`]""")
 _PARAM_NAME = re.compile(r"^[a-z_][\w.\-]{0,39}$")
 
 # Endings/segments that are just static assets — not interesting as routes.

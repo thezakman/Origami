@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.11.8]
+### Fixed
+- **A path or query string with an escaped closing quote (`...\'`) was silently dropped.** A module
+  whose own source is embedded as a string (webpack's `eval()`-wrapped modules, a JSON-serialized
+  bundle, both seen in real bundles) escapes its inner quotes, so a literal that should read
+  `'/handlers/UsarNovoLayout.ashx?enable=true'` instead reads `\'...\'` in the raw file. `_ABS` and
+  `_QUERY` both required the real closing quote to sit immediately after the captured content, so
+  the stray backslash broke the match and the whole path (and any query param in it) was dropped,
+  not just its query string. Found via a broad independent sweep of a real target's `chunk-common.js`
+  against `extract_paths`/`extract_params`'s own output: fixing this alone recovered +17 paths and
+  +4 params from that one file. Both regexes now tolerate one optional backslash before the closing
+  quote.
+
 ## [1.11.7]
 ### Fixed
 - **Template-literal endpoints built as a RELATIVE path (no leading `/`) were dropped entirely.**

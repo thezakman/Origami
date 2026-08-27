@@ -1064,6 +1064,32 @@ class TestTemplateLiteralPaths(unittest.TestCase):
         self.assertEqual(paths, set())
 
 
+class TestEscapedQuoteStrings(unittest.TestCase):
+    """A module whose own source is embedded as a string (webpack's
+    eval()-wrapped modules, a JSON-serialized bundle) escapes its inner quotes
+    (`\\'...\\'` instead of `'...'`). _ABS/_QUERY required the closing quote to
+    sit RIGHT after the captured content — the stray backslash broke that,
+    silently dropping the path/param entirely. Found on a real target: +17
+    paths and +4 params from ONE file once this was tolerated."""
+
+    def test_path_with_no_query_and_escaped_quotes(self):
+        from origami.modules.discovery import js_parser as J
+        body = b"const u = \\'/simple/path\\';"
+        self.assertIn("/simple/path", J.extract_paths(body, "http://h/"))
+
+    def test_path_and_param_with_query_and_escaped_quotes(self):
+        from origami.modules.discovery import js_parser as J
+        body = b"ation.relativePath(\\'/handlers/UsarNovoLayout.ashx?enable=true\\');"
+        self.assertIn("/handlers/UsarNovoLayout.ashx", J.extract_paths(body, "http://h/"))
+        self.assertIn("enable", J.extract_params(body))
+
+    def test_normal_quoting_unaffected(self):
+        from origami.modules.discovery import js_parser as J
+        body = b"const u = '/api/v1/foo?bar=1';"
+        self.assertEqual(J.extract_paths(body, "http://h/"), {"/api/v1/foo"})
+        self.assertEqual(J.extract_params(body), {"bar"})
+
+
 class TestConfigSeeds(unittest.TestCase):
     def test_config_refs_become_onhost_seeds(self):
         import asyncio
