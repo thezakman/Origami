@@ -129,6 +129,23 @@ def _collapse_slash_twins(findings, ci=False):
     return out
 
 
+def _cluster_near_simhash(findings, distance):
+    """Greedy-group findings by same status + body simhash within `distance`
+    bits. Not transitive (each member joins the first bucket it's near), which
+    is the conservative choice — it won't chain two distinct pages together.
+    Small n, so O(n²) is fine.
+    """
+    buckets: list[list] = []
+    for f in findings:
+        for b in buckets:
+            if b[0].status == f.status and hamming(b[0].simhash, f.simhash) <= distance:
+                b.append(f)
+                break
+        else:
+            buckets.append([f])
+    return buckets
+
+
 def _dedupe_and_collapse(findings, observer, ci=False):
     """URL-dedup (keep best confidence) + collapse same-template collisions.
 
@@ -144,12 +161,34 @@ def _dedupe_and_collapse(findings, observer, ci=False):
     # Declared-contract findings (OpenAPI/.well-known) are never collapsed — each
     # is a real named endpoint the user wants listed, even when it returns 401/403.
     out: list = [f for f in deduped if f.origin in _DECLARED_ORIGINS]
-    clusters: dict[tuple, list] = defaultdict(list)
-    for f in deduped:
-        if f.origin not in _DECLARED_ORIGINS:
-            clusters[(f.status, f.length)].append(f)
-
+    non_declared = [f for f in deduped if f.origin not in _DECLARED_ORIGINS]
     collapsed = 0
+
+    # Soft-200 catch-all / WAF-challenge wall: many distinct paths answered by
+    # the same 2xx body whose per-request nonce jitters the LENGTH (6733/6734/
+    # 6735…). The exact-(status,length) key below would strand each length in
+    # its own short group and never fold them, so a nonce-varying wall survives
+    # as a flood of look-alike hits. Pre-merge 2xx by body simhash so it folds
+    # to one line; a path-echoing catch-all (stable length, distinct simhash)
+    # and genuinely distinct files don't merge here and fall through untouched.
+    twoxx = [f for f in non_declared if 200 <= f.status < 300 and f.simhash]
+    rest = [f for f in non_declared if not (200 <= f.status < 300 and f.simhash)]
+    remaining: list = []
+    for bucket in _cluster_near_simhash(twoxx, bl.SIMHASH_MISS_DISTANCE):
+        if len(bucket) > COLLISION_MAX:
+            rep = min(bucket, key=lambda f: len(f.url))
+            rep.note = (rep.note + " " if rep.note else "") + \
+                f"+{len(bucket) - 1} paths, same ~{rep.length}B response (soft-200 wall)"
+            out.append(rep)
+            collapsed += len(bucket) - 1
+        else:
+            remaining.extend(bucket)
+    remaining.extend(rest)
+
+    clusters: dict[tuple, list] = defaultdict(list)
+    for f in remaining:
+        clusters[(f.status, f.length)].append(f)
+
     for (_status, length), group in clusters.items():
         if len(group) > COLLISION_MAX:
             rep = min(group, key=lambda f: len(f.url))
@@ -219,9 +258,26 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
             sig = (finding.status, finding.length)
             n = result.wall_seen.get(sig, 0) + 1
             result.wall_seen[sig] = n
-        if wall and n > COLLISION_MAX:
+        # Soft-200 wall: a 2xx catch-all / WAF challenge / stale-cache page that
+        # goes up mid-scan answers MANY distinct paths with the same body — the
+        # same flood as a 403 block-wall, but 200 (so _WALL_STATUS misses it) and
+        # with a per-request nonce that jitters the length (so the length key
+        # misses it). Key on the body simhash instead: distinct REAL 2xx files
+        # have distinct bodies → distinct sigs → never muted; only a repeating
+        # look-alike page trips it. The per-hit soft-404 sibling check normally
+        # catches this, but it's skipped once the request budget is spent — this
+        # backstop needs no extra request. Left to the report collapse for the tail.
+        softwall = (not wall and 200 <= finding.status < 300
+                    and finding.simhash
+                    and finding.origin not in _DECLARED_ORIGINS)
+        if softwall:
+            sig = (finding.status, finding.simhash)
+            n = result.softwall_seen.get(sig, 0) + 1
+            result.softwall_seen[sig] = n
+        if (wall or softwall) and n > COLLISION_MAX:
             if n == COLLISION_MAX + 1:
-                observer.log(f"{finding.status} block-wall: identical {finding.length}B "
+                kind = "soft-200 wall" if softwall else "block-wall"
+                observer.log(f"{finding.status} {kind}: identical {finding.length}B "
                              f"response repeating across paths — muting the live stream "
                              f"(folded into one in the report)", 0, style="yellow")
             observer.finding(finding, stream=False)     # counted, not printed

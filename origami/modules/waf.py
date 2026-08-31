@@ -20,6 +20,15 @@ _BODY = {
                           "_incapsula_resource"),
     "Cloudflare": ("attention required! | cloudflare", "cloudflare ray id",
                    "error 1020", "access denied | cloudflare"),
+    # Cloudflare's JS/managed challenge + Turnstile interstitial — served as a
+    # 200 (also 403/429/503) with a ~6-7KB body, so it sails past a status-code
+    # filter AND, if calibration ran BEFORE the challenge went up, past the
+    # baseline (a stale 404 miss ≠ this 200) as a flood of high-confidence hits.
+    # These markers are CF-specific and land inside the first 2KB (the head
+    # script + title); the per-request nonce lives in the token VALUES, not here.
+    "Cloudflare (challenge)": ("/cdn-cgi/challenge-platform", "_cf_chl_opt",
+                               "cf-turnstile", "just a moment...</title>",
+                               "enable javascript and cookies to continue"),
     "Akamai": ("akamaighost", "reference&#32;#", "access denied</title>"),
     # bare "mod_security" intentionally omitted — too generic, would drop a legit
     # page that merely mentions the term; real block pages carry the full phrase.
@@ -57,6 +66,42 @@ def detect_block_body(body_head: bytes) -> str | None:
     return None
 
 
+# name -> (header-name, substring) signatures that mark THIS response as a
+# challenge/block — not merely which CDN fronts the site. Distinct from
+# `_HEADERS`: `cf-ray`/`server: cloudflare` ride EVERY response from a CF site
+# (real hits included), so they can never mean "blocked"; `cf-mitigated` is
+# emitted only when the edge actually challenged or blocked the request.
+_BLOCK_HEADERS = {
+    "Cloudflare": [("cf-mitigated", "")],
+    # AWS WAF stamps its verdict here on a challenge/CAPTCHA/block action.
+    "AWS WAF": [("x-amzn-waf-action", "")],
+}
+
+
+def detect_block_headers(headers: dict) -> str | None:
+    """WAF name if a response HEADER marks it challenged/blocked, else None.
+
+    Only verdict headers (`cf-mitigated`, `x-amzn-waf-action`) — never the
+    presence of the CDN itself, which is on every response.
+    """
+    for name, sigs in _BLOCK_HEADERS.items():
+        for hname, sub in sigs:
+            val = headers.get(hname)
+            if val is not None and (sub == "" or sub in val.lower()):
+                return name
+    return None
+
+
+def block_reason(probe) -> str | None:
+    """WAF name if this response is a block/challenge page (body OR verdict
+    header), else None. Body signature wins; the header catches a challenge
+    whose markers fell past the 2KB body_head window.
+    """
+    if not getattr(probe, "ok", False):
+        return None
+    return detect_block_body(probe.body_head) or detect_block_headers(probe.headers)
+
+
 def detect_from_headers(headers: dict, cookies: list[str]) -> str | None:
     for name, sigs in _HEADERS.items():
         for hname, sub in sigs:
@@ -79,5 +124,5 @@ def detect(probe) -> str | None:
 
 
 def is_block(probe) -> bool:
-    """True if this response is a WAF block page (body signature)."""
-    return detect_block_body(probe.body_head) is not None
+    """True if this response is a WAF block/challenge page (body or header)."""
+    return block_reason(probe) is not None

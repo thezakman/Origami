@@ -5,6 +5,33 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.12.1]
+### Fixed
+- **A Cloudflare challenge served as HTTP 200 flooded the report with high-confidence
+  false hits.** On a Cloudflare-fronted target the WAF can serve its JS/managed challenge
+  (the "Just a moment..." interstitial, a ~6-7KB body) as a **200** for every path. When
+  that wall goes up *after* calibration (which saw the real 404s), every candidate comes
+  back 200 while the baseline still expects 404, so `classify()` scored each one a 0.95 hit:
+  dozens of look-alike `200 6733B` lines for paths that don't exist. The WAF detector only
+  knew Cloudflare's explicit block pages (`error 1020`, "Attention Required"), not the
+  challenge, so it waved them through. Fixed on two independent layers:
+  - **WAF detection now recognises the challenge/interstitial**, by body signature
+    (`/cdn-cgi/challenge-platform`, `_cf_chl_opt`, `cf-turnstile`, the "Just a moment"
+    title, "Enable JavaScript and cookies to continue") and by the `cf-mitigated` /
+    `x-amzn-waf-action` verdict headers (which catch a challenge whose body markers fell
+    past the 2KB `body_head` window). The generic `cf-ray` / `server: cloudflare` headers,
+    which ride *every* response from a Cloudflare site, are deliberately never treated as a
+    block, so a real 200 hit is not muted. `classify()` drops the challenge before the
+    baseline comparison, so it can never become a finding.
+  - **A WAF-agnostic soft-200 wall guard**, for any unknown wall (a catch-all page, a
+    stale edge cache, another vendor's 200 challenge) that the per-hit soft-404 sibling
+    check misses once the request budget is spent (that check costs a request, so it is
+    skipped when over budget). When many distinct paths answer with the same 2xx body
+    (matched by simhash, so a per-request nonce jittering the length by a byte or two no
+    longer defeats it), the live stream is muted past the collision cap and the report
+    collapses them to a single "soft-200 wall" line instead of a flood. Distinct real 200s
+    have distinct bodies, so they are never affected.
+
 ## [1.12.0]
 ### Fixed
 - **A relative template-literal endpoint was resolved against the wrong base, doubling a path

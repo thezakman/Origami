@@ -240,6 +240,64 @@ class TestReportDedup(unittest.TestCase):
             _report(obs, r, ScanOptions(), make_finding(u, status=200), u)
         self.assertEqual(obs.streamed, 20)                 # 2xx never muted live
 
+    def test_soft200_wall_muted_live_but_kept(self):
+        # A 200 catch-all / WAF challenge answering many distinct paths with the
+        # SAME body (identical simhash) — muted live past COLLISION_MAX like a
+        # 403 block-wall, but all kept for the report collapse.
+        from origami.core.scanner import _report, ScanResult, ScanOptions, COLLISION_MAX
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class CountObs(NullObserver):
+            def __init__(self): super().__init__(); self.streamed = 0
+            def finding(self, f, stream=True):
+                if stream: self.streamed += 1
+
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        obs = CountObs()
+        for i in range(20):
+            u = f"https://h/JDoc/faces/word{i}.dll"
+            f = Finding(u, 200, 6733, "text/html", 0.95, "wordlist", simhash=0xABCDEF)
+            _report(obs, r, ScanOptions(), f, u)
+        self.assertEqual(len(r.findings), 20)              # all kept
+        self.assertEqual(obs.streamed, COLLISION_MAX)      # only the first few streamed
+
+    def test_distinct_2xx_not_soft_muted(self):
+        # Real, distinct 200 files (distinct simhashes) are never soft-muted.
+        from origami.core.scanner import _report, ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+
+        class CountObs(NullObserver):
+            def __init__(self): super().__init__(); self.streamed = 0
+            def finding(self, f, stream=True):
+                if stream: self.streamed += 1
+
+        r = ScanResult(profile=TargetProfile(host="h", base_url="https://h/"))
+        obs = CountObs()
+        for i in range(20):
+            u = f"https://h/real{i}"
+            _report(obs, r, ScanOptions(), Finding(u, 200, 100 + i, "", 0.9, "wordlist",
+                                                   simhash=0x1000 + i), u)
+        self.assertEqual(obs.streamed, 20)                 # each body distinct → all shown
+
+    def test_soft200_wall_collapses_despite_length_jitter(self):
+        # Nonce-jittered lengths (6733/6734/6735) would strand each in its own
+        # (status,length) group; near-simhash pre-merge folds them to one line.
+        from origami.core.scanner import _dedupe_and_collapse
+        from origami.core.response_classifier import Finding
+        from origami.output.ui import NullObserver
+        base = 0xF0F0F0F0F0F0F0F0
+        findings = [Finding(f"https://h/w{i}.dll", 200, 6733 + (i % 3), "text/html",
+                            0.95, "wordlist", simhash=base + (i % 2))   # within 1 bit
+                    for i in range(10)]
+        out = _dedupe_and_collapse(findings, NullObserver())
+        wall = [f for f in out if f.status == 200]
+        self.assertEqual(len(wall), 1)                     # folded to one representative
+        self.assertIn("soft-200 wall", wall[0].note)
+
 class TestSlashTwinCollapse(unittest.TestCase):
     def _f(self, url, status=200, length=7, simhash=0, conf=0.95):
         from origami.core.response_classifier import Finding
@@ -894,6 +952,47 @@ class TestWaf(unittest.TestCase):
                            body=b"The requested URL was rejected. Your support ID is x")
         self.assertIsNone(classify(p, block, "wordlist", "/"))
         self.assertEqual(p.waf, "F5 BIG-IP ASM")
+
+    def test_cloudflare_challenge_body_is_block(self):
+        # CF JS/managed challenge served as a 200 — must read as a block, not a hit.
+        body = (b"<!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title>"
+                b"<meta charset=\"utf-8\"><script src=\"/cdn-cgi/challenge-platform/h/g/"
+                b"orchestrate/chl_page/v1?ray=8f2a\"></script></head><body>"
+                b"<div>Enable JavaScript and cookies to continue</div>"
+                b"<script>window._cf_chl_opt={cRay:'8f2a'};</script></body></html>")
+        self.assertEqual(waf.detect_block_body(body), "Cloudflare (challenge)")
+        self.assertTrue(waf.is_block(make_probe(status=200, body=body)))
+
+    def test_cloudflare_challenge_header_is_block(self):
+        # Body markers can fall past the 2KB head window; the cf-mitigated verdict
+        # header still marks the response as challenged/blocked.
+        clean = make_probe(status=200, body=b"<html>ok</html>",
+                           headers={"cf-mitigated": "challenge"})
+        self.assertEqual(waf.block_reason(clean), "Cloudflare")
+        self.assertTrue(waf.is_block(clean))
+
+    def test_cloudflare_cdn_header_alone_is_not_block(self):
+        # cf-ray / server: cloudflare ride EVERY response from a CF site — they
+        # identify the CDN, never a block. A real 200 hit must not be muted.
+        real = make_probe(status=200, body=b"<html>welcome</html>",
+                          headers={"cf-ray": "abc", "server": "cloudflare"})
+        self.assertIsNone(waf.block_reason(real))
+        self.assertFalse(waf.is_block(real))
+
+    def test_classify_suppresses_cloudflare_challenge_over_stale_404(self):
+        # THE reported flood: baseline calibrated as a 404 miss, then a CF 200
+        # challenge goes up mid-scan. Without challenge detection every 200 reads
+        # as a 0.95 hit (200 != 404). It must be dropped as a block instead.
+        from origami.core.evidence import ContextBaseline, TargetProfile
+        from origami.core.response_classifier import classify
+        p = TargetProfile(host="t", base_url="http://t/")
+        p.baseline[TargetProfile.context_key("/JDoc/faces/", "other")] = ContextBaseline(
+            prefix="/JDoc/faces/", ext_class="other", status=404)
+        chl = make_probe(status=200, url="http://t/JDoc/faces/hostpolicy.dll",
+                         body=b"<title>Just a moment...</title>"
+                              b"<script src=\"/cdn-cgi/challenge-platform/x\"></script>")
+        self.assertIsNone(classify(p, chl, "wordlist", "/JDoc/faces/"))
+        self.assertEqual(p.waf, "Cloudflare (challenge)")
 
 class TestJsParser(unittest.TestCase):
     def test_extract(self):

@@ -91,6 +91,7 @@ class ScanResult:
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
     seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression
+    softwall_seen: dict = field(default_factory=dict, compare=False, repr=False)  # (2xx status,simhash) → count, for a soft-200 catch-all/challenge wall (nonce-tolerant, length varies)
     twin_sig: dict = field(default_factory=dict, compare=False, repr=False)       # slash-normalized URL → response sig, to suppress an identical /x vs /x/ twin live
     odata_probed: set = field(default_factory=set, compare=False, repr=False)     # collection paths already OData-probed (early target + late fold don't double-probe)
     multiviews_seen: bool = field(default=False, compare=False, repr=False)       # reported the "MultiViews enabled" misconfig once already

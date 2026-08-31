@@ -248,9 +248,12 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     if 300 <= probe.status < 400 and _redirect_kind(probe.url, probe.location) != "DIR":
         return None
 
-    # WAF block page → never a hit (it's the firewall, not the app). Record the
-    # product so the report surfaces it.
-    blocked = waf.detect_block_body(probe.body_head)
+    # WAF block/challenge page → never a hit (it's the firewall, not the app).
+    # Catches a JS/managed challenge served as 200 (body signature OR the
+    # `cf-mitigated`/`x-amzn-waf-action` verdict header) so it can't flood the
+    # report when it goes up mid-scan and the baseline was calibrated before it.
+    # Record the product so the report surfaces it.
+    blocked = waf.block_reason(probe)
     if blocked:
         if not profile.waf:
             profile.waf = blocked
