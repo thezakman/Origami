@@ -35,6 +35,100 @@ KNOWN_FAVICONS: dict[int, str] = {
 }
 
 
+# Body needles that are ordinary words in normal HTML/prose (or JSON content),
+# not stack markers. The ingested Wappalyzer layer flattened context-bearing
+# patterns (a tag/attribute regex) down to bare substrings, so as *standalone*
+# body signals these fire on any sizeable body: `input`/`hidden` sit in every
+# HTML form, `website` rides inside URLs (azureWEBSITEs.net), `tecnologia`/
+# `framework`/`version` are page copy. A tech that truly matches still confirms
+# through its own specific signals (a cookie, a header, a distinctive marker);
+# refusing these lone words just stops the false chips. (Curated, lowercase.)
+_GENERIC_BODY_NEEDLES: frozenset[str] = frozenset({
+    # form / control words (every HTML form has them)
+    "input", "hidden", "button", "form", "field", "value", "label", "select",
+    "submit", "checkbox", "radio", "option", "textarea",
+    # markup-structure tokens (present in essentially every HTML document — the
+    # `/title` -> `</title>` family, matched after stripping markup punctuation)
+    "html", "head", "body", "title", "div", "span", "meta", "link", "href",
+    "src", "class", "style", "script", "data", "type", "name", "charset",
+    "content", "header", "footer", "section", "nav", "main", "article",
+    # generic page / product / prose words
+    "website", "tecnologia", "tecnologias", "framework", "version", "platform",
+    "copyright", "powered", "application", "software", "commerce", "ecommerce",
+    "builder", "analytics", "bootstrap", "stylesheet", "template", "container",
+    "wrapper", "sidebar", "navigation", "menu", "widget", "search", "login",
+    "logout", "register", "password", "email", "gallery", "comment", "category",
+    "payment", "checkout", "shipping", "product", "service", "module", "project",
+    "decimal", "epoch", "description", "keywords", "author", "image", "video",
+    "audio", "price", "cart", "shop", "store", "blog", "page", "site", "theme",
+    "plugin", "editor", "solucoes", "solucao", "bundle", "bundles", "vendor",
+    "runtime", "polyfill", "manifest", "assets", "static", "dist", "build",
+})
+
+# Public CDN bases. A body needle that is merely `<cdn>/` (or `<cdn>/npm/`) means
+# "this page loads *something* from a shared CDN" — a CDN reference, never proof
+# of the specific library the ingested rule attached it to (jsDelivr serving a
+# font does not make a page "echarts"). A rule's SPECIFIC asset path
+# (`cdnjs.cloudflare.com/ajax/libs/Chart.js/`) is untouched and still fingerprints.
+_CDN_HOSTS: frozenset[str] = frozenset({
+    "cdn.jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com", "code.jquery.com",
+    "ajax.googleapis.com", "stackpath.bootstrapcdn.com", "maxcdn.bootstrapcdn.com",
+    "cdn.skypack.dev", "esm.sh", "ajax.aspnetcdn.com",
+})
+
+
+def _is_bare_cdn_needle(stripped: str) -> bool:
+    """`cdn.jsdelivr.net`, `cdn.jsdelivr.net/`, `unpkg.com/npm/` … — a CDN base with
+    no library-specific path. True → the needle proves only "uses a CDN", not a tech."""
+    s = stripped.rstrip("/")
+    if s.endswith("/npm"):
+        s = s[:-4]
+    return s in _CDN_HOSTS
+
+# markup / whitespace punctuation stripped from a needle's ends before the
+# generic-word check, so `/title`, `</title>`, `title>` all normalise to `title`.
+# Internal `-`/`_` stay, so `data-nette-rules` / `__NEXT_DATA__` keep their shape.
+_NEEDLE_EDGE = "/<>=\"' \t.:;#&?!()[]{}|"
+
+# Content types where an HTML/document body fingerprint is meaningless — a JSON
+# API, a script/style asset, an image/font/binary blob. Body signals (curated
+# for HTML) are skipped on these: a `"Tecnologia"` category name inside a JSON
+# record, or `website` inside an azurewebsites URL, is not a stack marker.
+def _body_fingerprintable(content_type: str) -> bool:
+    ct = (content_type or "").lower()
+    if not ct:
+        return True                                   # unknown → allow (be permissive)
+    return not any(m in ct for m in (
+        "json", "javascript", "ecmascript", "/css", "image/", "font/",
+        "audio/", "video/", "octet-stream", "pdf", "zip", "protobuf",
+        "grpc", "wasm",
+    ))
+
+
+def _body_contains(needle: str, hay: str) -> bool:
+    """Substring match, but word-boundary-aware for alphanumeric-edged needles so
+    a token doesn't match inside a longer word: `website` must not hit inside
+    `azurewebsites`, `wix` must not hit inside `wixster`. Needles with punctuation
+    edges (`data-nette-rules`, `<script`) keep plain-substring behaviour."""
+    if not (needle[0].isalnum() and needle[-1].isalnum()):
+        return needle in hay
+    n = len(needle)
+    start = 0
+    while True:
+        i = hay.find(needle, start)
+        if i < 0:
+            return False
+        before = hay[i - 1] if i > 0 else " "
+        after = hay[i + n] if i + n < len(hay) else " "
+        if not _is_word_char(before) and not _is_word_char(after):
+            return True
+        start = i + 1
+
+
+def _is_word_char(c: str) -> bool:
+    return c.isalnum() or c == "_"
+
+
 def _signal_hit(sig: Signal, probe: Probe) -> str | None:
     """Return a human-readable detail if the signal matches, else None."""
     needle = sig.match.lower()
@@ -51,7 +145,12 @@ def _signal_hit(sig: Signal, probe: Probe) -> str | None:
                 return f"Set-Cookie: {c.split(';')[0]}"
         return None
     if sig.type == "body":
-        if needle and needle in probe.body_head.lower().decode("latin-1"):
+        stripped = needle.strip(_NEEDLE_EDGE)
+        if not needle or stripped in _GENERIC_BODY_NEEDLES or _is_bare_cdn_needle(stripped):
+            return None                               # empty / generic word / bare CDN ref
+        if not _body_fingerprintable(probe.content_type):
+            return None                               # JSON/asset/binary body → not HTML fp
+        if _body_contains(needle, probe.body_head.lower().decode("latin-1")):
             return f"body~={sig.match!r}"
         return None
     return None

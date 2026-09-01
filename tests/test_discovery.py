@@ -745,6 +745,14 @@ class TestOData(unittest.TestCase):
         # blocked / empty → no records
         self.assertIsNone(odata.parse_records(413, b'{"message":"Request Entity Too Large"}'))
         self.assertIsNone(odata.parse_records(200, json.dumps({"value": []}).encode()))
+        # `$top=1` IGNORED — the server dumped the whole collection (Django REST
+        # Framework and friends ignore unknown query params). A multi-row response
+        # means `$top` was not honoured → not OData-queryable → rejected, so it is
+        # never mis-reported as a "$top=1 record read".
+        self.assertIsNone(odata.parse_records(
+            200, json.dumps([{"id": 1}, {"id": 2}, {"id": 3}]).encode()))
+        # …but a genuinely single-row collection is still a record read
+        self.assertEqual(len(odata.parse_records(200, json.dumps([{"id": 1}]).encode())), 1)
 
     def test_query_fold_probes_the_target_even_when_blocked(self):
         # the reported gap: point directly AT a collection that 413s on the plain
@@ -793,6 +801,34 @@ class TestOData(unittest.TestCase):
             _Eng(), prof2, ScanResult(profile=prof2),
             ScanOptions(finding_sink=found2.append), NullObserver()))
         self.assertEqual(found2, [])
+
+    def test_query_fold_no_false_positive_on_public_drf_collection(self):
+        # Regression: a public Django-REST-Framework collection (plain listing is a
+        # 200 JSON array) that IGNORES `$top`/`$apply` must yield NO odata finding —
+        # the earlier build reported a phantom "unauth record read via $top=1
+        # disclosure" because DRF returned the whole list and $top looked honoured.
+        import asyncio
+        from origami.core import scanner
+        from origami.core.scanner import ScanResult, ScanOptions
+        from origami.core.evidence import TargetProfile
+        from origami.output.ui import NullObserver
+
+        full = b'[{"id":1,"nome":"a"},{"id":2,"nome":"b"},{"id":3,"nome":"c"}]'
+
+        class _P:
+            def __init__(self, status, body):
+                self.status, self.body, self.ok = status, body, True
+
+        class _Eng:
+            async def fetch(self, url, method="GET", keep_body=False, **kw):
+                return _P(200, full)                   # plain 200; $top/$apply ignored → full list
+
+        prof = TargetProfile(host="h", base_url="https://h/api/base-conhecimento/")
+        res = ScanResult(profile=prof)
+        found = []
+        asyncio.run(scanner._odata_query_fold(
+            _Eng(), prof, res, ScanOptions(finding_sink=found.append), NullObserver()))
+        self.assertEqual(found, [])                     # no phantom odata disclosure
 
     def test_harvest_finds_metadata_via_stub_engine(self):
         import asyncio

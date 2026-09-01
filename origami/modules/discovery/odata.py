@@ -237,7 +237,14 @@ def classify_probe(status: int, body: bytes) -> str:
 
 def parse_records(status: int, body: bytes) -> list | None:
     """A `$top=1` response → the record list (from envelope or bare array), or None
-    if the response isn't a non-empty list of objects."""
+    if the response isn't a non-empty list of objects.
+
+    `$top=1` is an OData paging option: a service that honours it returns AT MOST
+    one row. A server that returns the WHOLE collection ignored `$top` entirely
+    (Django REST Framework, a custom JSON list, …) — it is not OData-queryable, so
+    a multi-row response is rejected here rather than mis-reported as a `$top=1`
+    record read. (A genuinely 1-row collection is still accepted — reading its one
+    row past a blocked listing is a real bypass.)"""
     if not (200 <= status < 300):
         return None
     try:
@@ -250,7 +257,10 @@ def parse_records(status: int, body: bytes) -> list | None:
         # double-count it as an exposed row.
         if len(rows) == 1 and set(rows[0].keys()) == {_AGG_ALIAS}:
             return None
-        return [r for r in rows if isinstance(r, dict)]
+        records = [r for r in rows if isinstance(r, dict)]
+        if len(records) > 1:
+            return None                              # `$top=1` ignored → not OData-queryable
+        return records
     return None
 
 

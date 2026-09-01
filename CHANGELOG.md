@@ -5,6 +5,42 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.12.2]
+### Fixed
+- **Phantom tech chips on a JSON API and on ordinary HTML pages.** Scanning a Django
+  REST Framework endpoint painted the fingerprint panel with a zoo of unrelated stacks
+  (godaddy website builder, nette framework, yepcomm, nido tecnologia, powergap) on a
+  target that is plainly `gunicorn`/Django. The cause was the ingested Wappalyzer layer:
+  it flattens context-bearing patterns (a tag/attribute regex) down to bare substrings,
+  so ultra-generic body needles fire on any sizeable body. `Website` rode inside
+  `azurewebsites.net` URLs, `Tecnologia` was a JSON category name, and `input`/`hidden`
+  sit in every HTML `<form>` (the login page tripped nette and powergap that way).
+  Body-signal matching is now precise on three independent layers:
+  - **A generic-word guard.** A curated stop-list of non-discriminating words (form
+    controls, markup-structure tokens like the `</title>` family, and common
+    page/product/prose words) can no longer confirm a tech on their own. The needle is
+    normalised (surrounding markup punctuation stripped, so `/title` maps to `title`)
+    before the check, and a bare public-CDN reference (`cdn.jsdelivr.net/`) counts as
+    "uses a CDN", never proof of the specific library the rule attached it to. A tech
+    that truly matches still confirms through its own specific signals (a cookie, a
+    header, a distinctive marker or asset path).
+  - **A content-type gate.** HTML/document body fingerprints are skipped on bodies where
+    they are meaningless: a JSON API, a script/style asset, an image/font/binary blob. A
+    `"Tecnologia"` value inside a JSON record is no longer read as a stack marker.
+  - **Word-boundary matching.** An alphanumeric-edged needle no longer matches inside a
+    longer word, so `website` cannot hit inside `azurewebsites` and a brand token cannot
+    hit inside an unrelated word. Punctuation-edged needles keep plain-substring behaviour.
+- **False OData `$top=1` disclosure on an endpoint that ignores the option.** Pointing at
+  a Django REST Framework collection (or any JSON list API that ignores unknown query
+  params) reported a high-confidence "unauth record read via $top=1" data disclosure. The
+  server had simply ignored `$top` and returned the whole list, which the probe read as a
+  one-row read. Two guards close it: a `$top=1` response carrying more than one record is
+  now rejected (the option was not honoured, so the endpoint is not OData-queryable), and
+  the record-read finding only fires when it BYPASSES a blocked plain listing (reading a
+  row from a collection whose plain GET already returns 200 is redundant, not a
+  disclosure). The aggregation (`$apply`) path and the genuine blocked-listing bypass are
+  unchanged.
+
 ## [1.12.1]
 ### Fixed
 - **A Cloudflare challenge served as HTTP 200 flooded the report with high-confidence

@@ -848,9 +848,13 @@ async def _odata_try(engine, base, plain_status, opts, observer, result) -> bool
         pr2 = await engine.fetch(u, keep_body=True)
         observer.request(base, pr2.status, False)
         recs = odata.parse_records(pr2.status, pr2.body or b"")
-        if recs:
+        # Only a finding when it BYPASSES a blocked plain listing: reading one row
+        # via `$top=1` from a collection whose plain GET already returns 200 is
+        # redundant (that GET is reported on its own), not a disclosure. `parse_records`
+        # has already rejected a whole-collection dump where `$top=1` was ignored.
+        if recs and blocked:
             sens = odata.sensitive_fields(recs[0])
-            tags = ["api", "odata-agg", "disclosure"] + (["auth-bypass"] if blocked else [])
+            tags = ["api", "odata-agg", "disclosure", "auth-bypass"]
             hits.append((u, pr2.status, len(pr2.body or b""), 0.95,
                          f"unauth record read via $top=1 — {len(recs[0])} fields"
                          + (f", sensitive: {', '.join(sens[:6])}" if sens else "") + bypass, tags))
