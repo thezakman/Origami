@@ -5,6 +5,20 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [Unreleased]
+
+### Fixed
+- Learning-corpus cleanup no longer deletes historical findings.
+- Host and full-memory deletion roll back as a unit on failure, including report
+  snapshots. Remove automatic VACUUM from this logical-deletion operation.
+
+### Added
+- Persist full JSON evidence snapshots transactionally with run history, retaining
+  notes, tags, reproduction text and recorded state. Existing databases gain an
+  additive table; legacy evidence is not fabricated.
+- Recover snapshots using `--export-run ID --db DB --json NEW_FILE`. History displays
+  run IDs; recovery is offline, opens the DB read-only and refuses existing outputs.
+
 ## [1.13.0] - 2026-09-28
 
 ### Added

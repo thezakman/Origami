@@ -57,6 +57,14 @@ Validação: 55 testes locais passaram, incluindo leitura sem scanner/banco/stdi
 
 Limitação: resumo descritivo; não valida todos os campos do relatório nem substitui revisão humana, corpus rotulado, reexportação ou gerenciamento de projetos.
 
+## Etapa 5 — Preservação e recuperação do histórico
+
+Reproduzido antes da correção: `prune_fingerprinted` apagava achados históricos; uma falha em `forget` deixava transação parcial aberta. Dois testes falharam por esses defeitos. Outros dois demonstraram ausência da capacidade de snapshot integral.
+
+Corrigido: limpeza atua apenas no corpus derivado; exclusão por host ou total é transacional; snapshots completos são persistidos junto com o registro da execução. Falha no snapshot desfaz a execução inteira. Migração aditiva cria tabela sem fabricar dados para execuções antigas. Novo `--export-run ID --db DB --json NOVO` recupera o snapshot sem scanner e com conexão somente leitura. IDs aparecem no histórico.
+
+Validação: 44 testes locais passaram, incluindo oito regressões novas; Ruff e Mypy passaram (69 arquivos). Limites: snapshots aumentam o banco; registram o instante da persistência e dependem de memória habilitada; não recuperam campos antigos perdidos nem substituem um journal contra término abrupto. Exclusão lógica não promete sanitização do armazenamento.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

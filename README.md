@@ -353,3 +353,25 @@ validator for every field in a report.
 Exit codes: `0` for a valid finished report, `3` for a valid partial, failed or
 legacy report, `2` for invalid input or a local read error. A finished report still
 does not establish complete coverage. Inspect `state` and `warnings` in the summary.
+
+### Recovering persisted evidence
+
+Newly recorded runs keep a complete JSON report snapshot in the same SQLite
+transaction as their history entry, including notes, tags, reproduction text and
+recorded execution state. `--forget-noise` cleans the learning corpus without
+altering historical findings or snapshots.
+
+```bash
+origami --history --db project.db
+origami --export-run 12 --db project.db --json recovered-run-12.json
+```
+
+History now displays run IDs. Recovery opens the database read-only and requires
+a new output file; it never executes reproduction text. Old runs without snapshots
+cannot recover fields that were never stored. `--no-learn` creates no DB snapshot.
+The snapshot captures the result at persistence time, not a crash journal or a
+coverage guarantee. Keeping complete reports increases DB size.
+
+Host/all deletion is transactional, including snapshots. A failed deletion rolls
+back as a unit. Deletion is logical, not a secure erase of backups or disk pages;
+automatic VACUUM has been removed from the delete transaction workflow.

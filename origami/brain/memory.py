@@ -127,6 +127,10 @@ CREATE TABLE IF NOT EXISTS findings (
     run_id INTEGER, host TEXT, url TEXT, path TEXT,
     status INTEGER, confidence REAL, origin TEXT, length INTEGER, ctype TEXT
 );
+CREATE TABLE IF NOT EXISTS report_snapshots (
+    run_id INTEGER PRIMARY KEY,
+    report_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS host_techs (
     host TEXT, tech TEXT,
     PRIMARY KEY (host, tech)
@@ -363,6 +367,10 @@ class Memory:
 
     @_transaction
     def record_run(self, profile, result) -> int:
+        from origami.output.json_report import dumps
+        # Preserve the complete exported evidence in the same transaction as its
+        # history row. Derived learning tables are not the source of record.
+        report_json = dumps(result)
         confirmed = profile.confirmed_techs()
         host = _norm_host(profile.host)        # www/apex collapse to one memory key
         cur = self.db.execute(
@@ -372,6 +380,8 @@ class Memory:
              ",".join(confirmed), len(result.findings)),
         )
         run_id = cur.lastrowid
+        self.db.execute("INSERT INTO report_snapshots (run_id, report_json) VALUES (?, ?)",
+                        (run_id, report_json))
 
         self.db.executemany(
             "INSERT INTO findings VALUES (?,?,?,?,?,?,?,?,?)",
@@ -409,9 +419,15 @@ class Memory:
         assert run_id is not None       # lastrowid is always set right after an INSERT
         return run_id
 
+    def report_snapshot(self, run_id: int) -> str | None:
+        """Exact saved report, or None for legacy/deleted runs; never reconstruct evidence."""
+        row = self.db.execute("SELECT report_json FROM report_snapshots WHERE run_id = ?",
+                              (run_id,)).fetchone()
+        return row[0] if row else None
+
     @_transaction
     def prune_fingerprinted(self) -> int:
-        """Sweep the whole corpus (and findings) and delete every content-hashed
+        """Sweep the derived corpus and delete every content-hashed
         /fingerprinted path — the one-off build artifacts that carry no
         cross-target signal. Returns the number of corpus rows removed."""
         victims = [p for (p,) in self.db.execute("SELECT DISTINCT path FROM corpus")
@@ -420,7 +436,6 @@ class Memory:
         for p in victims:
             removed += self.db.execute(
                 "DELETE FROM corpus WHERE path = ?", (p,)).rowcount
-            self.db.execute("DELETE FROM findings WHERE path = ?", (p,))
         self.db.commit()
         return removed
 
@@ -428,17 +443,18 @@ class Memory:
         """Erase memory: one host (normalized, www/apex together) or — when host
         is None — ALL of it. Returns the number of corpus rows removed."""
         if host is None:
-            n = self.db.execute("SELECT COUNT(*) FROM corpus").fetchone()[0]
-            for t in ("runs", "findings", "host_techs", "corpus", "host_fp", "word_stats"):
-                self.db.execute(f"DELETE FROM {t}")
-            self.db.commit()
-            self.db.execute("VACUUM")
+            with self.db:
+                n = self.db.execute("SELECT COUNT(*) FROM corpus").fetchone()[0]
+                for t in ("report_snapshots", "runs", "findings", "host_techs", "corpus", "host_fp", "word_stats"):
+                    self.db.execute(f"DELETE FROM {t}")
             return n
         h = _norm_host(host)
-        n = self.db.execute("SELECT COUNT(*) FROM corpus WHERE host = ?", (h,)).fetchone()[0]
-        for t in ("runs", "findings", "host_techs", "corpus", "host_fp"):
-            self.db.execute(f"DELETE FROM {t} WHERE host = ?", (h,))
-        self.db.commit()
+        with self.db:
+            n = self.db.execute("SELECT COUNT(*) FROM corpus WHERE host = ?", (h,)).fetchone()[0]
+            self.db.execute("DELETE FROM report_snapshots WHERE run_id IN "
+                            "(SELECT id FROM runs WHERE host = ?)", (h,))
+            for t in ("runs", "findings", "host_techs", "corpus", "host_fp"):
+                self.db.execute(f"DELETE FROM {t} WHERE host = ?", (h,))
         return n
 
     def history(self, host: str | None = None, limit: int = 20) -> list[tuple]:

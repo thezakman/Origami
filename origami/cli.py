@@ -552,10 +552,10 @@ def _show_history(args) -> int:
     if not rows:
         print("no scan history yet")
     else:
-        print(f"{'when':<20} {'host':<28} {'reqs':>6} {'hits':>5}  techs")
+        print(f"{'id':>6} {'when':<20} {'host':<28} {'reqs':>6} {'hits':>5}  techs")
         for _id, host, ts, reqs, hits, techs in rows:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
-            print(f"{when:<20} {host:<28} {reqs:>6} {hits:>5}  {techs or '-'}")
+            print(f"{_id:>6} {when:<20} {host:<28} {reqs:>6} {hits:>5}  {techs or '-'}")
     mem.close()
     return 0
 
@@ -577,6 +577,8 @@ def main() -> None:
                     version=f"origami {__version__}")
     ap.add_argument("--review-report", metavar="FILE",
                     help="review a saved JSON report offline; print a JSON summary, without network or DB access")
+    ap.add_argument("--export-run", type=int, metavar="ID",
+                    help="recover a stored report from --db into a NEW --json file; no network access")
     ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
     ap.add_argument("-u", "--url", dest="url_opt", action="append", metavar="URL",
                     help="target base URL as a flag (repeatable) — lets you keep the URL "
@@ -826,6 +828,22 @@ def main() -> None:
     # (which reads args.url) works unchanged whichever form the user used.
     if args.url_opt:
         args.url = list(args.url or []) + args.url_opt
+
+    if args.export_run is not None:
+        if args.url or not args.json or any(value != ap.get_default(key) for key, value in vars(args).items()
+                                            if key not in {"export_run", "db", "json", "url", "url_opt"}):
+            ap.error("--export-run requires --json and accepts only --db")
+        import sqlite3
+
+        from origami.output.archive import export_saved_report
+        try:
+            export_saved_report(Path(args.db), args.export_run, Path(args.json))
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"[!] report recovery failed: {type(exc).__name__}; "
+                  "check run ID, snapshot availability and a new output path", file=sys.stderr)
+            sys.exit(2)
+        print("[+] saved report recovered")
+        sys.exit(0)
 
     if args.review_report:
         if args.url or any(value != ap.get_default(key) for key, value in vars(args).items()
