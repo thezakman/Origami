@@ -8,6 +8,10 @@ All notable changes to Origami are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Make `--history` read-only without creating or migrating databases. Require an
+  existing database for deletion/cleanup and close maintenance connections on
+  failure. Reject conflicting maintenance/offline modes; handle database failures
+  with safe diagnostics and exit code 2. Escape controls in displayed history.
 - Treat evidence as literal text in Rich findings, reports, progress and logs.
   Escape terminal control and Unicode format characters in Rich/plain presentation
   and diff output, preserving raw JSON evidence. Malformed markup in notes no

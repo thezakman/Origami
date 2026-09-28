@@ -4,9 +4,10 @@ Data: 28/09/2026 · Terceira passagem: revisão crítica do plano · Versão: `1
 
 ## Estado da implementação
 
-Após aprovação, foram executadas sete etapas defensivas: validação e recursos;
+Após aprovação, foram executadas nove etapas defensivas: validação e recursos;
 persistência e exportação; proteção de cabeçalhos e transporte; resumo offline;
-preservação/recuperação do histórico; diff conservador; confirmação de exportação. O registro atualizado,
+preservação/recuperação do histórico; diff conservador; confirmação de exportação;
+apresentação literal de evidências; manutenção sem criação/migração acidental. O registro atualizado,
 com testes e limitações, está em [docs/hardening-progress.md](docs/hardening-progress.md).
 O texto abaixo preserva o diagnóstico da revisão inicial: referências a ausência
 de alterações e testes anteriores descrevem aquele momento, não o estado atual.

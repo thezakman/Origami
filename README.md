@@ -394,3 +394,9 @@ characters are shown as visible escapes and Rich markup inside notes, URLs and
 labels is not interpreted. Raw JSON evidence is preserved. Escaping protects
 terminal rendering; it is not secret redaction. Live session termination alone
 is not reported as proof that every stage completed.
+
+`--history` opens existing databases read-only and does not create or migrate a
+missing/legacy database. `--forget` and `--forget-noise` require an existing database
+and close it on failure. Maintenance/offline actions cannot be combined in one
+invocation. Database failures return code 2 with a diagnostic that omits raw error
+values. History fields use the same terminal-control escaping as report text.

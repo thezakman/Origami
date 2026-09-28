@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 import sys
 import time
 from contextlib import ExitStack
@@ -30,6 +31,7 @@ from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
 from origami.core.scheduler import resolve_wordlist
 from origami.output import artifacts, graph, html_report, json_report, ui
+from origami.output.text import terminal_text
 
 
 def _int_set(s: str | None) -> set[int] | None:
@@ -521,42 +523,42 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
 
 
 def _forget(args) -> int:
-    mem = Memory(args.db)
+    if not Path(args.db).is_file():
+        raise FileNotFoundError("memory database does not exist")
     target = args.forget
-    if target.lower() == "all":
-        n = mem.forget(None)
-        print(f"[+] memory wiped — removed {n} corpus paths (all hosts)")
-    else:
-        host = urlparse(target).netloc or target
+    host = None if target.lower() == "all" else (urlparse(target).netloc or target)
+    with Memory(args.db) as mem:
         n = mem.forget(host)
-        print(f"[+] forgot {host} — removed {n} corpus paths")
+    if host is None:
+        print(f"[+] memory records deleted — removed {n} corpus paths (all hosts)")
+    else:
+        print(f"[+] forgot {terminal_text(host)} — removed {n} corpus paths")
         print("[!] shared word statistics remain; legacy data cannot be attributed to one host. "
               "Use a separate --db per project; --forget all clears that whole database.", file=sys.stderr)
-    mem.close()
     return 0
 
 
 def _forget_noise(args) -> int:
-    mem = Memory(args.db)
-    n = mem.prune_fingerprinted()
+    if not Path(args.db).is_file():
+        raise FileNotFoundError("memory database does not exist")
+    with Memory(args.db) as mem:
+        n = mem.prune_fingerprinted()
     print(f"[+] pruned {n} content-hashed/fingerprinted entries from memory")
-    mem.close()
     return 0
 
 
 def _show_history(args) -> int:
+    from origami.output.archive import read_history
     first = args.url[0] if args.url else None
     host = (urlparse(first).netloc or first) if first else None
-    mem = Memory(args.db)
-    rows = mem.history(host=host)
+    rows = read_history(Path(args.db), host=host)
     if not rows:
         print("no scan history yet")
     else:
         print(f"{'id':>6} {'when':<20} {'host':<28} {'reqs':>6} {'hits':>5}  techs")
         for _id, host, ts, reqs, hits, techs in rows:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
-            print(f"{_id:>6} {when:<20} {host:<28} {reqs:>6} {hits:>5}  {techs or '-'}")
-    mem.close()
+            print(f"{_id:>6} {when:<20} {terminal_text(host):<28} {reqs:>6} {hits:>5}  {terminal_text(techs or '-')}")
     return 0
 
 
@@ -829,12 +831,15 @@ def main() -> None:
     if args.url_opt:
         args.url = list(args.url or []) + args.url_opt
 
+    if sum(bool(mode) for mode in (args.update, args.init_credentials, args.history,
+                                  args.forget, args.forget_noise, args.review_report,
+                                  args.export_run is not None)) > 1:
+        ap.error("maintenance and offline modes must be used alone")
+
     if args.export_run is not None:
         if args.url or not args.json or any(value != ap.get_default(key) for key, value in vars(args).items()
                                             if key not in {"export_run", "db", "json", "url", "url_opt"}):
             ap.error("--export-run requires --json and accepts only --db")
-        import sqlite3
-
         from origami.output.archive import export_saved_report
         try:
             export_saved_report(Path(args.db), args.export_run, Path(args.json))
@@ -877,12 +882,14 @@ def main() -> None:
               "--origin.\n    (environment variables override the file; with none set, "
               "--origin uses keyless crt.sh)")
         sys.exit(0)
-    if args.history:
-        sys.exit(_show_history(args))
-    if args.forget:
-        sys.exit(_forget(args))
-    if args.forget_noise:
-        sys.exit(_forget_noise(args))
+    for enabled, action in ((args.history, _show_history), (args.forget, _forget),
+                            (args.forget_noise, _forget_noise)):
+        if enabled:
+            try:
+                sys.exit(action(args))
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                print(f"[!] memory operation failed: {type(exc).__name__}", file=sys.stderr)
+                sys.exit(2)
     # stdin counts as a target source: `-l -`, or a bare pipe when nothing else
     # given. Read it eagerly (once) so an empty pipe still hits the error below.
     args._stdin_targets = []

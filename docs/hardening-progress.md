@@ -85,6 +85,12 @@ Cinco regressões falharam antes da correção: notas com markup inválido derru
 
 Validação: 80 testes locais passaram, incluindo sete regressões de apresentação; Ruff e Mypy passaram (70 arquivos). Limite: proteção de renderização não é remoção de segredos; a CLI ainda possui mensagens fora dos observers que exigem revisão própria.
 
+## Etapa 9 — Manutenção sem efeitos inesperados
+
+Seis regressões falharam antes da correção: histórico criava banco ausente, migrava banco legado, exclusão deixava conexão aberta ao falhar, exclusão criava banco ausente, banco corrompido escapava como traceback e combinação de histórico/exclusão era silenciosamente aceita. Corrigido com leitura somente leitura, checagem de existência, context managers, rejeição de modos conflitantes e erros locais de manutenção com código 2. Histórico também escapa controles de terminal.
+
+Validação consolidada: 86 testes locais passaram; Ruff e Mypy passaram (70 arquivos). O teste legado compara os bytes do banco antes/depois. Nenhum teste de rede ou exploração foi executado. As mudanças não corrigem a identidade compartilhada legada dos dados de aprendizado nem representam isolamento completo por projeto.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.
