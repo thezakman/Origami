@@ -236,7 +236,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     # common/vendor chunk) routinely exceeds the engine's default 2MB
     # OOM-guard cap — same reasoning as apidocs.SPEC_MAX_BODY, just for the
     # root fetch instead of a discovered spec.
-    _root_cap = {"max_body": js_parser.JS_MAX_BODY} if urlparse(base_url).path.lower().endswith((".js", ".mjs")) else {}
+    _root_cap: dict = {"max_body": js_parser.JS_MAX_BODY} if urlparse(base_url).path.lower().endswith((".js", ".mjs")) else {}
     root = await engine.fetch(base_url, keep_body=True, **_root_cap)
     if root.truncated:
         observer.log(f"root: body truncated at {root.length}B — the response is larger than "

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import re
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -67,11 +69,16 @@ def _parse_headers(items) -> dict[str, str]:
     out: dict[str, str] = {}
     for raw in items or []:
         if ":" not in raw:
-            raise SystemExit(f"[!] bad header (need 'Name: Value'): {raw!r}")
+            raise SystemExit("[!] bad header (need 'Name: Value')")
         name, _, value = raw.partition(":")
         name = name.strip()
-        if not name:
-            raise SystemExit(f"[!] bad header (empty name): {raw!r}")
+        if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name):
+            raise SystemExit("[!] invalid header name")
+        if any(ord(c) < 32 and c != "\t" for c in value) or "\x7f" in value:
+            raise SystemExit("[!] invalid control character in header")
+        for previous in list(out):
+            if previous.lower() == name.lower():
+                del out[previous]
         out[name] = value.strip()
     return out
 
@@ -112,7 +119,10 @@ def _parse_duration(s: str | None) -> float:
     s = s.strip().lower()
     mult = {"s": 1, "m": 60, "h": 3600}.get(s[-1:])
     try:
-        return float(s[:-1]) * mult if mult else float(s)
+        value = float(s[:-1]) * mult if mult else float(s)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError
+        return value
     except ValueError:
         raise SystemExit(f"[!] bad --time-limit (use 30s/10m/1h or seconds): {s!r}") from None
 
@@ -120,9 +130,15 @@ def _parse_duration(s: str | None) -> float:
 def _normalize_url(raw: str) -> str:
     if "://" not in raw:
         raw = "http://" + raw
-    p = urlparse(raw)
-    if not p.netloc:
-        raise SystemExit(f"[!] invalid URL: {raw!r}")
+    try:
+        p = urlparse(raw)
+        if (p.scheme not in ("http", "https") or not p.hostname
+                or p.username is not None or p.password is not None
+                or any(c.isspace() or ord(c) < 32 for c in raw)):
+            raise ValueError
+        _ = p.port
+    except ValueError:
+        raise SystemExit("[!] invalid HTTP(S) URL; use a host and valid port, without userinfo") from None
     base = f"{p.scheme}://{p.netloc}"
     return base + (p.path if p.path and p.path != "/" else "/")
 
@@ -137,7 +153,7 @@ def _collect_targets(args) -> list[str]:
     # stdin targets were read once during validation (bare pipe or `-l -`).
     raw += list(getattr(args, "_stdin_targets", None) or [])
     if args.list and args.list != "-":
-        raw += _read_url_lines(Path(args.list).read_text())
+        raw += _read_url_lines(Path(args.list).read_text(encoding="utf-8"))
     seen, out = set(), []
     for r in raw:
         u = _normalize_url(r)
@@ -200,7 +216,46 @@ def _write_outputs(args, result, target, multi: bool) -> None:
         print(f"[!] could not write output for {target}: {e}", file=sys.stderr)
 
 
+def _validate_inputs(args) -> tuple[dict[str, str], list[str]]:
+    """Validate before opening output files, memory or network resources."""
+    for key, minimum in (("concurrency", 1), ("timeout", 0), ("rate", 0),
+                         ("delay", 0), ("depth", 0), ("max_requests", 0),
+                         ("max_folds", 0)):
+        value = getattr(args, key)
+        if not math.isfinite(value) or value < minimum or (key == "timeout" and value == 0):
+            raise SystemExit(f"[!] invalid --{key.replace('_', '-')}: value out of range")
+    _parse_duration(args.time_limit)
+    headers = _parse_headers(args.header)
+    proxies = []
+    if args.proxy_file:
+        try:
+            proxies = _read_url_lines(Path(args.proxy_file).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            raise SystemExit("[!] --proxy-file unreadable") from None
+        if not proxies:
+            raise SystemExit("[!] --proxy-file has no proxies")
+    for value in [*proxies, args.proxy, args.replay_proxy]:
+        if not value:
+            continue
+        try:
+            p = urlparse(value)
+            if p.scheme not in ("http", "https") or not p.hostname or any(c.isspace() for c in value):
+                raise ValueError
+            _ = p.port
+        except ValueError:
+            raise SystemExit("[!] invalid HTTP(S) proxy URL") from None
+    for value in args.filter_similar_to or []:
+        _normalize_url(value)
+    return headers, proxies
+
+
 async def run(args: argparse.Namespace) -> int:
+    with ExitStack() as resources:
+        return await _run(args, resources)
+
+
+async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
+    headers, proxy_list = _validate_inputs(args)
     targets = _collect_targets(args)
     if not targets:
         print("[!] no targets (give a URL or --list FILE)")
@@ -266,13 +321,13 @@ async def run(args: argparse.Namespace) -> int:
             jsonl_fh = sys.stdout
             args.no_ui = True
         else:
-            jsonl_fh = open(args.jsonl, "w", encoding="utf-8")
+            jsonl_fh = resources.enter_context(open(args.jsonl, "w", encoding="utf-8"))
         def _emit_jsonl(f):
             jsonl_fh.write(_json.dumps(finding_record(f), ensure_ascii=False) + "\n")
             jsonl_fh.flush()
         opts.finding_sink = _emit_jsonl
 
-    memory = None if args.no_learn else Memory(args.db)
+    memory = None if args.no_learn else resources.enter_context(Memory(args.db))
     control = ScanControl()
 
     # Human preamble — suppressed when streaming JSONL to stdout (keep it pure).
@@ -374,21 +429,8 @@ async def run(args: argparse.Namespace) -> int:
         if sys.stdin.isatty() and not args.no_ui:
             print("  controls : [q] quit   ([n] skip directory — once one is discovered)\n")
 
-    # Proxy rotation: load the list once (one URL per line, # comments allowed).
-    proxy_list: list[str] = []
-    if args.proxy_file:
-        try:
-            for ln in Path(args.proxy_file).read_text().splitlines():
-                ln = ln.strip()
-                if ln and not ln.startswith("#"):
-                    proxy_list.append(ln)
-        except OSError as e:
-            raise SystemExit(f"[!] --proxy-file unreadable: {e}") from None
-        if not proxy_list:
-            raise SystemExit(f"[!] --proxy-file {args.proxy_file} has no proxies")
-        if not jsonl_stdout:
-            print(f"  proxies  : rotating across {len(proxy_list)} (from {args.proxy_file})",
-                  file=_status_out)
+    if proxy_list and not jsonl_stdout:
+        print(f"  proxies  : {len(proxy_list)} configured", file=_status_out)
 
     # HTTP/2 needs the optional `h2` package; check once, warn + fall back if absent.
     use_http2 = False
@@ -400,72 +442,66 @@ async def run(args: argparse.Namespace) -> int:
                   file=_status_out)
 
     rc = 0
-    try:
-        async with keyboard_control(control):
-            for i, target in enumerate(targets, 1):
-                if control.quit:
-                    print("[!] quit — skipping remaining targets", file=_status_out)
-                    break
-                if len(targets) > 1:
-                    print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━", file=_status_out)
-                # Fresh Engine + Observer + TargetProfile per URL → each target
-                # is scanned clean (no learned vocab/extensions/baseline bleed
-                # from the previous one). Cross-target SQLite memory is shared by
-                # design (use --no-learn to isolate fully).
-                observer = ui.make_observer(target, enabled=not args.no_ui,
-                                            verbosity=args.verbose, full_url=args.full_url,
-                                            log_stream=sys.stderr if jsonl_stdout else None)
-                cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
-                                   delay=args.delay, rate=args.rate,
-                                   verify_tls=not (args.insecure or args.proxy or proxy_list
-                                                   or args.replay_proxy),
-                                   proxy=args.proxy or "", proxies=proxy_list,
-                                   headers=_parse_headers(args.header),
-                                   user_agent=args.user_agent or EngineConfig.user_agent,
-                                   rotate_ua=args.rotate_ua and not args.user_agent,
-                                   http2=use_http2, legacy_tls=args.legacy_tls)
-                rpath = resume_mod.path_for(target)
-                saved = resume_mod.load(rpath) if args.resume else None
-                if args.resume and saved is None:
-                    print(f"[!] no checkpoint for {target} — scanning fresh", file=_status_out)
-                # --diff: snapshot the last stored run for this host BEFORE the scan
-                # records the new one, so we can diff current vs previous afterward.
-                diff_baseline = (memory.latest_run_findings(urlparse(target).netloc)
-                                 if (args.diff and memory) else None)
-                async with Engine(cfg) as engine:
-                    engine.on_request = observer.on_request   # live heartbeat, every phase
-                    observer.attach_engine(engine)            # live adaptive-throttle readout
-                    with observer:
-                        if saved is not None:
-                            result = await resume_scan(engine, saved, opts, observer,
-                                                       memory, control, rpath)
-                        else:
-                            result = await scan(engine, target, opts, observer, memory,
-                                                control, rpath)
-                if result.completed:
-                    resume_mod.clear(rpath)   # finished cleanly → drop the checkpoint
+    async with keyboard_control(control):
+        for i, target in enumerate(targets, 1):
+            if control.quit:
+                print("[!] quit — skipping remaining targets", file=_status_out)
+                break
+            if len(targets) > 1:
+                print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━", file=_status_out)
+            # Fresh Engine + Observer + TargetProfile per URL → each target
+            # is scanned clean (no learned vocab/extensions/baseline bleed
+            # from the previous one). Cross-target SQLite memory is shared by
+            # design (use --no-learn to isolate fully).
+            observer = ui.make_observer(target, enabled=not args.no_ui,
+                                        verbosity=args.verbose, full_url=args.full_url,
+                                        log_stream=sys.stderr if jsonl_stdout else None)
+            cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
+                               delay=args.delay, rate=args.rate,
+                               verify_tls=not (args.insecure or args.proxy or proxy_list
+                                               or args.replay_proxy),
+                               proxy=args.proxy or "", proxies=proxy_list,
+                               headers=headers,
+                               user_agent=args.user_agent or EngineConfig.user_agent,
+                               rotate_ua=args.rotate_ua and not args.user_agent,
+                               http2=use_http2, legacy_tls=args.legacy_tls)
+            rpath = resume_mod.path_for(target)
+            saved = resume_mod.load(rpath) if args.resume else None
+            if args.resume and saved is None:
+                print(f"[!] no checkpoint for {target} — scanning fresh", file=_status_out)
+            # --diff: snapshot the last stored run for this host BEFORE the scan
+            # records the new one, so we can diff current vs previous afterward.
+            diff_baseline = (memory.latest_run_findings(urlparse(target).netloc)
+                             if (args.diff and memory) else None)
+            async with Engine(cfg) as engine:
+                engine.on_request = observer.on_request   # live heartbeat, every phase
+                observer.attach_engine(engine)            # live adaptive-throttle readout
+                with observer:
+                    if saved is not None:
+                        result = await resume_scan(engine, saved, opts, observer,
+                                                   memory, control, rpath)
+                    else:
+                        result = await scan(engine, target, opts, observer, memory,
+                                            control, rpath)
+            if result.completed:
+                resume_mod.clear(rpath)   # finished cleanly → drop the checkpoint
 
-                if (result.requests_made <= 1 and not result.profile.tech_scores
-                        and not result.findings):
-                    why = f" — {result.error}" if result.error else ""
-                    print(f"[!] {target} unreachable{why}", file=_status_out)
-                    rc = 2
-                    continue
-                if not jsonl_stdout:           # keep stdout pure JSONL in pipe mode
-                    streamed = getattr(observer, "streamed", False)
-                    ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
-                                    show_fingerprint=(not streamed) or args.fp)
-                    if args.curl:
-                        ui.print_curls(result)
-                    if args.diff:
-                        _print_diff(diff_baseline, result, urlparse(target).netloc,
-                                    have_memory=memory is not None, out=_status_out)
-                _write_outputs(args, result, target, multi=len(targets) > 1)
-    finally:
-        if memory is not None:
-            memory.close()
-        if jsonl_fh is not None and jsonl_fh is not sys.stdout:
-            jsonl_fh.close()
+            if (result.requests_made <= 1 and not result.profile.tech_scores
+                    and not result.findings):
+                why = f" — {result.error}" if result.error else ""
+                print(f"[!] {target} unreachable{why}", file=_status_out)
+                rc = 2
+                continue
+            if not jsonl_stdout:           # keep stdout pure JSONL in pipe mode
+                streamed = getattr(observer, "streamed", False)
+                ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
+                                show_fingerprint=(not streamed) or args.fp)
+                if args.curl:
+                    ui.print_curls(result)
+                if args.diff:
+                    _print_diff(diff_baseline, result, urlparse(target).netloc,
+                                have_memory=memory is not None, out=_status_out)
+            _write_outputs(args, result, target, multi=len(targets) > 1)
     return rc
 
 
@@ -817,7 +853,7 @@ def main() -> None:
     try:
         sys.exit(asyncio.run(run(args)))
     except KeyboardInterrupt:
-        print("\n[!] interrupted — continue with --resume")
+        print("\n[!] interrupted — inspect the last saved checkpoint", file=sys.stderr)
         sys.exit(130)
 
 

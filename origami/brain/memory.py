@@ -20,6 +20,7 @@ import math
 import sqlite3
 import time
 from collections import defaultdict
+from functools import wraps
 from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".origami" / "memory.sqlite"
@@ -169,6 +170,15 @@ def _cosine(a: dict, b: dict) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+def _transaction(method):
+    """Never leave a failed write to be committed by an unrelated operation."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.db:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class Memory:
     def __init__(self, db_path: Path | str = DEFAULT_DB) -> None:
         self.path = Path(db_path)
@@ -282,6 +292,7 @@ class Memory:
             f"WHERE tech IN ({qm}) GROUP BY word", keys).fetchall()
         return {w: (h or 0, m or 0) for w, h, m in rows}
 
+    @_transaction
     def record_word_stats(self, deltas: dict[str, tuple[int, int]], techs: list[str]) -> None:
         """Persist accumulated (hit, miss) deltas under each confirmed tech and
         the global '*' row, so future scans of similar hosts rank smarter."""
@@ -342,6 +353,7 @@ class Memory:
 
     # ---- persistence -------------------------------------------------------
 
+    @_transaction
     def record_run(self, profile, result) -> int:
         confirmed = profile.confirmed_techs()
         host = _norm_host(profile.host)        # www/apex collapse to one memory key
@@ -389,6 +401,7 @@ class Memory:
         assert run_id is not None       # lastrowid is always set right after an INSERT
         return run_id
 
+    @_transaction
     def prune_fingerprinted(self) -> int:
         """Sweep the whole corpus (and findings) and delete every content-hashed
         /fingerprinted path — the one-off build artifacts that carry no

@@ -267,7 +267,16 @@ class Engine:
         # across egress IPs — a per-source rate-limit/ban can't pin the scan);
         # otherwise a single client (the --proxy one, or none).
         proxies = self.cfg.proxies or [self.cfg.proxy or ""]
-        self._clients = [self._new_client(p or None) for p in proxies]
+        self._clients = []
+        try:
+            for p in proxies:
+                self._clients.append(self._new_client(p or None))
+        except BaseException:
+            try:
+                await self.__aexit__(None, None, None)
+            except Exception:
+                pass  # preserve the construction error, after attempting all closes
+            raise
         self._client = self._clients[0]       # default/first (back-compat)
         return self
 
@@ -294,10 +303,14 @@ class Engine:
         return self._clients[0] if len(self._clients) == 1 else random.choice(self._clients)
 
     async def __aexit__(self, *exc) -> None:
-        for c in getattr(self, "_clients", []):
-            await c.aclose()
+        clients = self._clients
         self._clients = []
         self._client = None
+        errors = await asyncio.gather(*(c.aclose() for c in clients), return_exceptions=True)
+        if not any(exc):
+            for error in errors:
+                if isinstance(error, BaseException):
+                    raise error
 
     async def _sleep_before(self) -> None:
         lo, hi = self.cfg.jitter
