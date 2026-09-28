@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from origami.output.text import terminal_text
+
 
 def compute(prior: dict, findings) -> dict:
     """Compare exact URLs, retaining query/origin identity and ambiguous responses.
@@ -46,20 +48,20 @@ def render(d: dict, host: str, prior_ts: float | None = None) -> str:
             since = " since " + datetime.datetime.fromtimestamp(prior_ts).strftime("%Y-%m-%d %H:%M")
         except (ValueError, OSError, OverflowError):
             pass
-    lines = [f"diff [{host}]{since}: {len(d['new'])} newly observed; "
+    lines = [f"diff [{terminal_text(host)}]{since}: {len(d['new'])} newly observed; "
              f"{len(d['unobserved'])} not observed; {len(d['changed'])} changed; "
              f"{len(d['ambiguous'])} ambiguous"]
     if is_empty(d):
         lines.append("  no change in recorded observations")
     for entry in d["new"]:
-        lines.append(f"  + {entry['status']}  {entry['path']}  ({entry['length']}B)")
+        lines.append(f"  + {entry['status']}  {terminal_text(entry['path'])}  ({entry['length']}B)")
     for entry in d["changed"]:
-        lines.append(f"  ~ {entry['was_status']}→{entry['status']}  {entry['path']}  "
+        lines.append(f"  ~ {entry['was_status']}→{entry['status']}  {terminal_text(entry['path'])}  "
                      f"({entry['was_length']}→{entry['length']}B)")
     for entry in d["unobserved"]:
-        lines.append(f"  ? {entry['path']}  (not observed; removal not established)")
+        lines.append(f"  ? {terminal_text(entry['path'])}  (not observed; removal not established)")
     for entry in d["ambiguous"]:
-        lines.append(f"  ? {entry['path']}  (conflicting observations; comparison withheld)")
+        lines.append(f"  ? {terminal_text(entry['path'])}  (conflicting observations; comparison withheld)")
     lines.append("  Context/coverage equivalence is unknown: absence does not prove remediation, "
                  "and a status change does not prove an authorization change.")
     return "\n".join(lines)

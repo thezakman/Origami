@@ -388,3 +388,9 @@ remains marked incomplete. Committed manifests include a SHA-256 and byte count
 for each listed artifact. These are integrity references, not digital signatures.
 Exporting concurrently to the same directory is unsupported; use separate output
 directories for separate runs. Old unlisted files may remain on disk.
+
+Terminal presentation treats evidence text as literal data. Control/format
+characters are shown as visible escapes and Rich markup inside notes, URLs and
+labels is not interpreted. Raw JSON evidence is preserved. Escaping protects
+terminal rendering; it is not secret redaction. Live session termination alone
+is not reported as proof that every stage completed.

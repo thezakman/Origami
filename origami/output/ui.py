@@ -19,9 +19,12 @@ import sys
 import time
 from urllib.parse import urlparse
 
+from origami.output.text import terminal_text
+
 try:
     from rich.console import Console, Group
     from rich.live import Live
+    from rich.markup import escape
     from rich.panel import Panel
     from rich.progress import BarColumn, Progress, ProgressColumn, TextColumn
     from rich.table import Table
@@ -78,11 +81,11 @@ class NullObserver:
 
     def log(self, msg: str, level: int = 1, style: str = "") -> None:
         if self.verbosity >= level:
-            print(msg, file=self.stream)
+            print(terminal_text(msg), file=self.stream)
 
     def request(self, url: str, status: int, hit: bool) -> None:
         if self.verbosity >= 2:
-            print(f"  {status:>3} {'HIT' if hit else '   '}  {url}", file=self.stream)
+            print(f"  {status:>3} {'HIT' if hit else '   '}  {terminal_text(url)}", file=self.stream)
 
     def __enter__(self): return self
     def __exit__(self, *a): ...
@@ -90,7 +93,15 @@ class NullObserver:
 
 def display_url(url: str, full: bool) -> str:
     """Full URL when --full-url is set, else just the path."""
-    return url if full else (urlparse(url).path or "/")
+    try:
+        displayed = url if full else (urlparse(url).path or "/")
+    except ValueError:
+        displayed = url
+    return terminal_text(displayed)
+
+
+def _markup(value: str) -> str:
+    return escape(terminal_text(value)) if HAS_RICH else terminal_text(value)
 
 
 # Per-origin colour so the stream is scannable at a glance.
@@ -124,7 +135,7 @@ TAG_STYLE = {
 
 
 def _tag_markup(tags) -> str:
-    return " ".join(f"[{TAG_STYLE.get(t, 'white')}]{t}[/]" for t in (tags or []))
+    return " ".join(f"[{TAG_STYLE.get(t, 'white')}]{_markup(t)}[/]" for t in (tags or []))
 
 
 def _status_style(code: int) -> str:
@@ -221,7 +232,7 @@ class RichUI(NullObserver):
         task = self._progress.tasks[0]
         task.completed = 0
         task.total = None                          # → animated pulse
-        self._progress.update(self._task, description=f"status [bold cyan]{name}[/]")
+        self._progress.update(self._task, description=f"status [bold cyan]{_markup(name)}[/]")
 
     def substep(self, name: str, done: int | None = None, total: int | None = None) -> None:
         # name the current sub-step within a phase: `recon: apidocs`, `backups:
@@ -229,7 +240,7 @@ class RichUI(NullObserver):
         # (recon); without, the bar stays owned by start_prefix+tick (the folds
         # that count requests).
         self.substep_name = name
-        desc = f"status [bold cyan]{self.phase_name}: {name}[/]"
+        desc = f"status [bold cyan]{_markup(self.phase_name)}: {_markup(name)}[/]"
         if total is not None:
             self._ptotal = max(total, 1)
             self._pcompleted = min(done or 0, self._ptotal)
@@ -243,7 +254,7 @@ class RichUI(NullObserver):
         self._ptotal = max(total, 1)
         self._pcompleted = 0
         self._progress.reset(self._task, total=self._ptotal,
-                             description=f"status [bold cyan]{prefix}[/]")
+                             description=f"status [bold cyan]{_markup(prefix)}[/]")
         self._refresh()
 
     def on_request(self) -> None:
@@ -281,21 +292,21 @@ class RichUI(NullObserver):
         accessible = 200 <= f.status < 300
         ostyle = ORIGIN_STYLE.get(f.origin, "white") if accessible else "dim"
         tags = _tag_markup(getattr(f, "tags", []))
-        note = f" [dim]({f.note})[/]" if getattr(f, "note", "") else ""
+        note = f" [dim]({_markup(f.note)})[/]" if getattr(f, "note", "") else ""
         # A URL carrying a query string IS a payload/PoC (e.g. an OData `?$top=1`) —
         # show it in FULL so it's copy-paste-ready; disp would drop the query. Plain
         # path findings keep the compact path-only display.
-        url_shown = f.url if urlparse(f.url).query else self.disp(f.url)
+        url_shown = f.url if "?" in f.url else self.disp(f.url)
         # fixed-width columns first, URL last → everything lines up cleanly.
         self._live.console.print(
             f"[{style}]{f.status:>3}[/] [dim]{f.length:>9}B[/] "
-            f"[{ostyle}]{f.origin:<9}[/] [dim]{f.confidence:.2f}[/] "
-            f"{(tags + ' ') if tags else ''}{url_shown}{note}")
+            f"[{ostyle}]{_markup(f.origin):<9}[/] [dim]{f.confidence:.2f}[/] "
+            f"{(tags + ' ') if tags else ''}{_markup(url_shown)}{note}")
         self._refresh()
 
     def directory(self, prefix: str, depth: int) -> None:
         self._live.console.print(
-            f"[bold magenta]==>[/] [bold]directory[/] {prefix} [dim](depth {depth})[/]")
+            f"[bold magenta]==>[/] [bold]directory[/] {_markup(prefix)} [dim](depth {depth})[/]")
 
     def fingerprint(self, profile, exts, folds) -> None:
         self.techs = dict(profile.tech_scores)
@@ -310,13 +321,13 @@ class RichUI(NullObserver):
         # dashboard, which stays pinned at the bottom.
         if self.verbosity >= level:
             ts = time.strftime("%H:%M:%S")
-            self._live.console.print(f"[dim]{ts}[/] {msg}", style=style or None)
+            self._live.console.print(f"[dim]{ts}[/] {_markup(msg)}", style=style or None)
 
     def request(self, url: str, status: int, hit: bool) -> None:
         if self.verbosity >= 2:
             tag = "[bold green]HIT[/]" if hit else "[dim]···[/]"
             self._live.console.print(
-                f"  [{_status_style(status)}]{status:>3}[/] {tag}  [dim]{url}[/]")
+                f"  [{_status_style(status)}]{status:>3}[/] {tag}  [dim]{_markup(url)}[/]")
 
     # ---- rendering ----------------------------------------------------------
 
@@ -332,24 +343,24 @@ class RichUI(NullObserver):
         if self.phase_name in self._PHASES:
             return Text(f"phase {self._PHASES.index(self.phase_name) + 1}/{len(self._PHASES)}",
                         style="bold cyan")
-        return Text(self.phase_name, style="bold cyan")
+        return Text(terminal_text(self.phase_name), style="bold cyan")
 
     def _header(self) -> Panel:
         badges = Text()
         for tech, score in list(self.techs.items())[:6]:
             style = "bold white on dark_green" if score >= 50 else "dim"
-            badges.append(f" {tech} ", style=style)
+            badges.append(f" {terminal_text(tech)} ", style=style)
             badges.append(" ")
         if not badges.plain:
             badges = Text("fingerprinting…", style="dim italic")
         fold_txt = Text()
         for fold in sorted(self.folds):
-            fold_txt.append(f" ⌘ {fold} ", style="bold black on cyan")
+            fold_txt.append(f" ⌘ {terminal_text(fold)} ", style="bold black on cyan")
 
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
         grid.add_column(justify="right")
-        grid.add_row(Text(self.target, style="bold"), self._phase_text())
+        grid.add_row(Text(terminal_text(self.target), style="bold"), self._phase_text())
         grid.add_row(badges, fold_txt)
         return Panel(grid, title="[bold]Origami[/]", border_style="green")
 
@@ -368,7 +379,7 @@ class RichUI(NullObserver):
     def _statusbar(self) -> Text:
         t = Text()
         chip = self.phase_name + (f": {self.substep_name}" if self.substep_name else "")
-        t.append(f" {chip} ", style="bold white on blue")
+        t.append(f" {terminal_text(chip)} ", style="bold white on blue")
         t.append("  reqs ", style="dim"); t.append(f"{self.requests}", style="bold")
         t.append(" · ", style="dim"); t.append(f"{self._rate():.0f}/s", style="bold")
         t.append(" · hits ", style="dim"); t.append(f"{self.hits}", style="bold green")
@@ -417,7 +428,7 @@ class RichUI(NullObserver):
     def _print_final(self) -> None:
         started = time.strftime("%H:%M:%S", time.localtime(self.start_wall))
         ended = time.strftime("%H:%M:%S")
-        console.print(f"\n[bold green]✓[/] scan complete — "
+        console.print(f"\n[bold]session ended[/] — "
                       f"[bold]{len(self.findings)}[/] findings in "
                       f"[bold]{self.requests}[/] requests "
                       f"([bold]{self._rate():.0f}[/] req/s)")
@@ -471,7 +482,7 @@ class PlainLiveObserver(NullObserver):
         return f"{s // 60:d}:{s % 60:02d}"
 
     def _status(self) -> str:
-        s = (f"\x1b[44;1m {self.phase_name} \x1b[0m "
+        s = (f"\x1b[44;1m {terminal_text(self.phase_name)} \x1b[0m "
              f"reqs \x1b[1m{self.requests}\x1b[0m · {self._rate():.0f}/s · "
              f"hits \x1b[1;32m{self.hits}\x1b[0m · {self._elapsed()}")
         if self.pushbacks:
@@ -511,26 +522,26 @@ class PlainLiveObserver(NullObserver):
     def finding(self, f, stream: bool = True) -> None:
         if not stream:                  # block-wall flood — muted in the live view
             return
-        tags = f" \x1b[1;31m[{','.join(f.tags)}]\x1b[0m" if getattr(f, "tags", None) else ""
+        tags = f" \x1b[1;31m[{terminal_text(','.join(f.tags))}]\x1b[0m" if getattr(f, "tags", None) else ""
         accessible = 200 <= f.status < 300
         marker = "\x1b[32m+\x1b[0m" if accessible else "\x1b[33m·\x1b[0m"   # + accessible / · blocked
-        origin = f"{f.origin:<9}" if accessible else f"\x1b[2m{f.origin:<9}\x1b[0m"
+        origin = f"{terminal_text(f.origin):<9}" if accessible else f"\x1b[2m{terminal_text(f.origin):<9}\x1b[0m"
         self._emit(f"{marker} {f.status}  \x1b[2m{f.length:>8}B\x1b[0m  "
                    f"{origin} \x1b[2m{f.confidence:.2f}\x1b[0m {self.disp(f.url)}{tags}")
 
     def directory(self, prefix: str, depth: int) -> None:
-        self._emit(f"\x1b[1;35m==>\x1b[0m directory {prefix} \x1b[2m(depth {depth})\x1b[0m")
+        self._emit(f"\x1b[1;35m==>\x1b[0m directory {terminal_text(prefix)} \x1b[2m(depth {depth})\x1b[0m")
 
     def pushback(self, n: int) -> None:
         self.pushbacks = n
 
     def log(self, msg: str, level: int = 1, style: str = "") -> None:
         if self.verbosity >= level:
-            self._emit(msg)
+            self._emit(terminal_text(msg))
 
     def request(self, url: str, status: int, hit: bool) -> None:
         if self.verbosity >= 2:
-            self._emit(f"  {status:>3} {'HIT' if hit else '   '}  {url}")
+            self._emit(f"  {status:>3} {'HIT' if hit else '   '}  {terminal_text(url)}")
 
 
 def make_observer(target: str, enabled: bool, verbosity: int = 0, full_url: bool = False,
@@ -573,23 +584,23 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
         fp.add_column(justify="right", style="dim")
         fp.add_column()
         techs = " ".join(
-            f"[bold white on dark_green] {t} [/]" if s >= 50 else f"[dim]{t}:{s:.0f}[/]"
+            f"[bold white on dark_green] {_markup(t)} [/]" if s >= 50 else f"[dim]{_markup(t)}:{s:.0f}[/]"
             for t, s in p.tech_scores.items()
         ) or "[dim]none[/]"
         fp.add_row("tech", techs)
         if p.waf:
-            fp.add_row("WAF", f"[bold white on red] {p.waf} [/]")
+            fp.add_row("WAF", f"[bold white on red] {_markup(p.waf)} [/]")
         fp.add_row("soft-404/wildcard", "[yellow]YES[/]" if p.wildcard else "no")
         if p.case_sensitive is not None:
             fp.add_row("case-sensitive", "yes" if p.case_sensitive else "[yellow]NO (Windows/IIS)[/]")
         if p.enabled_extensions:
-            fp.add_row("extensions", " ".join(sorted(p.enabled_extensions)))
+            fp.add_row("extensions", _markup(" ".join(sorted(p.enabled_extensions))))
         if result.folds:
-            fp.add_row("folds", " ".join(f"[bold black on cyan] ⌘ {f} [/]" for f in sorted(result.folds)))
+            fp.add_row("folds", " ".join(f"[bold black on cyan] ⌘ {_markup(f)} [/]" for f in sorted(result.folds)))
         if p.parameters:
             shown = sorted(p.parameters)
             preview = ", ".join(shown[:18]) + (f"  (+{len(shown) - 18} more)" if len(shown) > 18 else "")
-            fp.add_row("parameters", f"[cyan]{len(shown)}[/] [dim]{preview}[/]")
+            fp.add_row("parameters", f"[cyan]{len(shown)}[/] [dim]{_markup(preview)}[/]")
         if result.pushbacks:
             fp.add_row("throttling", f"[bold red]{result.pushbacks} backoff events[/] "
                                      f"[dim](target rate-limited / pushed back)[/]")
@@ -607,14 +618,14 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
     tbl.add_column("tags")
     tbl.add_column("path", ratio=1, no_wrap=True)
     for f in result.findings:
-        note = f" [dim]({f.note})[/]" if getattr(f, "note", "") else ""
+        note = f" [dim]({_markup(f.note)})[/]" if getattr(f, "note", "") else ""
         tbl.add_row(
             Text(str(f.status), style=_status_style(f.status)),
             f"{f.length}B",
-            f"[{ORIGIN_STYLE.get(f.origin, 'white')}]{f.origin}[/]",
+            f"[{ORIGIN_STYLE.get(f.origin, 'white')}]{_markup(f.origin)}[/]",
             f"{f.confidence:.2f}",
             _tag_markup(getattr(f, "tags", [])),
-            display_url(f.url, full_url) + (note or ""),
+            _markup(display_url(f.url, full_url)) + (note or ""),
         )
     console.print(tbl)
 
@@ -642,11 +653,11 @@ def print_curls(result) -> None:
              for f in findings]
     body = "\n".join(lines)
     if HAS_RICH and console:
-        console.print(Panel(body, title=f"[bold]Reproduce ({len(findings)})[/]",
+        console.print(Panel(Text(terminal_text(body, multiline=True)), title=f"[bold]Reproduce ({len(findings)})[/]",
                             border_style="cyan", expand=False))
     else:
         print(f"\n=== Reproduce ({len(findings)}) ===")
-        print(body)
+        print(terminal_text(body, multiline=True))
 
 
 def _plain_report(result, full_url: bool = False, show_findings: bool = True,
@@ -655,24 +666,24 @@ def _plain_report(result, full_url: bool = False, show_findings: bool = True,
     if show_fingerprint:
         print("\n=== Fingerprint ===")
         for t, s in p.tech_scores.items():
-            print(f"  [{'✓' if s >= 50 else ' '}] {t:<12} {s:.0f}")
+            print(f"  [{'✓' if s >= 50 else ' '}] {terminal_text(t):<12} {s:.0f}")
         if p.waf:
-            print(f"  WAF: {p.waf}")
+            print(f"  WAF: {terminal_text(p.waf)}")
         print(f"  wildcard/soft-404: {'YES' if p.wildcard else 'no'}")
         if p.enabled_extensions:
-            print(f"  extensions: {' '.join(sorted(p.enabled_extensions))}")
+            print(f"  extensions: {terminal_text(' '.join(sorted(p.enabled_extensions)))}")
         if result.folds:
-            print(f"  folds: {', '.join(sorted(result.folds))}")
+            print(f"  folds: {terminal_text(', '.join(sorted(result.folds)))}")
         if p.parameters:
-            print(f"  parameters ({len(p.parameters)}): {', '.join(sorted(p.parameters))}")
+            print(f"  parameters ({len(p.parameters)}): {terminal_text(', '.join(sorted(p.parameters)))}")
         if result.pushbacks:
             print(f"  throttling: {result.pushbacks} backoff events (target rate-limited)")
     if not show_findings:
         return    # findings already streamed live; the ✓ summary line has the count
     print(f"\n=== Findings ({len(result.findings)}) — {result.requests_made} requests ===")
     for f in result.findings:
-        note = f"  ({f.note})" if getattr(f, "note", "") else ""
-        tags = f"  [{','.join(f.tags)}]" if getattr(f, "tags", None) else ""
-        print(f"  {f.status}  {f.confidence:.2f}  [{f.origin:<8}] {display_url(f.url, full_url)}  "
+        note = f"  ({terminal_text(f.note)})" if getattr(f, "note", "") else ""
+        tags = f"  [{terminal_text(','.join(f.tags))}]" if getattr(f, "tags", None) else ""
+        print(f"  {f.status}  {f.confidence:.2f}  [{terminal_text(f.origin):<8}] {display_url(f.url, full_url)}  "
               f"{f.length}B{tags}{note}")
     print()

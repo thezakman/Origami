@@ -79,6 +79,12 @@ Validação consolidada: 73 testes locais passaram; Ruff passou; Mypy passou em 
 
 Limites: hashes não são assinatura; exportações concorrentes no mesmo diretório não são suportadas; arquivos antigos não listados podem permanecer; a durabilidade da entrada de diretório após falha elétrica não está garantida.
 
+## Etapa 8 — Evidência literal no terminal
+
+Cinco regressões falharam antes da correção: notas com markup inválido derrubavam tanto o relatório Rich quanto o streaming; logs, texto simples e diff transmitiam controles de terminal. A apresentação agora escapa markup e torna caracteres de controle/formatação visíveis, mantendo o JSON original. Progresso, badges, diretórios e cabeçalhos usam a mesma proteção. O encerramento da UI deixa de afirmar conclusão do scan sem receber seu estado.
+
+Validação: 80 testes locais passaram, incluindo sete regressões de apresentação; Ruff e Mypy passaram (70 arquivos). Limite: proteção de renderização não é remoção de segredos; a CLI ainda possui mensagens fora dos observers que exigem revisão própria.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

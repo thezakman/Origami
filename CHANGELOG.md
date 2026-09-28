@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [Unreleased]
+
+### Fixed
+- Treat evidence as literal text in Rich findings, reports, progress and logs.
+  Escape terminal control and Unicode format characters in Rich/plain presentation
+  and diff output, preserving raw JSON evidence. Malformed markup in notes no
+  longer crashes report rendering.
+- The live UI says the session ended rather than asserting scan completion without
+  result-state information.
+
 ## [1.14.0] - 2026-09-28
 
 ### Fixed
