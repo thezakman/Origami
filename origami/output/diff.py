@@ -21,12 +21,14 @@ def compute(prior: dict, findings) -> dict:
         if (url in prior and old is None) or len(values) > 1:
             result["ambiguous"].append({"path": url})
         elif not values:
+            assert old is not None
             result["unobserved"].append({"path": url, "was_status": old[0], "was_length": old[1]})
         else:
             status, length = next(iter(values))
             if url not in prior:
                 result["new"].append({"path": url, "status": status, "length": length})
             elif old != (status, length):
+                assert old is not None
                 result["changed"].append({"path": url, "status": status, "length": length,
                                           "was_status": old[0], "was_length": old[1]})
     return result
