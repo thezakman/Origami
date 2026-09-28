@@ -381,3 +381,10 @@ status/length observations for the same URL are marked ambiguous instead of taki
 the last row. These summaries do not establish equivalent authentication, filters
 or coverage between runs. Internal diff keys are now `new`, `unobserved`, `changed`
 and `ambiguous`; the unsupported `gone`/`opened` conclusions have been removed.
+
+Artifact bundles invalidate their previous completion manifest before replacing
+any file. If final manifest persistence fails or export is interrupted, the bundle
+remains marked incomplete. Committed manifests include a SHA-256 and byte count
+for each listed artifact. These are integrity references, not digital signatures.
+Exporting concurrently to the same directory is unsupported; use separate output
+directories for separate runs. Old unlisted files may remain on disk.

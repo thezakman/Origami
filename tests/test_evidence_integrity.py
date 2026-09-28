@@ -169,3 +169,58 @@ class TestConservativeComparison(unittest.TestCase):
             baseline = mem.latest_run_findings("example.test", base_url=first.profile.base_url)
             self.assertEqual(baseline[0], first_id)
             self.assertIn(first.findings[0].url, baseline[2])
+
+
+class TestBundleCommit(unittest.TestCase):
+    def test_final_manifest_failure_cannot_leave_old_success_marker(self):
+        from origami.output import artifacts
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            artifacts.write_artifacts(sample(), folder)
+            original_write = artifacts.atomic_write
+            calls = 0
+
+            def fail_final(path, text):
+                nonlocal calls
+                if Path(path).name == "manifest.json":
+                    calls += 1
+                    if calls == 2 or json.loads(text)["completed"]:
+                        raise OSError("synthetic final manifest failure")
+                return original_write(path, text)
+
+            with patch.object(artifacts, "atomic_write", side_effect=fail_final):
+                with self.assertRaises(OSError):
+                    artifacts.write_artifacts(sample("https://example.test/changed"), folder)
+            manifest = json.loads((folder / "manifest.json").read_text())
+            self.assertFalse(manifest["completed"])
+            self.assertEqual(manifest["files"], {})
+
+    def test_initial_manifest_failure_preserves_existing_artifacts(self):
+        from origami.output import artifacts
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            artifacts.write_artifacts(sample(), folder)
+            before = {path.name: path.read_bytes() for path in folder.iterdir()}
+            original_write = artifacts.atomic_write
+
+            def fail_manifest(path, text):
+                if Path(path).name == "manifest.json":
+                    raise OSError("synthetic initial manifest failure")
+                return original_write(path, text)
+
+            with patch.object(artifacts, "atomic_write", side_effect=fail_manifest), self.assertRaises(OSError):
+                artifacts.write_artifacts(sample("https://example.test/changed"), folder)
+            self.assertEqual(before, {path.name: path.read_bytes() for path in folder.iterdir()})
+
+    def test_manifest_hashes_match_exact_export_bytes(self):
+        import hashlib
+
+        from origami.output import artifacts
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            artifacts.write_artifacts(sample(), folder)
+            manifest = json.loads((folder / "manifest.json").read_text())
+            for name in manifest["files"]:
+                raw = (folder / name).read_bytes()
+                self.assertEqual(manifest["integrity"][name]["sha256"], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(manifest["integrity"][name]["bytes"], len(raw))

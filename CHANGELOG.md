@@ -8,6 +8,10 @@ All notable changes to Origami are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Artifact export invalidates the old completion marker before replacing files.
+  Interrupted exports or final-manifest failures cannot leave an old success
+  manifest attached to a partially replaced bundle. Record hashes and byte counts
+  for each successfully written artifact.
 - Diff baselines use the exact base URL and full observation URLs, preserving query
   and port distinctions. Conflicting responses remain ambiguous. Missing findings
   are labeled unobserved, and status changes no longer claim new authorization.

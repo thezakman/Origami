@@ -71,12 +71,20 @@ Cinco regressões falharam antes da correção: perda da identidade de consultas
 
 Validação: 51 testes locais passaram; Ruff e Mypy passaram. O diff agora usa `new`, `unobserved`, `changed` e `ambiguous`. Equivalência de autenticação, filtros e cobertura permanece desconhecida; não é uma confirmação de correção ou de mudança de autorização.
 
+## Etapa 7 — Confirmação de exportação consistente
+
+A exportação anterior podia substituir arquivos e falhar ao gravar o manifesto, deixando o marcador antigo de sucesso. A regressão de preservação do conjunto anterior falhou antes da correção. Agora um manifesto incompleto é persistido antes de qualquer substituição; a confirmação final lista apenas arquivos gravados, com SHA-256 e tamanho. Falha na invalidação inicial preserva os artefatos anteriores; falha final mantém o estado incompleto.
+
+Validação consolidada: 73 testes locais passaram; Ruff passou; Mypy passou em 69 arquivos. Inclui falhas injetadas nas gravações inicial/final e comparação dos hashes com os bytes reais. O ajuste de tipos da etapa 6 está em commit adicional. Não foi executada a suíte de exploração nem tráfego externo.
+
+Limites: hashes não são assinatura; exportações concorrentes no mesmo diretório não são suportadas; arquivos antigos não listados podem permanecer; a durabilidade da entrada de diretório após falha elétrica não está garantida.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.
 - Estado por etapa, cobertura mensurável e identidade de configuração/autenticação para comparações.
 - Isolamento por projeto, exclusão dos dados derivados e revisão de apresentação em todos os canais.
-- Reexportação e anotações de revisão offline, integridade do catálogo, empacotamento e avaliação com corpus rotulado.
+- Anotações de revisão offline, integridade do catálogo, empacotamento e avaliação com corpus rotulado.
 - Interface de projeto e assistência inteligente explicável continuam propostas, sem implementação nesta execução.
 
 ## Limites de execução

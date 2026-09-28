@@ -16,6 +16,7 @@ fuzzing, manual review) instead of dying in the terminal scrollback.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -32,7 +33,13 @@ def _write_lines(path: Path, items) -> int:
 def write_artifacts(result, out_dir: str | Path) -> dict:
     d = Path(out_dir)
     private_directory(d)
-    files, errors = {}, {}
+    # Invalidate the previous success marker BEFORE replacing any artifact. A
+    # crash or failed final manifest cannot authenticate a mixed-generation set.
+    pending = {"schema_version": 1, "completed": False, "files": {}, "integrity": {},
+               "errors": {"export": "in_progress"},
+               "note": "Export has not committed; do not treat existing files as a complete bundle."}
+    atomic_write(d / "manifest.json", json.dumps(pending, indent=2))
+    files, errors, integrity = {}, {}, {}
     params = set(result.profile.parameters)
     urls = {f.url for f in result.findings}
     paths = set(result.harvested_paths)
@@ -53,14 +60,20 @@ def write_artifacts(result, out_dir: str | Path) -> dict:
     for name, writer in writers.items():
         try:
             writer()
-            if name == "graph":
-                files.update({"graph.html": "written", "graph.dot": "written"})
-            else:
-                files[name] = "written"
+            names = ("graph.html", "graph.dot") if name == "graph" else (name,)
+            for written in names:
+                digest = hashlib.sha256()
+                size = 0
+                with (d / written).open("rb") as stream:
+                    while chunk := stream.read(65536):
+                        digest.update(chunk)
+                        size += len(chunk)
+                integrity[written] = {"sha256": digest.hexdigest(), "bytes": size}
+                files[written] = "written"
         except (OSError, ValueError, RecursionError) as exc:
             errors[name] = type(exc).__name__
     manifest = {"schema_version": 1, "completed": not errors,
-                "files": files, "errors": errors,
+                "files": files, "errors": errors, "integrity": integrity,
                 "note": "Only files marked written belong to this export; other files may be from older runs."}
     atomic_write(d / "manifest.json", json.dumps(manifest, indent=2))
 
