@@ -480,7 +480,7 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
                 print(f"[!] no checkpoint for {target} — scanning fresh", file=_status_out)
             # --diff: snapshot the last stored run for this host BEFORE the scan
             # records the new one, so we can diff current vs previous afterward.
-            diff_baseline = (memory.latest_run_findings(urlparse(target).netloc)
+            diff_baseline = (memory.latest_run_findings(urlparse(target).netloc, base_url=target)
                              if (args.diff and memory) else None)
             async with Engine(cfg) as engine:
                 engine.on_request = observer.on_request   # live heartbeat, every phase
@@ -674,7 +674,7 @@ def main() -> None:
                     help="show past scan history (optionally filtered by the given host) and exit")
     ap.add_argument("--diff", action="store_true",
                     help="after the scan, show what changed vs the last stored scan of this host "
-                         "— new / gone / newly-ACCESSIBLE endpoints (403→200 etc.); needs the "
+                         "— observed / not observed / changed responses; needs the "
                          "memory DB (recon-over-time / attack-surface monitoring)")
     ap.add_argument("--forget", metavar="HOST|all",
                     help="erase host records (shared word statistics remain) or all memory, then exit")

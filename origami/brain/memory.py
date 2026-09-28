@@ -326,22 +326,29 @@ class Memory:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
-    def latest_run_findings(self, host: str):
+    def latest_run_findings(self, host: str, *, base_url: str | None = None):
         """The most recent run's per-run snapshot for `host` → (run_id, ts,
-        {path: (status, length)}), or None when the host has no prior run. Unlike
+        {url: (status, length) or None for ambiguity}), or None. Unlike
         `prior_findings` (the accumulated corpus), this is a single run's findings —
         the baseline `--diff` compares the current scan against."""
         host = _norm_host(host)
-        row = self.db.execute(
-            "SELECT id, ts FROM runs WHERE host = ? ORDER BY id DESC LIMIT 1", (host,)
-        ).fetchone()
+        query = "SELECT id, ts FROM runs WHERE host = ?"
+        params = [host]
+        if base_url is not None:
+            query += " AND base_url = ?"
+            params.append(base_url)
+        row = self.db.execute(query + " ORDER BY id DESC LIMIT 1", params).fetchone()
         if not row:
             return None
         run_id, ts = row
         rows = self.db.execute(
-            "SELECT path, status, length FROM findings WHERE run_id = ?", (run_id,)
+            "SELECT url, status, length FROM findings WHERE run_id = ?", (run_id,)
         ).fetchall()
-        return run_id, ts, {r[0]: (r[1], r[2]) for r in rows}
+        grouped: dict[str, set[tuple[int, int]]] = defaultdict(set)
+        for url, status, length in rows:
+            grouped[url].add((status, length))
+        return run_id, ts, {url: next(iter(values)) if len(values) == 1 else None
+                            for url, values in grouped.items()}
 
     def recall_names(self, limit: int = 2000, min_hosts: int = 2) -> list[str]:
         """Distinct file/dir basenames (extension stripped) seen on at least

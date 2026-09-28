@@ -85,31 +85,30 @@ class TestPathClimb(unittest.TestCase):
         self.assertEqual((base, file_seed, anc), ("/caminho/", None, ["/"]))
 
 class TestScanDiff(unittest.TestCase):
-    """--diff: current scan vs the last stored run (new / gone / newly-accessible)."""
+    """--diff: current scan vs the last stored run (observed / unobserved / response changes)."""
 
     def _f(self, path, status, length):
         from origami.core.response_classifier import Finding
         return Finding(f"https://h{path}", status, length, "", 0.9, "wordlist")
 
-    def test_compute_new_gone_changed_opened(self):
+    def test_compute_new_unobserved_changed(self):
         from origami.output import diff
-        prior = {"/a": (200, 100), "/admin": (403, 50), "/old": (200, 10)}
+        prior = {"https://h/a": (200, 100), "https://h/admin": (403, 50), "https://h/old": (200, 10)}
         cur = [self._f("/a", 200, 100),          # unchanged
-               self._f("/admin", 200, 500),      # 403 → 200: opened (and changed)
+               self._f("/admin", 200, 500),      # 403 → 200: observed status change
                self._f("/new", 200, 20)]         # new
         d = diff.compute(prior, cur)
-        self.assertEqual([e["path"] for e in d["new"]], ["/new"])
-        self.assertEqual([e["path"] for e in d["gone"]], ["/old"])
-        self.assertEqual([e["path"] for e in d["opened"]], ["/admin"])   # the headline
-        self.assertIn("/admin", [e["path"] for e in d["changed"]])
+        self.assertEqual([e["path"] for e in d["new"]], ["https://h/new"])
+        self.assertEqual([e["path"] for e in d["unobserved"]], ["https://h/old"])
+        self.assertIn("https://h/admin", [e["path"] for e in d["changed"]])
         self.assertFalse(diff.is_empty(d))
         rendered = diff.render(d, "h", None)
         self.assertIn("403→200", rendered)
-        self.assertIn("newly ACCESSIBLE", rendered)
+        self.assertNotIn("newly ACCESSIBLE", rendered)
 
     def test_compute_empty_when_identical(self):
         from origami.output import diff
-        prior = {"/a": (200, 100)}
+        prior = {"https://h/a": (200, 100)}
         d = diff.compute(prior, [self._f("/a", 200, 100)])
         self.assertTrue(diff.is_empty(d))
         self.assertIn("no change", diff.render(d, "h"))

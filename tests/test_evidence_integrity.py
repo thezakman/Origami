@@ -83,6 +83,7 @@ class TestEvidencePersistence(unittest.TestCase):
         destination = self.memory.path.parent / "recovered.json"
         export_saved_report(self.memory.path, run_id, destination)
         self.assertEqual(destination.read_text(), self.memory.report_snapshot(run_id))
+
         with self.assertRaises(FileExistsError):
             export_saved_report(self.memory.path, run_id, destination)
         with self.assertRaises(FileExistsError):
@@ -122,3 +123,49 @@ class TestEvidencePersistence(unittest.TestCase):
             cli.main()
         self.assertEqual(cm.exception.code, 0)
         self.assertEqual(destination.read_text(), self.memory.report_snapshot(run_id))
+
+
+class TestConservativeComparison(unittest.TestCase):
+    def test_query_variants_are_distinct_observations(self):
+        from origami.output import diff
+        prior = {"https://example.test/item?id=1": (200, 10)}
+        result = sample("https://example.test/item?id=2")
+        changes = diff.compute(prior, result.findings)
+        self.assertEqual(len(changes["new"]), 1)
+        self.assertEqual(len(changes["unobserved"]), 1)
+        self.assertEqual(changes["changed"], [])
+
+    def test_missing_observation_is_not_reported_as_removed(self):
+        from origami.output import diff
+        changes = diff.compute({"https://example.test/item": (200, 10)}, [])
+        rendered = diff.render(changes, "example.test")
+        self.assertNotIn("gone", rendered)
+        self.assertIn("not observed", rendered)
+        self.assertIn("coverage", rendered)
+
+    def test_status_change_is_not_proof_of_new_access(self):
+        from origami.output import diff
+        result = sample("https://example.test/item")
+        changes = diff.compute({result.findings[0].url: (403, 10)}, result.findings)
+        self.assertNotIn("newly ACCESSIBLE", diff.render(changes, "example.test"))
+        self.assertEqual(len(changes["changed"]), 1)
+
+    def test_conflicting_observations_are_not_last_write_wins(self):
+        from origami.output import diff
+        first = sample("https://example.test/item").findings[0]
+        second = sample(first.url).findings[0]
+        second.status = 403
+        changes = diff.compute({first.url: (200, 10)}, [first, second])
+        self.assertEqual(changes["changed"], [])
+        self.assertEqual(len(changes["ambiguous"]), 1)
+
+    def test_baseline_is_bound_to_exact_base_url(self):
+        with tempfile.TemporaryDirectory() as directory, Memory(Path(directory) / "db") as mem:
+            first = sample("https://example.test/item?id=1")
+            first_id = mem.record_run(first.profile, first)
+            second = sample("https://example.test:8443/item?id=2")
+            second.profile.base_url = "https://example.test:8443/"
+            mem.record_run(second.profile, second)
+            baseline = mem.latest_run_findings("example.test", base_url=first.profile.base_url)
+            self.assertEqual(baseline[0], first_id)
+            self.assertIn(first.findings[0].url, baseline[2])

@@ -8,6 +8,9 @@ All notable changes to Origami are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Diff baselines use the exact base URL and full observation URLs, preserving query
+  and port distinctions. Conflicting responses remain ambiguous. Missing findings
+  are labeled unobserved, and status changes no longer claim new authorization.
 - Learning-corpus cleanup no longer deletes historical findings.
 - Host and full-memory deletion roll back as a unit on failure, including report
   snapshots. Remove automatic VACUUM from this logical-deletion operation.

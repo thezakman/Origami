@@ -30,7 +30,7 @@ Blind brute-forcers (`ffuf`, `dirb`, `dirsearch`) fire one fixed wordlist at eve
 3. **Discovery compounds.** It reads the target's own code — JS, API specs, robots, headers, archives — then re-reads every file *it* uncovers and recurses the directories they live in. Give it a deep URL (`…/reports/2024/q3-summary.pdf`) and it **climbs the path** — scans the file's directory (not the file-as-folder), fetches the file, walks every ancestor dir up to root, and folds each segment into the dynamic wordlist. The more it finds, the more it finds.
 4. **Reads content, not just status codes.** Response bodies are mined for credentials, information-disclosure leaks, and reflected parameters graded into **verified injection leads** — a reflection isn't just flagged, it's *proven*: a follow-up breakout probe (`'"<>{{7*7}}`) confirms whether the metacharacters come back **raw** (real XSS sink, `xss-lead`) vs escaped, whether `{{7*7}}→49` (template injection, `ssti-lead`), and whether a canary lands in the `Location` header (open-redirect, `redirect-lead`) or any response header. It tells you *what's exploitable*, not just a wall of `200`s.
 5. **Stays alive under a WAF.** Per-context calibration, AIMD backoff, honored `Retry-After`, UA/proxy rotation and a learned request-economy bandit keep it under the radar and spend a tight budget on the hits most likely to land.
-6. **Gets smarter every run — and tracks change over time.** A SQLite corpus, k-NN over fingerprint vectors and a character n-gram completer prime each new scan from everything past ones turned up. `--diff` compares a scan against the last stored run of the same host and reports what **appeared, disappeared, or newly opened up** (`403 → 200`) — recon-over-time / attack-surface monitoring, not just a one-shot.
+6. **Gets smarter every run — and tracks change over time.** A SQLite corpus, k-NN over fingerprint vectors and a character n-gram completer prime each new scan from everything past ones turned up. `--diff` compares a scan against the last stored run of the exact same base URL and reports newly observed, unobserved and changed responses. Missing observations do not prove removal; `403 → 200` does not establish an authorization change.
 
 ## Demo
 
@@ -116,7 +116,7 @@ Common flags:
 | `--graph FILE` | endpoint graph (provenance + orphan/hidden endpoints) → FILE.html + FILE.dot |
 | `--no-learn` | don't read/write the cross-target memory |
 | `--history` | show past scan history |
-| `--diff` | after the scan, show what changed vs the last stored run of this host — **new / gone / newly-accessible** endpoints (`403→200`); recon-over-time / attack-surface monitoring (needs the memory DB) |
+| `--diff` | after the scan, show what changed vs the last stored run of the exact base URL — **newly observed / not observed / changed / ambiguous** responses; context and coverage equivalence remain unknown (needs the memory DB) |
 | `--forget HOST\|all` | erase cross-target memory for a host (www/apex together) or everything |
 | `--forget-noise` | prune content-hashed bundle names (`app.a1b2c3d4.js`, GUIDs, timestamps) from memory — one-off build artifacts that carry no cross-target signal |
 | `--resume` | continue an interrupted scan from its checkpoint |
@@ -375,3 +375,9 @@ coverage guarantee. Keeping complete reports increases DB size.
 Host/all deletion is transactional, including snapshots. A failed deletion rolls
 back as a unit. Deletion is logical, not a secure erase of backups or disk pages;
 automatic VACUUM has been removed from the delete transaction workflow.
+
+Diff comparisons use full observation URLs, including queries and ports. Conflicting
+status/length observations for the same URL are marked ambiguous instead of taking
+the last row. These summaries do not establish equivalent authentication, filters
+or coverage between runs. Internal diff keys are now `new`, `unobserved`, `changed`
+and `ambiguous`; the unsupported `gone`/`opened` conclusions have been removed.

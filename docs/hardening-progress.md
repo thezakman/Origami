@@ -65,10 +65,16 @@ Corrigido: limpeza atua apenas no corpus derivado; exclusão por host ou total �
 
 Validação: 44 testes locais passaram, incluindo oito regressões novas; Ruff e Mypy passaram (69 arquivos). Limites: snapshots aumentam o banco; registram o instante da persistência e dependem de memória habilitada; não recuperam campos antigos perdidos nem substituem um journal contra término abrupto. Exclusão lógica não promete sanitização do armazenamento.
 
+## Etapa 6 — Comparação sem falsas conclusões
+
+Cinco regressões falharam antes da correção: perda da identidade de consultas, ausência tratada como remoção, mudança de status tratada como novo acesso, observações conflitantes sobrescritas e baseline de outra porta. Corrigidos o armazenamento da visão de comparação, seleção por URL-base exata e apresentação do diff. Nenhuma requisição adicional foi introduzida.
+
+Validação: 51 testes locais passaram; Ruff e Mypy passaram. O diff agora usa `new`, `unobserved`, `changed` e `ambiguous`. Equivalência de autenticação, filtros e cobertura permanece desconhecida; não é uma confirmação de correção ou de mudança de autorização.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.
-- Estado por etapa, cobertura mensurável e revisão das inferências do diff.
+- Estado por etapa, cobertura mensurável e identidade de configuração/autenticação para comparações.
 - Isolamento por projeto, exclusão dos dados derivados e revisão de apresentação em todos os canais.
 - Reexportação e anotações de revisão offline, integridade do catálogo, empacotamento e avaliação com corpus rotulado.
 - Interface de projeto e assistência inteligente explicável continuam propostas, sem implementação nesta execução.

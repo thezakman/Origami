@@ -1,86 +1,63 @@
-"""Scan diffing — "what changed since the last scan of this host".
-
-Origami's memory DB stores a per-run snapshot of every finding. `--diff` compares
-the current scan against the most recent prior run and reports what **appeared**,
-**disappeared**, or **changed** (status or size). This turns Origami from a one-shot
-buster into a recon-over-time / attack-surface monitor — a moat straight out of the
-memory architecture no stateless dir-buster has.
-
-`compute()` is pure (dict + findings → structured diff) and unit-tested; `render()`
-formats it for the terminal. Status transitions are graded: 403/404 → 2xx (a path
-that just opened up) is the headline, called out first.
-"""
+"""Conservative comparison of observed URLs; absence is not removal proof."""
 
 from __future__ import annotations
 
-_OPENED_FROM = {401, 403, 404, 500, 502, 503}   # was-closed statuses
-_ACCESSIBLE = range(200, 300)
-
-
-def _path(url: str) -> str:
-    from urllib.parse import urlparse
-    return urlparse(url).path or "/"
+from collections import defaultdict
 
 
 def compute(prior: dict, findings) -> dict:
-    """Diff a prior snapshot ({path: (status, length)}) against current findings.
+    """Compare exact URLs, retaining query/origin identity and ambiguous responses.
 
-    Returns {new, gone, changed, opened} where each is a list of dicts. `opened`
-    is the high-signal subset of `changed`: a path whose status went from a
-    closed/blocked code to 2xx (e.g. 403 → 200) — surfaced separately because it's
-    the thing a monitor most wants to know."""
-    cur: dict[str, tuple[int, int]] = {}
-    meta: dict[str, object] = {}
-    for f in findings:
-        p = _path(f.url)
-        cur[p] = (f.status, f.length)
-        meta[p] = f
-    new, gone, changed, opened = [], [], [], []
-    for p, (status, length) in sorted(cur.items()):
-        if p not in prior:
-            new.append({"path": p, "status": status, "length": length})
+    Prior values are (status, length), or None when observations conflict.
+    Authentication, filters and coverage are not known to be equivalent.
+    """
+    current: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    for finding in findings:
+        current[finding.url].add((finding.status, finding.length))
+    result: dict[str, list] = {key: [] for key in ("new", "unobserved", "changed", "ambiguous")}
+    for url in sorted(set(prior) | set(current)):
+        old = prior.get(url)
+        values = current.get(url, set())
+        if (url in prior and old is None) or len(values) > 1:
+            result["ambiguous"].append({"path": url})
+        elif not values:
+            result["unobserved"].append({"path": url, "was_status": old[0], "was_length": old[1]})
         else:
-            ostatus, olength = prior[p]
-            if status != ostatus or length != olength:
-                entry = {"path": p, "status": status, "was_status": ostatus,
-                         "length": length, "was_length": olength}
-                changed.append(entry)
-                if ostatus in _OPENED_FROM and status in _ACCESSIBLE:
-                    opened.append(entry)
-    for p, (ostatus, olength) in sorted(prior.items()):
-        if p not in cur:
-            gone.append({"path": p, "was_status": ostatus, "was_length": olength})
-    return {"new": new, "gone": gone, "changed": changed, "opened": opened}
+            status, length = next(iter(values))
+            if url not in prior:
+                result["new"].append({"path": url, "status": status, "length": length})
+            elif old != (status, length):
+                result["changed"].append({"path": url, "status": status, "length": length,
+                                          "was_status": old[0], "was_length": old[1]})
+    return result
 
 
 def is_empty(d: dict) -> bool:
-    return not (d["new"] or d["gone"] or d["changed"])
+    return not any(d.values())
 
 
 def render(d: dict, host: str, prior_ts: float | None = None) -> str:
-    """Human-readable diff summary. Empty diff → a one-line 'no change'."""
     import datetime
     since = ""
     if prior_ts:
         try:
             since = " since " + datetime.datetime.fromtimestamp(prior_ts).strftime("%Y-%m-%d %H:%M")
         except (ValueError, OSError, OverflowError):
-            since = ""
+            pass
+    lines = [f"diff [{host}]{since}: {len(d['new'])} newly observed; "
+             f"{len(d['unobserved'])} not observed; {len(d['changed'])} changed; "
+             f"{len(d['ambiguous'])} ambiguous"]
     if is_empty(d):
-        return f"diff [{host}]: no change{since} ({len(d.get('new', []))} new)"
-    lines = [f"diff [{host}]{since}:  +{len(d['new'])} new  -{len(d['gone'])} gone  "
-             f"~{len(d['changed'])} changed"]
-    if d["opened"]:
-        lines.append(f"  ⚠ {len(d['opened'])} newly ACCESSIBLE (was blocked):")
-        for e in d["opened"]:
-            lines.append(f"    {e['was_status']}→{e['status']}  {e['path']}")
-    for e in d["new"]:
-        lines.append(f"  + {e['status']:>3}  {e['path']}  ({e['length']}B)")
-    for e in d["changed"]:
-        if e in d["opened"]:
-            continue                     # already shown above
-        lines.append(f"  ~ {e['was_status']}→{e['status']}  {e['path']}  "
-                     f"({e['was_length']}→{e['length']}B)")
-    for e in d["gone"]:
-        lines.append(f"  - {e['was_status']:>3}  {e['path']}  (gone)")
+        lines.append("  no change in recorded observations")
+    for entry in d["new"]:
+        lines.append(f"  + {entry['status']}  {entry['path']}  ({entry['length']}B)")
+    for entry in d["changed"]:
+        lines.append(f"  ~ {entry['was_status']}→{entry['status']}  {entry['path']}  "
+                     f"({entry['was_length']}→{entry['length']}B)")
+    for entry in d["unobserved"]:
+        lines.append(f"  ? {entry['path']}  (not observed; removal not established)")
+    for entry in d["ambiguous"]:
+        lines.append(f"  ? {entry['path']}  (conflicting observations; comparison withheld)")
+    lines.append("  Context/coverage equivalence is unknown: absence does not prove remediation, "
+                 "and a status change does not prove an authorization change.")
     return "\n".join(lines)
