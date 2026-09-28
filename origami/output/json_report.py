@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime
 
+from origami import __version__
 from origami.core.scanner import ScanResult
 
 
@@ -29,6 +31,16 @@ def finding_record(f, host: str = "") -> dict:
 def to_dict(result: ScanResult) -> dict:
     p = result.profile
     return {
+        "schema_version": 2,
+        "tool_version": __version__,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "completed": result.completed,
+        "state": "failed" if result.error else "finished" if result.completed else "partial",
+        "coverage": "unknown" if result.completed else "partial",
+        "error": result.error,
+        "pushbacks": result.pushbacks,
+        "harvested_paths": sorted(result.harvested_paths),
+        "edges": [list(edge) for edge in result.edges],
         "host": p.host,
         "base_url": p.base_url,
         "tech_scores": p.tech_scores,

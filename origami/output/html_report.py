@@ -11,6 +11,8 @@ import html
 import time
 from collections import Counter
 
+from origami.core.files import atomic_write
+
 _CSS = """
 :root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--card:#161b22;--bd:#30363d}
 *{box-sizing:border-box}
@@ -73,7 +75,8 @@ def render(result, n_hidden: int | None = None) -> str:
     techs = "".join(f'<span class="badge tech">{e(t)} {s:.0f}</span>'
                     for t, s in p.tech_scores.items()) or '<span class="sub">none</span>'
     folds = "".join(f'<span class="badge fold">⌘ {e(f)}</span>' for f in sorted(result.folds))
-    cards = [f'<div class="card"><b>tech</b>{techs}</div>']
+    state = "failed" if result.error else "finished" if result.completed else "partial"
+    cards = [f'<div class="card"><b>execution</b>{state} · coverage not established</div>', f'<div class="card"><b>tech</b>{techs}</div>']
     if p.waf:
         cards.append(f'<div class="card"><b>WAF</b><span class="badge waf">{e(p.waf)}</span></div>')
     if p.enabled_extensions:
@@ -99,6 +102,8 @@ def render(result, n_hidden: int | None = None) -> str:
         # never become a clickable link in a shared report (defense-in-depth).
         cell = (f'<a href="{path}" target="_blank" rel="noreferrer">{path}</a>'
                 if f.url.startswith(("http://", "https://")) else path)
+        if f.note:
+            cell += f'<details><summary>Evidence notes</summary><p>{e(f.note)}</p></details>'
         rows.append(
             f'<tr><td class="{_scls(f.status)}">{f.status}</td>'
             f'<td>{f.length}</td><td class="sub">{e(f.origin)}</td>'
@@ -108,7 +113,7 @@ def render(result, n_hidden: int | None = None) -> str:
     params = "".join(f"<span>{e(x)}</span>" for x in sorted(p.parameters))
     params_block = (f'<h2>Parameters ({len(p.parameters)})</h2><div class="params">{params}</div>'
                     if p.parameters else "")
-    when = time.strftime("%Y-%m-%d %H:%M:%S")
+    when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Origami — {e(p.host)}</title><style>{_CSS}</style></head><body>
@@ -117,6 +122,7 @@ def render(result, n_hidden: int | None = None) -> str:
 <div class="wrap"><div class="cards">{''.join(cards)}</div>
 {params_block}
 <h2>Findings ({len(result.findings)})</h2>
+<label for="q">Filter findings</label>
 <input id="q" placeholder="filter findings…" autofocus>
 <table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
 <th data-sort="str">src</th><th data-sort="num">conf</th><th data-sort="str">tags</th>
@@ -126,5 +132,4 @@ def render(result, n_hidden: int | None = None) -> str:
 
 
 def write(result, path: str, n_hidden: int | None = None) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(render(result, n_hidden=n_hidden))
+    atomic_write(path, render(result, n_hidden=n_hidden))

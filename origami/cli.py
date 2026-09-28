@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import math
 import re
 import sys
@@ -21,6 +22,7 @@ from origami import __version__, banner
 from origami.brain.memory import DEFAULT_DB, Memory
 from origami.control import keyboard_control
 from origami.core import resume as resume_mod
+from origami.core.files import OutputWriteError, atomic_write, new_private_stream
 from origami.core.httpclient import _UA_POOL, Engine, EngineConfig
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
@@ -179,7 +181,8 @@ def _print_diff(baseline, result, host: str, *, have_memory: bool, out) -> None:
 
 def _slug(url: str) -> str:
     p = urlparse(url)
-    return re.sub(r"[^\w.-]", "_", (p.netloc + p.path).strip("/")) or "root"
+    readable = re.sub(r"[^\w.-]", "_", (p.netloc + p.path).strip("/"))[:80] or "root"
+    return f"{readable}-{hashlib.sha256(url.encode()).hexdigest()[:16]}"
 
 
 def _suffix(path: str, slug: str) -> str:
@@ -187,33 +190,37 @@ def _suffix(path: str, slug: str) -> str:
     return str(p.with_name(f"{p.stem}.{slug}{p.suffix}"))
 
 
-def _write_outputs(args, result, target, multi: bool) -> None:
-    # The scan already ran — a write failure (unwritable dir, --out pointing at an
-    # existing file, full disk) must not crash with a traceback or, in multi-target
-    # mode, abort the remaining targets. Report it cleanly and move on.
-    try:
-        if args.json:
-            path = _suffix(args.json, _slug(target)) if multi else args.json
-            Path(path).write_text(json_report.dumps(result))
-            print(f"[+] JSON written to {path}")
-        if args.html:
-            path = _suffix(args.html, _slug(target)) if multi else args.html
-            html_report.write(result, path)
-            print(f"[+] HTML report written to {path}")
-        if args.out:
-            d = str(Path(args.out) / _slug(target)) if multi else args.out
-            info = artifacts.write_artifacts(result, d)
-            print(f"[+] artifacts written to {info['dir']}/ "
-                  f"(report.html, graph.html [{info['hidden']} hidden], findings.json, "
-                  f"params.txt={info['params']}, urls.txt={info['urls']}, "
-                  f"js_endpoints.txt={info['js_endpoints']})")
-        if args.graph:
-            path = _suffix(args.graph, _slug(target)) if multi else args.graph
-            hp, dp, n_hidden = graph.write(result, path)
-            print(f"[+] endpoint graph written to {hp} (+ {Path(dp).name}) · "
-                  f"{n_hidden} hidden endpoints")
-    except OSError as e:
-        print(f"[!] could not write output for {target}: {e}", file=sys.stderr)
+def _write_outputs(args, result, target, multi: bool) -> dict:
+    """Attempt independent exports; return failures to the process exit status."""
+    files: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    out = sys.stderr if getattr(args, "jsonl", None) == "-" else sys.stdout
+    for kind in ("json", "html", "out", "graph"):
+        requested = getattr(args, kind, None)
+        if not requested:
+            continue
+        path = (str(Path(requested) / _slug(target)) if kind == "out"
+                else _suffix(requested, _slug(target))) if multi else requested
+        try:
+            if kind == "json":
+                atomic_write(path, json_report.dumps(result))
+            elif kind == "html":
+                html_report.write(result, path)
+            elif kind == "out":
+                info = artifacts.write_artifacts(result, path)
+                if info.get("errors"):
+                    errors.update({f"out/{k}": v for k, v in info["errors"].items()})
+                    print("[!] artifact bundle incomplete; inspect manifest.json", file=sys.stderr)
+                    continue
+            else:
+                graph.write(result, path)
+            files[kind] = str(path)
+            print(f"[+] {kind} written to {path}", file=out)
+        except (OSError, ValueError, RecursionError) as exc:
+            # Diagnostics must not echo response content or credentials from exceptions.
+            errors[kind] = type(exc).__name__
+            print(f"[!] could not write {kind}: {type(exc).__name__}", file=sys.stderr)
+    return {"files": files, "errors": errors}
 
 
 def _validate_inputs(args) -> tuple[dict[str, str], list[str]]:
@@ -321,10 +328,15 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
             jsonl_fh = sys.stdout
             args.no_ui = True
         else:
-            jsonl_fh = resources.enter_context(open(args.jsonl, "w", encoding="utf-8"))
+            jsonl_fh = resources.enter_context(new_private_stream(Path(args.jsonl)))
         def _emit_jsonl(f):
-            jsonl_fh.write(_json.dumps(finding_record(f), ensure_ascii=False) + "\n")
-            jsonl_fh.flush()
+            try:
+                jsonl_fh.write(_json.dumps(finding_record(f), ensure_ascii=False) + "\n")
+                jsonl_fh.flush()
+            except BrokenPipeError:
+                raise
+            except OSError as exc:
+                raise OutputWriteError("JSONL output failed") from exc
         opts.finding_sink = _emit_jsonl
 
     memory = None if args.no_learn else resources.enter_context(Memory(args.db))
@@ -446,6 +458,7 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
         for i, target in enumerate(targets, 1):
             if control.quit:
                 print("[!] quit — skipping remaining targets", file=_status_out)
+                rc = rc or 3
                 break
             if len(targets) > 1:
                 print(f"\n━━━ [{i}/{len(targets)}] {target} ━━━", file=_status_out)
@@ -483,15 +496,11 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
                     else:
                         result = await scan(engine, target, opts, observer, memory,
                                             control, rpath)
-            if result.completed:
-                resume_mod.clear(rpath)   # finished cleanly → drop the checkpoint
-
             if (result.requests_made <= 1 and not result.profile.tech_scores
                     and not result.findings):
                 why = f" — {result.error}" if result.error else ""
                 print(f"[!] {target} unreachable{why}", file=_status_out)
                 rc = 2
-                continue
             if not jsonl_stdout:           # keep stdout pure JSONL in pipe mode
                 streamed = getattr(observer, "streamed", False)
                 ui.print_report(result, full_url=args.full_url, show_findings=not streamed,
@@ -501,7 +510,17 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
                 if args.diff:
                     _print_diff(diff_baseline, result, urlparse(target).netloc,
                                 have_memory=memory is not None, out=_status_out)
-            _write_outputs(args, result, target, multi=len(targets) > 1)
+            outcome = _write_outputs(args, result, target, multi=len(targets) > 1)
+            if outcome["errors"] or not result.completed:
+                if rc == 0:
+                    rc = 3
+            elif result.completed:
+                try:
+                    resume_mod.clear(rpath)
+                except OSError:
+                    print("[!] could not remove checkpoint; exports were preserved", file=sys.stderr)
+                    if rc == 0:
+                        rc = 3
     return rc
 
 
@@ -855,6 +874,15 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[!] interrupted — inspect the last saved checkpoint", file=sys.stderr)
         sys.exit(130)
+    except BrokenPipeError:
+        # Avoid an interpreter-shutdown flush against a consumer that closed its pipe.
+        import os
+        with open(os.devnull, "w") as sink:
+            os.dup2(sink.fileno(), sys.stdout.fileno())
+        sys.exit(3)
+    except (OSError, ValueError) as exc:
+        print(f"[!] local operation failed: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

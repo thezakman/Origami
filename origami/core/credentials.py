@@ -33,6 +33,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from origami.core.files import new_private_stream, private_directory, private_file
+
 # env var → (toml section, toml key). Single source of truth for both layers.
 _MAP: dict[str, tuple[str, str]] = {
     "SHODAN_API_KEY": ("shodan", "api_key"),
@@ -116,12 +118,14 @@ def scaffold() -> tuple[Path, bool]:
     doesn't exist; if it does, tighten it back to 0600. Returns (path, created).
     Makes option B turnkey — no manual mkdir/chmod, secure perms by construction."""
     path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    created = not path.exists()
-    if created:
-        path.write_text(_TEMPLATE)
-    os.chmod(path, 0o600)
+    private_directory(path.parent)
+    try:
+        with new_private_stream(path) as stream:
+            stream.write(_TEMPLATE)
+        created = True
+    except FileExistsError:
+        os.close(private_file(path))
+        created = False
     _reset_cache_for_tests()          # re-read on next get() (perms/content may have changed)
     return path, created
 

@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from origami.core.files import atomic_write
 from origami.core.scope import same_host
 
 # A source ending in one of these (or whose name looks like an API spec) is a
@@ -310,6 +311,6 @@ def write(result, path: str) -> tuple[str, str, int]:
     # Render the .dot BEFORE to_html — to_html's layout injects a synthetic "/"
     # root into the model, which shouldn't leak into the .dot export.
     dot = to_dot(m)
-    html_path.write_text(to_html(m, result.profile.host), encoding="utf-8")
-    dot_path.write_text(dot, encoding="utf-8")
+    atomic_write(html_path, to_html(m, result.profile.host))
+    atomic_write(dot_path, dot)
     return str(html_path), str(dot_path), len(orphans(m))

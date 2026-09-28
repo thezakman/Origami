@@ -273,6 +273,23 @@ See [`origami.md`](origami.md) for the full design.
 
 ## Development
 
+### Local output guarantees
+
+JSONL file output now requires a new path; an existing file is never silently
+truncated. With `--jsonl -`, human diagnostics go to stderr. Independent export
+formats are attempted even if another fails. Exit code `3` indicates an incomplete
+run or export; `0` indicates successful completion, `2` an input/execution error,
+and `130` an interrupted process.
+
+Files are written privately and reports are replaced atomically. An `--out`
+bundle includes `manifest.json`: only files marked written belong to that export;
+older files may remain after a partial export. JSON schema version 2 adds execution
+metadata without changing the JSONL finding records. `coverage: unknown` means the
+orchestrator finished but complete detector coverage was not established.
+
+See [hardening progress](docs/hardening-progress.md) for implemented safeguards,
+validation and remaining limitations.
+
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'   # unit tests
 python tests/fakeserver/server.py --profile iis-soft404         # test target

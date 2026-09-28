@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from origami.core.evidence import ContextBaseline, Evidence, TargetProfile
+from origami.core.files import atomic_write, private_directory
 from origami.core.response_classifier import Finding
 
 RESUME_DIR = Path.home() / ".origami" / "resume"
@@ -90,7 +91,7 @@ def _finding_from_dict(d: dict) -> Finding:
 def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
          priority_paths, root_seeds, base_prefix, queue, scanned, start_offset=0,
          front_cands=None, edges=None, root_simhash=0) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_directory(path.parent)
     state = {
         "version": 1,
         "profile": _profile_to_dict(profile),
@@ -107,9 +108,7 @@ def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
         "edges": [list(e) for e in (edges or [])],  # provenance edges so --graph survives resume
         "root_simhash": root_simhash,                # homepage fingerprint for the 403-bypass check
     }
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state))
-    tmp.replace(path)        # atomic
+    atomic_write(path, json.dumps(state))
 
 
 def load(path: Path) -> dict | None:

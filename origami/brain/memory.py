@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import time
 from collections import defaultdict
 from functools import wraps
 from pathlib import Path
+
+from origami.core.files import private_directory, private_file
 
 DEFAULT_DB = Path.home() / ".origami" / "memory.sqlite"
 
@@ -182,15 +185,20 @@ def _transaction(method):
 class Memory:
     def __init__(self, db_path: Path | str = DEFAULT_DB) -> None:
         self.path = Path(db_path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_directory(self.path.parent)
+        os.close(private_file(self.path))
         self.db = sqlite3.connect(str(self.path), timeout=10.0)
         # WAL + a busy timeout so concurrent scans (multi-target, parallel runs)
         # sharing one DB don't fail with "database is locked".
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=10000")
-        self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.executescript(_SCHEMA)
-        self.db.commit()
+        try:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA busy_timeout=10000")
+            self.db.execute("PRAGMA synchronous=NORMAL")
+            self.db.executescript(_SCHEMA)
+            self.db.commit()
+        except BaseException:
+            self.db.close()
+            raise
 
     def close(self) -> None:
         self.db.close()

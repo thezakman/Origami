@@ -11,6 +11,7 @@ import time
 from fnmatch import fnmatch
 from urllib.parse import urljoin, urlparse
 
+from origami.core.files import OutputWriteError
 from origami.core.scope import same_site
 
 
@@ -107,6 +108,8 @@ async def _guard(observer, label, coro, default):
     fold with a note — the scan keeps going instead of dying on one bad target."""
     try:
         return await coro
+    except (OutputWriteError, BrokenPipeError):
+        raise
     except Exception as e:                       # noqa: BLE001 — isolation is the point
         observer.log(f"{label}: skipped ({type(e).__name__}: {e})", 0, style="yellow")
         return default

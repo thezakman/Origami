@@ -3,6 +3,8 @@
 import asyncio
 import contextlib
 import io
+import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -12,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 from origami import cli
 from origami.brain.memory import Memory
 from origami.core.evidence import TargetProfile
+from origami.core.files import atomic_write
 from origami.core.httpclient import Engine, EngineConfig
 from origami.core.response_classifier import Finding
 from origami.core.scanner.types import ScanResult
@@ -120,6 +123,122 @@ class TestResourceSafety(unittest.TestCase):
             self.assertFalse(mem.db.in_transaction)
             mem.record_word_stats({"fixture": (1, 0)}, [])
             self.assertEqual(mem.history(), [])
+
+
+class TestOutputSafety(unittest.TestCase):
+    def test_output_failure_is_not_swallowed_by_stage_guard(self):
+        from origami.core.files import OutputWriteError
+        from origami.core.scanner.util import _guard
+        from origami.output.ui import NullObserver
+
+        async def failing_output():
+            raise OutputWriteError("synthetic")
+
+        with self.assertRaises(OutputWriteError):
+            asyncio.run(_guard(NullObserver(), "fixture", failing_output(), None))
+
+    def test_cli_failure_preserves_checkpoint_and_sets_status(self):
+        class FakeEngine:
+            def __init__(self, cfg): self.cfg = cfg
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = arguments("--json", str(Path(directory) / "missing" / "result.json"))
+            with patch.object(cli, "Engine", FakeEngine), \
+                 patch.object(cli, "scan", AsyncMock(return_value=result())), \
+                 patch.object(cli.resume_mod, "clear") as clear, \
+                 patch.object(cli.ui, "print_report"), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(asyncio.run(cli.run(args)), 3)
+                clear.assert_not_called()
+
+    def test_existing_jsonl_is_not_truncated_even_with_valid_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "existing.jsonl"
+            path.write_text("previous\n")
+            with self.assertRaises(FileExistsError):
+                asyncio.run(cli.run(arguments("--jsonl", str(path))))
+            self.assertEqual(path.read_text(), "previous\n")
+
+    def test_outputs_independent_and_status_not_on_jsonl_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = arguments("--jsonl", "-", "--json", str(Path(directory) / "missing" / "bad.json"),
+                             "--html", str(Path(directory) / "good.html"))
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                outcome = cli._write_outputs(args, result(), "https://example.test/", False)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertTrue((Path(directory) / "good.html").exists())
+            self.assertTrue(outcome["errors"])
+
+    def test_success_status_stays_off_jsonl_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = arguments("--jsonl", "-", "--json", str(Path(directory) / "good.json"))
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                outcome = cli._write_outputs(args, result(), "https://example.test/", False)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertFalse(outcome["errors"])
+
+    def test_atomic_failure_preserves_previous_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text("previous")
+            with patch("origami.core.files.os.replace", side_effect=OSError("disk")):
+                with self.assertRaises(OSError):
+                    atomic_write(path, "new")
+            self.assertEqual(path.read_text(), "previous")
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_private_artifacts_and_notes(self):
+        from origami.output import artifacts, html_report, json_report
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.umask(0)
+            try:
+                r = result()
+                r.completed = False
+                info = artifacts.write_artifacts(r, Path(directory) / "bundle")
+                self.assertFalse(info.get("errors"))
+                path = Path(directory) / "bundle" / "findings.json"
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                data = json.loads(path.read_text())
+                self.assertFalse(data["completed"])
+                self.assertIn("synthetic evidence", html_report.render(r))
+                self.assertIn("schema_version", json_report.to_dict(r))
+            finally:
+                os.umask(previous)
+
+    def test_database_private_under_permissive_umask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.umask(0)
+            try:
+                path = Path(directory) / "private" / "memory.db"
+                with Memory(path):
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+                    for suffix in ("-wal", "-shm"):
+                        sidecar = Path(str(path) + suffix)
+                        if sidecar.exists():
+                            self.assertEqual(sidecar.stat().st_mode & 0o777, 0o600)
+            finally:
+                os.umask(previous)
+
+    def test_partial_bundle_has_manifest_and_other_artifacts(self):
+        from origami.output import artifacts
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(artifacts.graph, "write", side_effect=OSError("synthetic")):
+                info = artifacts.write_artifacts(result(), directory)
+            manifest = json.loads((Path(directory) / "manifest.json").read_text())
+            self.assertFalse(manifest["completed"])
+            self.assertIn("graph", info["errors"])
+            self.assertIn("report.html", manifest["files"])
+            self.assertTrue((Path(directory) / "findings.json").exists())
+
+    def test_slug_has_origin_and_path_identity(self):
+        urls = ["http://example.test/a", "https://example.test/a",
+                "https://example.test/a/b", "https://example.test/a_b"]
+        self.assertEqual(len({cli._slug(url) for url in urls}), len(urls))
 
 
 if __name__ == "__main__":
