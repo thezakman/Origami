@@ -5,6 +5,16 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [Unreleased]
+
+### Added
+- Standalone `--review-report FILE`: a read-only offline JSON summary with source
+  SHA-256, execution state, evidence-note gaps, HTTP status counts and repeated
+  observation counts. No scanner, network, database or reproduction execution.
+- Bounded report loading with schema/state checks, duplicate-key rejection and
+  safe diagnostics. Legacy reports retain unknown execution state. Source evidence
+  and heuristic confidence are never promoted into confirmed vulnerability claims.
+
 ## [1.12.3] - 2026-09-28
 
 ### Fixed

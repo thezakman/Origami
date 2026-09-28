@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import json
 import math
 import re
 import sys
@@ -574,6 +575,8 @@ def main() -> None:
         ))
     ap.add_argument("-V", "--version", action="version",
                     version=f"origami {__version__}")
+    ap.add_argument("--review-report", metavar="FILE",
+                    help="review a saved JSON report offline; print a JSON summary, without network or DB access")
     ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
     ap.add_argument("-u", "--url", dest="url_opt", action="append", metavar="URL",
                     help="target base URL as a flag (repeatable) — lets you keep the URL "
@@ -823,6 +826,22 @@ def main() -> None:
     # (which reads args.url) works unchanged whichever form the user used.
     if args.url_opt:
         args.url = list(args.url or []) + args.url_opt
+
+    if args.review_report:
+        if args.url or any(value != ap.get_default(key) for key, value in vars(args).items()
+                           if key not in {"review_report", "url", "url_opt"}):
+            ap.error("--review-report must be used alone")
+        from origami.output.review import InvalidReport, review_report
+        try:
+            reviewed = review_report(Path(args.review_report))
+            print(json.dumps(reviewed, indent=2, ensure_ascii=True))
+        except InvalidReport as exc:
+            print(f"[!] invalid report: {exc}", file=sys.stderr)
+            sys.exit(2)
+        except (OSError, ValueError) as exc:
+            print(f"[!] offline review failed: {type(exc).__name__}", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(0 if reviewed["state"] == "finished" else 3)
 
     if args.update:
         from origami.brain.ingest import wappalyzer

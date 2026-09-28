@@ -326,3 +326,30 @@ The existing `--proxy` / `--proxy-file` behavior still disables certificate veri
 
 `--forget HOST` removes host records, but shared legacy word statistics cannot be
 attributed to that host. Use a separate `--db` per engagement for isolation.
+
+### Offline evidence review
+
+```bash
+origami --review-report results/findings.json
+```
+
+This standalone mode reads a saved Origami JSON report and prints a JSON summary.
+It does not run the scanner, execute reproduction text, read targets from stdin,
+open the memory database or make network requests. Other operational flags cannot
+be combined with it. The input file is never modified.
+
+The summary includes a SHA-256 of the exact source bytes, execution state, HTTP
+status counts, missing notes, empty bodies and repeated URL/status/reproduction
+records. Source URLs, notes, credentials and commands are omitted from the summary.
+The hash identifies the file; it does not establish authenticity. Repeated records
+are counted, not removed. Confidence is not interpreted as vulnerability proof.
+
+Version 2 reports and legacy reports without a schema version are supported.
+Legacy execution state remains unknown. Unknown schema versions, duplicate JSON
+keys, malformed summary fields and files larger than 32 MiB are rejected. Only
+regular UTF-8 JSON files are accepted; this is not a JSONL reader or an exhaustive
+validator for every field in a report.
+
+Exit codes: `0` for a valid finished report, `3` for a valid partial, failed or
+legacy report, `2` for invalid input or a local read error. A finished report still
+does not establish complete coverage. Inspect `state` and `warnings` in the summary.

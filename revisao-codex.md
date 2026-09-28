@@ -4,13 +4,13 @@ Data: 28/09/2026 · Terceira passagem: revisão crítica do plano · Versão: `1
 
 ## Estado da implementação
 
-Após aprovação, foram executadas três etapas defensivas: validação e recursos;
-persistência e exportação; proteção de cabeçalhos e transporte. O registro atualizado,
+Após aprovação, foram executadas quatro etapas defensivas: validação e recursos;
+persistência e exportação; proteção de cabeçalhos e transporte; resumo offline de evidências. O registro atualizado,
 com testes e limitações, está em [docs/hardening-progress.md](docs/hardening-progress.md).
 O texto abaixo preserva o diagnóstico da revisão inicial: referências a ausência
 de alterações e testes anteriores descrevem aquele momento, não o estado atual.
 O plano integral permanece **parcial**, incluindo pendências de schema/procedência,
-isolamento por projeto, cobertura, revisão offline e interface. Evolução de automação
+isolamento por projeto, cobertura, anotações de revisão offline e interface. Evolução de automação
 ofensiva e retomada desses fluxos não foi implementada.
 
 ## Diagnóstico

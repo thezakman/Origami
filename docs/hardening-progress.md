@@ -45,12 +45,24 @@ Validação: 45 testes de infraestrutura passaram; Ruff passou; Mypy passou em 6
 
 Limitações: a proteção de cabeçalhos não é uma política completa de escopo de rede. Não há sanitização universal dos corpos de evidências ou de toda mensagem de erro. Chamadores da biblioteca que enviam cabeçalhos precisam definir `credential_origin` explicitamente.
 
+## Etapa 4 — Revisão offline de evidências
+
+- Novo comando independente `--review-report FILE`, sem tráfego, scanner, execução de comandos de reprodução ou acesso ao banco.
+- Resumo JSON com SHA-256 dos bytes originais, estado, status HTTP, notas ausentes, corpos vazios e registros repetidos. Não imprime URLs, notas ou comandos da origem.
+- Leitura limitada a 32 MiB; recusa arquivos especiais, JSON ambíguo, formatos futuros e inconsistências nos campos usados pelo resumo.
+- Relatórios antigos continuam com estado desconhecido; nenhum achado é promovido automaticamente a vulnerabilidade confirmada.
+- Fonte preservada sem alterações. Códigos de saída documentados: 0 para estado finished, 3 para parcial/falha/legado, 2 para entrada inválida.
+
+Validação: 55 testes locais passaram, incluindo leitura sem scanner/banco/stdin, preservação do arquivo, diagnóstico sem segredos, limites e rejeição de FIFO sem bloqueio. Ruff e Mypy passaram. Sem tráfego externo.
+
+Limitação: resumo descritivo; não valida todos os campos do relatório nem substitui revisão humana, corpus rotulado, reexportação ou gerenciamento de projetos.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.
 - Estado por etapa, cobertura mensurável e revisão das inferências do diff.
 - Isolamento por projeto, exclusão dos dados derivados e revisão de apresentação em todos os canais.
-- Importação/revisão offline, integridade do catálogo, empacotamento e avaliação com corpus rotulado.
+- Reexportação e anotações de revisão offline, integridade do catálogo, empacotamento e avaliação com corpus rotulado.
 - Interface de projeto e assistência inteligente explicável continuam propostas, sem implementação nesta execução.
 
 ## Limites de execução
