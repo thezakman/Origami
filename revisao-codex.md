@@ -2,6 +2,17 @@
 
 Data: 28/09/2026 · Terceira passagem: revisão crítica do plano · Versão: `1.12.2` · Commit: `16295d88f71dd16b0a7fa49498a4ff11030d896a`
 
+## Estado da implementação
+
+Após aprovação, foram executadas três etapas defensivas: validação e recursos;
+persistência e exportação; proteção de cabeçalhos e transporte. O registro atualizado,
+com testes e limitações, está em [docs/hardening-progress.md](docs/hardening-progress.md).
+O texto abaixo preserva o diagnóstico da revisão inicial: referências a ausência
+de alterações e testes anteriores descrevem aquele momento, não o estado atual.
+O plano integral permanece **parcial**, incluindo pendências de schema/procedência,
+isolamento por projeto, cobertura, revisão offline e interface. Evolução de automação
+ofensiva e retomada desses fluxos não foi implementada.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.

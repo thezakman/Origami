@@ -79,7 +79,8 @@ class TestInputSafety(unittest.TestCase):
             for flags in variants:
                 with self.subTest(flags=flags):
                     args = arguments("--jsonl", str(path), *flags)
-                    with patch.object(cli, "Engine") as engine:
+                    with patch.object(cli, "Engine") as engine, \
+                         patch.object(cli, "scan", AsyncMock(side_effect=AssertionError("unexpected scan"))):
                         with contextlib.redirect_stdout(io.StringIO()):
                             with self.assertRaises(SystemExit):
                                 asyncio.run(cli.run(args))
@@ -123,6 +124,90 @@ class TestResourceSafety(unittest.TestCase):
             self.assertFalse(mem.db.in_transaction)
             mem.record_word_stats({"fixture": (1, 0)}, [])
             self.assertEqual(mem.history(), [])
+
+
+class TestCredentialSafety(unittest.TestCase):
+    def test_origin_keeps_ports_and_ipv6_distinct(self):
+        from origami.core.privacy import origin, proxy_label
+        self.assertEqual(origin("https://EXAMPLE.test/"), origin("https://example.test:443/"))
+        self.assertNotEqual(origin("https://example.test/"), origin("https://example.test:8443/"))
+        self.assertNotEqual(origin("https://[::1]/"), origin("https://[::2]/"))
+        self.assertNotIn("sentinel", proxy_label("http://user:sentinel@example.test:8080/"))
+
+    def test_headers_bound_to_explicit_origin_and_redirects(self):
+        import httpx
+
+        async def check():
+            sent = []
+
+            def transport(request):
+                sent.append(request)
+                if request.url.path == "/redirect":
+                    return httpx.Response(302, headers={"location": "https://cdn.example.test/asset"})
+                return httpx.Response(200, text="fixture")
+
+            cfg = EngineConfig(headers={"X-Custom": "sentinel", "Cookie": "sid=sentinel"},
+                               credential_origin="https://example.test/")
+            engine = Engine(cfg)
+            # Same request hooks as the production client; transport stays entirely in memory.
+            async with httpx.AsyncClient(headers=cfg.headers, follow_redirects=True,
+                                         event_hooks={"request": [engine._protect_credentials]},
+                                         transport=httpx.MockTransport(transport)) as client:
+                await client.get("https://example.test/redirect")
+                await client.get("https://example.test:8443/", headers={"Authorization": "sentinel"})
+            self.assertEqual(sent[0].headers["x-custom"], "sentinel")
+            for request in sent[1:]:
+                self.assertNotIn("x-custom", request.headers)
+                self.assertNotIn("authorization", request.headers)
+                self.assertNotIn("cookie", request.headers)
+        asyncio.run(check())
+
+    def test_unbound_headers_are_not_sent(self):
+        import httpx
+        engine = Engine(EngineConfig(headers={"X-Custom": "sentinel"}))
+        request = httpx.Request("GET", "https://example.test/", headers=engine.cfg.headers)
+        asyncio.run(engine._protect_credentials(request))
+        self.assertNotIn("x-custom", request.headers)
+
+    def test_tls_verification_enabled_by_default(self):
+        self.assertTrue(EngineConfig().verify_tls)
+
+    def test_production_client_installs_privacy_hook(self):
+        async def check():
+            engine = Engine()
+            async with engine._new_client(None) as client:
+                self.assertIn(engine._protect_credentials, client.event_hooks["request"])
+        asyncio.run(check())
+
+    def test_replay_config_keeps_tls_and_hides_secrets(self):
+        configs = []
+
+        class FakeEngine:
+            def __init__(self, cfg): configs.append(cfg)
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+
+        args = arguments("--replay-proxy", "http://user:proxy-sentinel@example.test:8080",
+                         "-H", "X-Custom: header-sentinel")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(cli, "Engine", FakeEngine), \
+             patch.object(cli, "scan", AsyncMock(return_value=result())), \
+             patch.object(cli.resume_mod, "clear"), patch.object(cli.ui, "print_report"), \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(asyncio.run(cli.run(args)), 0)
+        self.assertTrue(configs[0].verify_tls)
+        self.assertEqual(configs[0].credential_origin, "https://example.test/")
+        self.assertNotIn("sentinel", stdout.getvalue() + stderr.getvalue())
+
+    def test_no_automatic_tls_downgrade(self):
+        async def check():
+            engine = Engine(EngineConfig(max_retries=0, jitter=(0, 0)))
+            engine._client = object()
+            with patch.object(engine, "_stream_probe", AsyncMock(side_effect=OSError("SSL: DH_KEY_TOO_SMALL"))):
+                await engine.fetch("https://example.test/")
+            self.assertFalse(engine._legacy_active)
+            self.assertFalse(engine.legacy_tls_engaged)
+        asyncio.run(check())
 
 
 class TestOutputSafety(unittest.TestCase):

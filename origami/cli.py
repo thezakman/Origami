@@ -24,6 +24,7 @@ from origami.control import keyboard_control
 from origami.core import resume as resume_mod
 from origami.core.files import OutputWriteError, atomic_write, new_private_stream
 from origami.core.httpclient import _UA_POOL, Engine, EngineConfig
+from origami.core.privacy import proxy_label
 from origami.core.response_classifier import Filters
 from origami.core.scanner import ScanControl, ScanOptions, resume_scan, scan
 from origami.core.scheduler import resolve_wordlist
@@ -364,12 +365,7 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
                 name, val = name.strip(), val.strip()
                 if not val:
                     return name
-                # show the value so you can confirm the paste, but mask the MIDDLE of
-                # a long/secret-looking one (API key, bearer token, cookie) so the full
-                # secret doesn't land in terminal scrollback / a screenshot.
-                if len(val) > 20:
-                    val = f"{val[:6]}…{val[-4:]}"
-                return f"{name}: {val}"
+                return f"{name}: [redacted]"
             hs = [_fmt_hdr(h) for h in args.header]
             if len(hs) == 1:
                 print(f"  headers  : {hs[0]}")
@@ -383,10 +379,10 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
         elif args.rotate_ua:
             print(f"  user-agent: rotating per request (pool of {len(_UA_POOL)} browsers)")
         if args.proxy:
-            print(f"  proxy    : {args.proxy} (TLS verification off)")
+            print(f"  proxy    : {proxy_label(args.proxy)} (TLS verification off)")
         if args.replay_proxy:
             codes = f" (codes {args.replay_codes})" if args.replay_codes else ""
-            print(f"  replay   : {args.replay_proxy}{codes} — confirmed findings only")
+            print(f"  replay   : {proxy_label(args.replay_proxy)}{codes} — confirmed findings only")
         if args.time_limit:
             print(f"  time-limit: {args.time_limit}")
         if args.origin:
@@ -471,10 +467,9 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
                                         log_stream=sys.stderr if jsonl_stdout else None)
             cfg = EngineConfig(concurrency=args.concurrency, timeout=args.timeout,
                                delay=args.delay, rate=args.rate,
-                               verify_tls=not (args.insecure or args.proxy or proxy_list
-                                               or args.replay_proxy),
+                               verify_tls=not (args.insecure or args.proxy or proxy_list),
                                proxy=args.proxy or "", proxies=proxy_list,
-                               headers=headers,
+                               headers=headers, credential_origin=target,
                                user_agent=args.user_agent or EngineConfig.user_agent,
                                rotate_ua=args.rotate_ua and not args.user_agent,
                                http2=use_http2, legacy_tls=args.legacy_tls)
@@ -534,6 +529,8 @@ def _forget(args) -> int:
         host = urlparse(target).netloc or target
         n = mem.forget(host)
         print(f"[+] forgot {host} — removed {n} corpus paths")
+        print("[!] shared word statistics remain; legacy data cannot be attributed to one host. "
+              "Use a separate --db per project; --forget all clears that whole database.", file=sys.stderr)
     mem.close()
     return 0
 
@@ -622,10 +619,9 @@ def main() -> None:
     ap.add_argument("-k", "--insecure", action="store_true", help="skip TLS verification")
     ap.add_argument("--legacy-tls", action="store_true",
                     help="start with a lowered OpenSSL security level (SECLEVEL=1) for servers "
-                         "with weak DH keys / old ciphers (reaches what curl reaches). Auto-engaged "
-                         "on a weak-TLS handshake error even without this flag")
+                         "with weak DH keys / old ciphers; never enabled automatically")
     ap.add_argument("-H", "--header", action="append", metavar="'Name: Value'",
-                    help="extra header sent on every request; repeatable "
+                    help="extra header restricted to the target origin; repeatable "
                          "(e.g. -H 'Cookie: sid=…' -H 'Authorization: Bearer …') — "
                          "for authenticated scans")
     ap.add_argument("-A", "--user-agent", metavar="UA",
@@ -642,7 +638,7 @@ def main() -> None:
     ap.add_argument("--replay-proxy", metavar="URL",
                     help="re-issue only CONFIRMED findings through this proxy at the end of the "
                          "scan — Burp/ZAP gets a clean sitemap of just the hits, separate from "
-                         "--proxy (which sees every probe); implies -k")
+                         "--proxy (which sees every probe); TLS verification remains enabled unless -k")
     ap.add_argument("--replay-codes", metavar="CODES",
                     help="restrict --replay-proxy to these status codes (comma list; "
                          "default = every reported finding)")
@@ -676,7 +672,7 @@ def main() -> None:
                          "— new / gone / newly-ACCESSIBLE endpoints (403→200 etc.); needs the "
                          "memory DB (recon-over-time / attack-surface monitoring)")
     ap.add_argument("--forget", metavar="HOST|all",
-                    help="erase cross-target memory for a host (www/apex together) or 'all', then exit")
+                    help="erase host records (shared word statistics remain) or all memory, then exit")
     ap.add_argument("--forget-noise", action="store_true",
                     help="prune content-hashed/fingerprinted bundle names (app.a1b2c3d4.js, "
                          "GUIDs, timestamps) from cross-target memory, then exit")

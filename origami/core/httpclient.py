@@ -27,6 +27,7 @@ import anyio
 import httpx
 
 from origami.core.normalize import simhash
+from origami.core.privacy import origin, sensitive_header
 
 # Low-level stream errors that can escape httpx's own exception wrapping.
 # httpcore's anyio backend re-raises anyio.EndOfStream / BrokenResourceError /
@@ -106,12 +107,13 @@ class EngineConfig:
     user_agent: str = DEFAULT_UA
     rotate_ua: bool = False                     # pick a random UA from _UA_POOL per request (--rotate-ua)
     headers: dict[str, str] = field(default_factory=dict)   # extra headers (auth/cookies) sent on every request
+    credential_origin: str = ""               # configured headers are private to this exact origin
     proxy: str = ""                             # route through an intercepting proxy (Burp/ZAP), e.g. http://127.0.0.1:8080
     proxies: list[str] = field(default_factory=list)   # rotate per request across these (--proxy-file); overrides `proxy`
     http2: bool = False                         # negotiate HTTP/2 (ALPN) — matches modern CDNs (--http2; needs the h2 pkg)
     follow_redirects: bool = False              # we want to *see* redirects
-    verify_tls: bool = False                    # pentest targets: don't choke on certs
-    legacy_tls: bool = False                    # start with a lowered OpenSSL security level (weak-DH/legacy servers); auto-engaged on a weak-TLS handshake error
+    verify_tls: bool = True                     # exceptions require explicit configuration
+    legacy_tls: bool = False                    # explicit lowered security level for legacy TLS
     backoff_base: float = 0.8                   # seconds, grows on pushback
     max_body: int = 2_000_000                   # cap body read (bytes) — OOM guard on hostile/huge responses
 
@@ -130,7 +132,7 @@ _MIN_STREAM_THROUGHPUT = 200_000   # bytes/sec assumed minimum for the cap-scale
 # TLS handshake errors that a *lowered security level* (SECLEVEL=1) resolves —
 # a weak Diffie-Hellman key, an old cipher, or legacy renegotiation the modern
 # default rejects. These are the servers curl reaches but a strict Python OpenSSL
-# refuses; we drop the security level and retry rather than call them "unreachable".
+# refuses. Recognition does not authorize a transport security downgrade.
 _WEAK_TLS = ("dh_key_too_small", "dh key too small", "key_too_small",
              "handshake_failure", "handshake failure", "unsafe_legacy",
              "md_too_weak", "ca_md_too_weak", "sslv3_alert", "no_ciphers",
@@ -223,12 +225,9 @@ class Engine:
         # once by the scanner at scan start (--time-limit) and read in every
         # fold's hot loop; lives here so all folds share one budget.
         self.deadline: float | None = None
-        # Legacy-TLS: some (often enterprise/legacy) servers negotiate a weak DH
-        # key or an old cipher that a default OpenSSL security level rejects — the
-        # handshake fails where curl succeeds. We start strict and, on the first
-        # such handshake error, transparently drop to SECLEVEL=1 and retry.
+        # A weaker TLS context is available only through explicit configuration.
         self._legacy_active = bool(self.cfg.legacy_tls)
-        self.legacy_tls_engaged = False   # True once the fallback actually kicked in (for a warning)
+        self.legacy_tls_engaged = self._legacy_active
 
     @property
     def concurrency_limit(self) -> int:
@@ -252,8 +251,27 @@ class Engine:
             proxy=proxy or None,
             http2=self.cfg.http2,             # negotiated via ALPN; CLI guards the h2 dep
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
+            event_hooks={"request": [self._protect_credentials]},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )
+
+    async def _protect_credentials(self, request: httpx.Request, *, extra_headers=()) -> None:
+        """Strip private headers before any off-origin request, including redirects.
+
+        A shared registrable domain or another port does not authorize sharing a
+        session. Library users must explicitly bind configured headers to an origin.
+        """
+        try:
+            bound = bool(self.cfg.credential_origin) and (
+                origin(str(request.url)) == origin(self.cfg.credential_origin))
+        except (ValueError, UnicodeError):
+            bound = False
+        if bound:
+            return
+        configured = {name.lower() for name in (*self.cfg.headers, *extra_headers)}
+        for name in list(request.headers):
+            if name.lower() in configured or sensitive_header(name):
+                del request.headers[name]
 
     def replay_client(self, proxy: str) -> httpx.AsyncClient:
         """A standalone client bound to a replay proxy (--replay-proxy): confirmed
@@ -279,25 +297,6 @@ class Engine:
             raise
         self._client = self._clients[0]       # default/first (back-compat)
         return self
-
-    async def _enable_legacy_tls(self) -> None:
-        """Rebuild the client pool with a lowered TLS security level after a
-        weak-DH/legacy handshake failure — so the rest of the scan reaches the
-        server that curl can. Idempotent; happens at most once (usually the root
-        fetch, before concurrency ramps)."""
-        if self._legacy_active:
-            return
-        self._legacy_active = True
-        self.legacy_tls_engaged = True
-        old = self._clients
-        proxies = self.cfg.proxies or [self.cfg.proxy or ""]
-        self._clients = [self._new_client(p or None) for p in proxies]
-        self._client = self._clients[0]
-        for c in old:
-            try:
-                await c.aclose()
-            except Exception:
-                pass
 
     def _pick_client(self) -> httpx.AsyncClient:
         return self._clients[0] if len(self._clients) == 1 else random.choice(self._clients)
@@ -392,10 +391,7 @@ class Engine:
                     # scan. Only an explicit 429/503 status (below) is a reliable
                     # overload signal. The held in-flight slot already slows us.
                     last_err = f"{type(e).__name__}: {e}"
-                    # A weak-DH/legacy-cipher handshake the strict default rejects:
-                    # drop to SECLEVEL=1 and retry (reaches what curl reaches).
-                    if _looks_weak_tls(last_err) and not self._legacy_active:
-                        await self._enable_legacy_tls()
+                    # Never lower TLS security as an implicit retry side effect.
                     continue
                 except (ValueError, UnicodeError, httpx.InvalidURL) as e:
                     # A malformed candidate URL — e.g. a wordlist/payload whose raw

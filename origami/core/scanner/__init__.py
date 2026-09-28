@@ -242,9 +242,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         observer.log(f"root: body truncated at {root.length}B — the response is larger than "
                      f"that; endpoints past this point were not seen", 0, style="yellow")
     if getattr(engine, "legacy_tls_engaged", False):
-        observer.log("tls: server negotiated a weak DH key / legacy cipher — dropped to a "
-                     "lower OpenSSL security level to connect (as curl does); the transport "
-                     "is less secure", 0, style="yellow")
+        observer.log("tls: explicit legacy TLS configuration lowers OpenSSL security "
+                     "level; the transport is less secure", 0, style="yellow")
     if not root.ok:
         observer.log(f"root unreachable: {root.error}", 1, style="red")
         result.error = root.error           # surface WHY (TLS/DNS/reset) instead of a bare "unreachable"
@@ -759,16 +758,18 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
 async def _replay_findings(engine, result, opts, observer) -> None:
     """GET each reported finding (optionally filtered by --replay-codes) through the
     replay proxy. Best-effort: a proxy that's down logs a warning, never crashes."""
+    from origami.core.privacy import proxy_label
+    label = proxy_label(opts.replay_proxy)
     codes = set(opts.replay_codes)
     targets = [f for f in result.findings if not codes or f.status in codes]
     if not targets:
         return
-    observer.log(f"replay: sending {len(targets)} finding(s) to {opts.replay_proxy}"
+    observer.log(f"replay: sending {len(targets)} finding(s) to {label}"
                  + (f" (codes {sorted(codes)})" if codes else ""), 0, style="cyan")
     try:
         client = engine.replay_client(opts.replay_proxy)   # httpx validates the proxy URL here
     except Exception as e:
-        observer.log(f"replay: cannot use proxy {opts.replay_proxy!r} ({e}) — skipped",
+        observer.log(f"replay: cannot use proxy {label} ({type(e).__name__}) — skipped",
                      0, style="yellow")
         return
     sent = 0
@@ -783,7 +784,7 @@ async def _replay_findings(engine, result, opts, observer) -> None:
         await client.aclose()
     if sent < len(targets):
         observer.log(f"replay: {sent}/{len(targets)} delivered "
-                     f"(proxy {opts.replay_proxy} may be unreachable)", 0, style="yellow")
+                     f"(proxy {label} may be unreachable)", 0, style="yellow")
 
 
 async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=None,

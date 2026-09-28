@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import random
 import string
+from functools import partial
 from urllib.parse import urljoin, urlparse
 
 from origami.brain.ngram import NGram
@@ -625,7 +626,8 @@ async def _authz_diff_fold(engine, profile, result, opts, observer) -> None:
     try:
         for i in ids:
             clients[i.label] = httpx.AsyncClient(
-                verify=False, timeout=engine.cfg.timeout, follow_redirects=False,
+                verify=engine.cfg.verify_tls, timeout=engine.cfg.timeout, follow_redirects=False,
+                event_hooks={"request": [partial(engine._protect_credentials, extra_headers=i.headers)]},
                 headers={"User-Agent": engine.cfg.user_agent, **i.headers})
         for f in cands:
             if _over_budget(engine, opts):
@@ -1004,8 +1006,9 @@ async def _origin_fold(engine, profile, result, opts, observer, root_simhash) ->
                     if f.status in (401, 403)), None)
     seen_sig: set[tuple] = set()
 
-    async with httpx.AsyncClient(verify=False, timeout=engine.cfg.timeout,
+    async with httpx.AsyncClient(verify=engine.cfg.verify_tls, timeout=engine.cfg.timeout,
                                  follow_redirects=False,
+                                 event_hooks={"request": [engine._protect_credentials]},
                                  headers={"User-Agent": engine.cfg.user_agent,
                                           **engine.cfg.headers}) as c:
         for ip in all_ips:
