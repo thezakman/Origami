@@ -5,6 +5,31 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.12.3] - 2026-09-28
+
+### Fixed
+- Validate inputs before opening output files or allocating scan resources; close
+  partially initialized clients and roll back failed SQLite writes.
+- Write reports and checkpoints atomically with private file permissions. Attempt
+  output formats independently, report export failures and preserve the checkpoint
+  when export fails. Distinguish per-target artifact names with a URL digest.
+- Restrict configured credentials to the target origin, including redirects, and
+  omit header values and proxy passwords from configuration diagnostics.
+- Verify TLS by default in the library; replay-proxy configuration alone no longer
+  disables verification. Handshake failures never enable legacy TLS automatically.
+- Include execution state, evidence notes and explicit coverage limitations in
+  reports. Clarify that forgetting a host does not remove shared word statistics.
+
+### Compatibility notes
+- Existing JSONL files are refused instead of truncated. Choose a new output path.
+- JSON reports use schema version 2; JSONL finding records retain their format.
+- Partial executions and export failures return exit code 3.
+- Library callers must set `EngineConfig.credential_origin` to send configured
+  headers. Legacy TLS requires explicit configuration. The existing main-proxy
+  certificate-verification override remains in place.
+- Checkpoint fidelity, full network scope enforcement and project isolation remain
+  pending; see `docs/hardening-progress.md` for the implementation boundaries.
+
 ## [1.12.2]
 ### Fixed
 - **Phantom tech chips on a JSON API and on ordinary HTML pages.** Scanning a Django
