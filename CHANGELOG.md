@@ -5,7 +5,7 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
-## [Unreleased]
+## [1.14.3] - 2026-09-29
 
 ### Fixed
 - Bound Rich/plain denied-response previews across varying lengths, report hidden
