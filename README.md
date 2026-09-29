@@ -433,3 +433,15 @@ response or raw body, and does not recover observations from earlier resumed
 processes or legacy reports. `unavailable` explicitly marks untracked retention.
 Keeping these snapshots increases memory usage and report/DB size. The request
 selection and discovery algorithms are unchanged by these reporting corrections.
+
+Live Rich/plain terminals preview at most four guessed denied observations per
+401/403 status, across differing response lengths. This is a display limit, not
+an assertion that their bodies match. The hidden count appears when the session
+ends. Declared API-contract observations retain their existing visibility.
+Repeated grouping notices are emitted once per category/status. Verbose request
+logging remains separate; `-vv` may still be noisy.
+
+HTML exports include a collapsible table of retained report events, with the URL
+and original note, so grouping does not hide those accepted observations from
+manual review. Source values are escaped as text. The primary table remains the
+existing grouped presentation, and score captions identify its heuristic basis.

@@ -98,3 +98,4 @@ class ScanResult:
     multiviews_choices: set = field(default_factory=set, compare=False, repr=False)  # MultiViews-disclosed files already validated (dedup: /x.bak, /x.inc … all → /x.php)
     reported_observations: list[dict] = field(default_factory=list, compare=False, repr=False)
     report_events_tracked: bool = field(default=False, compare=False, repr=False)
+    presentation_notices: set[tuple[str, int]] = field(default_factory=set, compare=False, repr=False)

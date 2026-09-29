@@ -111,6 +111,12 @@ Validação: 109 testes locais de infraestrutura, incluindo as seis regressões,
 
 Limites: retenção no processo atual, depois dos filtros/dedup de emissão; não representa todos os responses, corpos HTTP brutos ou recuperação de eventos anteriores à retomada. Captura no instante de emissão, sem sobrescrever a nota com enriquecimento posterior. Aumenta memória e tamanho dos relatórios. O score permanece heurístico, agora identificado como tal.
 
+## Etapa 13 — Prévia de negações e detalhes de observações
+
+Duas regressões falharam antes da correção: tamanhos distintos reiniciavam a enxurrada de negações na UI e o HTML só continha a representante agrupada. A prévia Rich/plain agora mostra até quatro negações inferidas por status 401/403, com total oculto; entradas de contrato declarado mantêm visibilidade. Avisos de agrupamento deixam de repetir por tamanho. Uma seção expansível do HTML conserva URLs e notas de emissão escapadas, e a legenda do score aparece na CLI/relatório.
+
+Validação: 125 testes consolidados passaram; mais dois testes específicos de terminal plain/avisos passaram depois. Ruff e Mypy passaram. Limites: mudanças exclusivamente de diagnóstico/apresentação; não aceleram requisições nem confirmam os recursos do domínio fornecido. Log de cada request em `-vv` continua separado. Eventos representam somente emissões aceitas deste processo.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

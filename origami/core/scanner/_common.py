@@ -283,8 +283,10 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
             n = result.softwall_seen.get(sig, 0) + 1
             result.softwall_seen[sig] = n
         if (wall or softwall) and n > COLLISION_MAX:
-            if n == COLLISION_MAX + 1:
-                kind = "soft-200 wall" if softwall else "block-wall"
+            kind = "soft-200 wall" if softwall else "block-wall"
+            notice = kind, finding.status
+            if n == COLLISION_MAX + 1 and notice not in result.presentation_notices:
+                result.presentation_notices.add(notice)
                 basis = "shared status/body fingerprint" if softwall else "shared status/length"
                 observer.log(f"{finding.status} {kind}: repeated {basis} — muting presentation "
                              "(body equality and path existence not established; report events retained)",

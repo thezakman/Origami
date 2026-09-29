@@ -90,6 +90,29 @@ class NullObserver:
     def __enter__(self): return self
     def __exit__(self, *a): ...
 
+    def _preview_denial(self, finding, stream: bool) -> bool:
+        """Limit terminal lines by denied status, without merging evidence records."""
+        if finding.status not in (401, 403) or finding.origin in {"apidocs", "wellknown"}:
+            return stream
+        if not hasattr(self, "_denial_counts"):
+            self._denial_counts: dict[int, int] = {}
+            self._denial_hidden = 0
+        n = self._denial_counts.get(finding.status, 0) + 1
+        self._denial_counts[finding.status] = n
+        if n > 4 or not stream:
+            self._denial_hidden += 1
+            if n == 5:
+                self.log(f"{finding.status}: denied-response preview limited to 4 lines; "
+                         "denial does not establish path existence. Remaining report events "
+                         "are retained separately from the grouped view.", 0, style="yellow")
+            return False
+        return stream
+
+    def _hidden_denial_summary(self) -> str:
+        hidden = getattr(self, "_denial_hidden", 0)
+        return (f"{hidden} denied observations hidden in this terminal view; "
+                "inspect retained report events in JSON/HTML when exporting." if hidden else "")
+
 
 def display_url(url: str, full: bool) -> str:
     """Full URL when --full-url is set, else just the path."""
@@ -282,6 +305,7 @@ class RichUI(NullObserver):
         # stream=False: still counted (kept in self.findings for the summary),
         # but not printed — used to mute a block-wall flood in the live view.
         self.findings.append(f)
+        stream = self._preview_denial(f, stream)
         if not stream:
             self._refresh()
             return
@@ -437,6 +461,8 @@ class RichUI(NullObserver):
             console.print(f"  ⚑ {hi}")
         console.print(f"[dim]  started {started} · ended {ended} · "
                       f"duration {self._elapsed()}[/]\n")
+        if self._hidden_denial_summary():
+            console.print(Text(self._hidden_denial_summary(), style="dim"))
 
 
 class PlainLiveObserver(NullObserver):
@@ -471,6 +497,8 @@ class PlainLiveObserver(NullObserver):
         print(f"\x1b[1;32m✓\x1b[0m {self.hits} findings · "
               f"{self.requests} reqs · {self._rate():.0f}/s · "
               f"started {started} · duration {self._elapsed()}")
+        if self._hidden_denial_summary():
+            print(self._hidden_denial_summary())
         sys.stdout.flush()
 
     def _rate(self) -> float:
@@ -520,6 +548,7 @@ class PlainLiveObserver(NullObserver):
         self._draw()
 
     def finding(self, f, stream: bool = True) -> None:
+        stream = self._preview_denial(f, stream)
         if not stream:                  # block-wall flood — muted in the live view
             return
         tags = f" \x1b[1;31m[{terminal_text(','.join(f.tags))}]\x1b[0m" if getattr(f, "tags", None) else ""
@@ -577,6 +606,8 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
         return
     if not show_fingerprint and not show_findings:
         return
+    console.print(Text("Score is an uncalibrated heuristic; HTTP status does not establish "
+                       "path existence or a confirmed vulnerability.", style="dim"))
     p = result.profile
 
     if show_fingerprint:
@@ -614,7 +645,7 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
     tbl.add_column("code", width=4)
     tbl.add_column("size", justify="right", width=9, style="dim")
     tbl.add_column("src", width=9, style="dim")
-    tbl.add_column("conf", width=4, justify="right", style="dim")
+    tbl.add_column("score", width=5, justify="right", style="dim")
     tbl.add_column("tags")
     tbl.add_column("path", ratio=1, no_wrap=True)
     for f in result.findings:
@@ -662,6 +693,9 @@ def print_curls(result) -> None:
 
 def _plain_report(result, full_url: bool = False, show_findings: bool = True,
                   show_fingerprint: bool = True) -> None:
+    if show_fingerprint or show_findings:
+        print("Score is an uncalibrated heuristic; HTTP status does not establish "
+              "path existence or a confirmed vulnerability.")
     p = result.profile
     if show_fingerprint:
         print("\n=== Fingerprint ===")

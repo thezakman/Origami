@@ -8,6 +8,12 @@ All notable changes to Origami are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Bound Rich/plain denied-response previews across varying lengths, report hidden
+  counts and avoid repeated notices for each size. Keep declared contract entries
+  visible. This changes terminal presentation only; verbose request logs remain.
+- Include retained emitted observations and original notes in an escaped HTML
+  detail table, alongside the existing grouped view. Label terminal scores as
+  uncalibrated heuristics.
 - Preserve accepted report-event snapshots separately from grouped findings in JSON
   and stored DB reports. Grouping no longer discards these emitted records; metadata
   explicitly limits retention to the current process and reports unavailable legacy

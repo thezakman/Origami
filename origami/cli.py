@@ -402,6 +402,7 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
             print(f"  extensions: {', '.join(e.lstrip('.') for e in exts)}"
                   + (" (only)" if args.ext_only else " (+ auto)"))
         print(f"  filters  : codes {fdesc}")
+        print("  score    : uncalibrated heuristic; HTTP status alone does not prove path existence")
         if args.deep:
             _hist = "" if args.no_history else " + wayback"
             print(f"  deep     : bypass-403 + cache-poison + probe-405 + buckets + params{_hist} + origin + shortscan --auto")

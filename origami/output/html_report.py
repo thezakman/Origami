@@ -116,6 +116,18 @@ def render(result, n_hidden: int | None = None) -> str:
     params = "".join(f"<span>{e(x)}</span>" for x in sorted(p.parameters))
     params_block = (f'<h2>Parameters ({len(p.parameters)})</h2><div class="params">{params}</div>'
                     if p.parameters else "")
+    observation_details = ""
+    if result.report_events_tracked:
+        event_rows = "".join(
+            f'<tr><td>{e(str(row["status"]))}</td><td>{e(str(row["length"]))}</td>'
+            f'<td class="path">{e(row["url"])}</td><td><pre>{e(row.get("note", ""))}</pre></td></tr>'
+            for row in result.reported_observations)
+        observation_details = (
+            f'<details><summary>Reported observations — current process ({len(result.reported_observations)})</summary>'
+            '<p class="sub">Accepted events at emission, before presentation grouping and later note updates. '
+            'This is not every HTTP request or raw response.</p>'
+            '<table><thead><tr><th>code</th><th>size</th><th>URL</th><th>original note</th></tr></thead>'
+            f'<tbody>{event_rows}</tbody></table></details>')
     when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -134,7 +146,7 @@ when retention is available; they do not include every request or raw HTTP bodie
 <table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
 <th data-sort="str">src</th><th data-sort="num">score</th><th data-sort="str">tags</th>
 <th data-sort="str">path</th></tr></thead>
-<tbody>{''.join(rows)}</tbody></table></div>
+<tbody>{''.join(rows)}</tbody></table>{observation_details}</div>
 <script>{_JS}</script></body></html>"""
 
 
