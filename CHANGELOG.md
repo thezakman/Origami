@@ -5,6 +5,18 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [Unreleased]
+
+### Fixed
+- Preserve accepted report-event snapshots separately from grouped findings in JSON
+  and stored DB reports. Grouping no longer discards these emitted records; metadata
+  explicitly limits retention to the current process and reports unavailable legacy
+  retention. Snapshots retain values at emission, before later note enrichment.
+- Describe response grouping by its actual status/length or fingerprint basis;
+  stop claiming identical bodies or confirmed resource existence from those keys.
+- Label report confidence as an uncalibrated heuristic rather than measured
+  probability. HTTP success/denial alone is not vulnerability/existence proof.
+
 ## [1.14.2] - 2026-09-28
 
 ### Fixed

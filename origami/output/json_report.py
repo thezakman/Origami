@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import UTC, datetime
 
@@ -37,6 +38,13 @@ def to_dict(result: ScanResult) -> dict:
         "completed": result.completed,
         "state": "failed" if result.error else "finished" if result.completed else "partial",
         "coverage": "unknown" if result.completed else "partial",
+        "confidence_kind": "uncalibrated_heuristic",
+        "observation_retention": ("accepted_report_events_current_process"
+                                  if result.report_events_tracked else "unavailable"),
+        "reported_observation_count": (len(result.reported_observations)
+                                       if result.report_events_tracked else None),
+        "presentation_row_count": len(result.findings),
+        "reported_observations": deepcopy(result.reported_observations),
         "error": result.error,
         "pushbacks": result.pushbacks,
         "harvested_paths": sorted(result.harvested_paths),

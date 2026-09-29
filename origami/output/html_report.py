@@ -76,7 +76,10 @@ def render(result, n_hidden: int | None = None) -> str:
                     for t, s in p.tech_scores.items()) or '<span class="sub">none</span>'
     folds = "".join(f'<span class="badge fold">⌘ {e(f)}</span>' for f in sorted(result.folds))
     state = "failed" if result.error else "finished" if result.completed else "partial"
+    retention = (f"{len(result.reported_observations)} reported observations · {len(result.findings)} presentation rows"
+                 if result.report_events_tracked else "reported-observation retention unavailable")
     cards = [f'<div class="card"><b>execution</b>{state} · coverage not established</div>', f'<div class="card"><b>tech</b>{techs}</div>']
+    cards.append(f'<div class="card"><b>retention</b>{retention}</div>')
     if p.waf:
         cards.append(f'<div class="card"><b>WAF</b><span class="badge waf">{e(p.waf)}</span></div>')
     if p.enabled_extensions:
@@ -122,10 +125,14 @@ def render(result, n_hidden: int | None = None) -> str:
 <div class="wrap"><div class="cards">{''.join(cards)}</div>
 {params_block}
 <h2>Findings ({len(result.findings)})</h2>
+<p class="sub">Score is an uncalibrated heuristic, not a measured probability.
+HTTP success does not confirm a vulnerability; denial does not establish path existence.
+Grouping does not establish identical bodies. Recorded report events are preserved in JSON
+when retention is available; they do not include every request or raw HTTP bodies.</p>
 <label for="q">Filter findings</label>
 <input id="q" placeholder="filter findings…" autofocus>
 <table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
-<th data-sort="str">src</th><th data-sort="num">conf</th><th data-sort="str">tags</th>
+<th data-sort="str">src</th><th data-sort="num">score</th><th data-sort="str">tags</th>
 <th data-sort="str">path</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
 <script>{_JS}</script></body></html>"""

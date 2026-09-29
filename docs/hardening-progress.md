@@ -103,6 +103,14 @@ Duas regressões falharam antes da correção: uma reserva existente era ignorad
 
 Validação consolidada: 103 testes locais passaram; Ruff e Mypy passaram (71 arquivos). Sem rede. Limite: término não capturável pode deixar reserva obsoleta; após confirmar que não há escritor ativo, remover apenas a pasta vazia de reserva ou escolher outro destino. Não há recuperação automática dessa reserva nem garantia contra alteração hostil concorrente no filesystem.
 
+## Etapa 12 — Observações preservadas e interpretação de repetição
+
+O log fornecido levou a seis regressões: perda de URLs no agrupamento do JSON/snapshot, mutação das notas originais, retenção antiga desconhecida e afirmações incorretas sobre igualdade de corpos/confiança. As seis falharam antes da correção. Novos snapshots de eventos aceitos em `reported_observations` preservam esses dados sem alimentar descoberta; `findings` mantém a visão existente. Rótulos passam a explicar a base heurística do agrupamento e do score.
+
+Validação: 109 testes locais de infraestrutura, incluindo as seis regressões, e 13 testes adicionais de compatibilidade de dedup/apresentação passaram; Ruff e Mypy passaram (71 arquivos). Não houve tráfego para o domínio do log nem alteração da geração ou seleção de requisições.
+
+Limites: retenção no processo atual, depois dos filtros/dedup de emissão; não representa todos os responses, corpos HTTP brutos ou recuperação de eventos anteriores à retomada. Captura no instante de emissão, sem sobrescrever a nota com enriquecimento posterior. Aumenta memória e tamanho dos relatórios. O score permanece heurístico, agora identificado como tal.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

@@ -7,6 +7,7 @@ from __future__ import annotations
 import random
 import string
 from collections import defaultdict
+from dataclasses import asdict
 from urllib.parse import urljoin, urlparse
 
 from origami.core import baseline as bl
@@ -178,7 +179,8 @@ def _dedupe_and_collapse(findings, observer, ci=False):
         if len(bucket) > COLLISION_MAX:
             rep = min(bucket, key=lambda f: len(f.url))
             rep.note = (rep.note + " " if rep.note else "") + \
-                f"+{len(bucket) - 1} paths, same ~{rep.length}B response (soft-200 wall)"
+                f"presentation group: +{len(bucket) - 1} paths with similar body fingerprints " \
+                "(soft-200 wall heuristic; body equality not established)"
             out.append(rep)
             collapsed += len(bucket) - 1
         else:
@@ -192,14 +194,16 @@ def _dedupe_and_collapse(findings, observer, ci=False):
     for (_status, length), group in clusters.items():
         if len(group) > COLLISION_MAX:
             rep = min(group, key=lambda f: len(f.url))
-            rep.note = (rep.note + " " if rep.note else "") + f"+{len(group) - 1} paths, same {length}B response"
+            rep.note = (rep.note + " " if rep.note else "") + \
+                f"presentation group: +{len(group) - 1} paths sharing status {_status} / length {length}B; " \
+                "body equality and resource existence not established"
             out.append(rep)
             collapsed += len(group) - 1
         else:
             out.extend(group)
     if collapsed:
-        observer.log(f"collapsed {collapsed} same-template results "
-                     f"(generic 403/catch-all served for many paths)", 0, style="yellow")
+        observer.log(f"presentation grouped {collapsed} observations by response signatures; "
+                     "similarity does not establish body equality or resource existence", 0, style="yellow")
     return out
 
 
@@ -213,6 +217,7 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
     is case-normalized on a case-insensitive host. The set is primed from restored
     findings on resume."""
     ci = result.profile.case_sensitive is False
+    result.report_events_tracked = True
     if not result.seen_urls and result.findings:          # prime once (e.g. from findings restored on resume)
         for prev in result.findings:
             result.seen_urls.add(prev.url)
@@ -243,6 +248,9 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
         result.seen_urls_lc.add(url.lower())
         result.twin_sig[nkey] = tsig          # register so an identical twin is suppressed
         result.findings.append(finding)
+        # Immutable-at-emission snapshots are for evidence export only. Discovery
+        # keeps consuming the existing findings view; grouping cannot erase these.
+        result.reported_observations.append(asdict(finding))
         if opts.finding_sink is not None:
             opts.finding_sink(finding)            # stream this confirmed finding (e.g. JSONL)
         # Block-wall flood control (live only): a server that forbids every
@@ -277,14 +285,15 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
         if (wall or softwall) and n > COLLISION_MAX:
             if n == COLLISION_MAX + 1:
                 kind = "soft-200 wall" if softwall else "block-wall"
-                observer.log(f"{finding.status} {kind}: identical {finding.length}B "
-                             f"response repeating across paths — muting the live stream "
-                             f"(folded into one in the report)", 0, style="yellow")
+                basis = "shared status/body fingerprint" if softwall else "shared status/length"
+                observer.log(f"{finding.status} {kind}: repeated {basis} — muting presentation "
+                             "(body equality and path existence not established; report events retained)",
+                             0, style="yellow")
             observer.finding(finding, stream=False)     # counted, not printed
         else:
             observer.finding(finding)
             observer.log(f"+ {finding.status} {observer.disp(url)} · "
-                         f"conf {finding.confidence:.2f} · {finding.origin}", 1, style="green")
+                         f"heuristic score {finding.confidence:.2f} · {finding.origin}", 1, style="green")
 
 
 def _note_secrets(finding, body, observer) -> int:

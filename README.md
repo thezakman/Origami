@@ -414,3 +414,22 @@ and releases its own lock on success, errors and normal interruption. An existin
 lock is never automatically removed. After an uncatchable termination (such as
 SIGKILL), a stale lock can remain: confirm no writer is running before removing
 that empty lock directory, or choose a fresh output directory.
+
+### Reading repeated responses
+
+The `confidence` value is an uncalibrated heuristic score. It is not a measured
+probability of file existence or vulnerability. Repeated status/length values
+and similar body fingerprints are presentation grouping criteria; neither proves
+identical content. HTTP denial also does not establish that a guessed path exists.
+
+JSON reports additionally contain `reported_observations`: snapshots of accepted,
+unique report events at emission, before presentation collapse and later note
+updates. `findings` retains the existing grouped view. Counts and
+`observation_retention` distinguish the two. The event snapshots are also included
+in DB report snapshots, with memory enabled. JSONL finding records are unchanged.
+
+Retention covers the current process's accepted report events, not every HTTP
+response or raw body, and does not recover observations from earlier resumed
+processes or legacy reports. `unavailable` explicitly marks untracked retention.
+Keeping these snapshots increases memory usage and report/DB size. The request
+selection and discovery algorithms are unchanged by these reporting corrections.
