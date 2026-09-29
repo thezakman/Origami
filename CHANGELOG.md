@@ -8,6 +8,11 @@ All notable changes to Origami are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Reserve bundle output directories for one writer at a time. Reject a second
+  writer before invalidating the manifest; release owned locks on normal exit,
+  errors and catchable interruptions. Document stale locks after abrupt termination.
+- Skip path preflight when no file output is requested and report unresolvable
+  filesystem paths as controlled validation errors.
 - Validate effective output paths before opening the database, streams or network
   resources. Reject aliases between outputs and protected inputs, database/sidecar
   paths, checkpoints, credentials and catalogs, including graph siblings, bundle

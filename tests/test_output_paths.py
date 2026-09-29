@@ -107,3 +107,15 @@ class TestOutputPaths(unittest.TestCase):
                          "--out", str(self.folder / "bundle"))
         cli._validate_output_paths(args, ["https://example.test/"])
         self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_no_file_outputs_need_no_path_preflight(self):
+        args = arguments("--jsonl", "-")
+        with patch("origami.output.paths.check_output_paths") as check:
+            cli._validate_output_paths(args, ["https://example.test/"])
+        check.assert_not_called()
+
+    def test_unresolvable_path_is_a_controlled_validation_error(self):
+        from origami.output.paths import check_output_paths
+        with patch.object(Path, "resolve", side_effect=RuntimeError("synthetic loop")), \
+             self.assertRaises(ValueError):
+            check_output_paths([("json", self.folder / "output")], [])

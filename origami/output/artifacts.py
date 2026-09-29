@@ -23,6 +23,8 @@ from pathlib import Path
 from origami.core.files import atomic_write, private_directory
 from origami.output import graph, html_report, json_report
 
+BUNDLE_LOCK = ".origami-export.lock"
+
 
 def _write_lines(path: Path, items) -> int:
     items = sorted(set(items))
@@ -33,6 +35,17 @@ def _write_lines(path: Path, items) -> int:
 def write_artifacts(result, out_dir: str | Path) -> dict:
     d = Path(out_dir)
     private_directory(d)
+    lock = d / BUNDLE_LOCK
+    # Atomic reservation, shared across threads/processes and supported without
+    # platform-specific lock APIs. Do not remove a lock we did not create.
+    lock.mkdir(mode=0o700)
+    try:
+        return _write_artifacts(result, d)
+    finally:
+        lock.rmdir()
+
+
+def _write_artifacts(result, d: Path) -> dict:
     # Invalidate the previous success marker BEFORE replacing any artifact. A
     # crash or failed final manifest cannot authenticate a mixed-generation set.
     pending = {"schema_version": 1, "completed": False, "files": {}, "integrity": {},

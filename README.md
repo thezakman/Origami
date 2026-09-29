@@ -386,8 +386,8 @@ Artifact bundles invalidate their previous completion manifest before replacing
 any file. If final manifest persistence fails or export is interrupted, the bundle
 remains marked incomplete. Committed manifests include a SHA-256 and byte count
 for each listed artifact. These are integrity references, not digital signatures.
-Exporting concurrently to the same directory is unsupported; use separate output
-directories for separate runs. Old unlisted files may remain on disk.
+Concurrent bundle writers to the same directory are rejected before changing
+its manifest. Use separate output directories for separate runs. Old unlisted files may remain on disk.
 
 Terminal presentation treats evidence text as literal data. Control/format
 characters are shown as visible escapes and Rich markup inside notes, URLs and
@@ -408,3 +408,9 @@ credentials and catalogs. This includes graph sibling files and multi-target nam
 Existing symlink/hard-link aliases and file-versus-directory conflicts are rejected.
 These checks do not protect against another process changing the filesystem after
 validation; independent exports can still fail later and report their own errors.
+
+Bundle export reserves `.origami-export.lock` as a private directory while writing
+and releases its own lock on success, errors and normal interruption. An existing
+lock is never automatically removed. After an uncatchable termination (such as
+SIGKILL), a stale lock can remain: confirm no writer is running before removing
+that empty lock directory, or choose a fresh output directory.

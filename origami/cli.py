@@ -201,6 +201,8 @@ def _output_path(kind: str, requested: str, target: str, multi: bool) -> str:
 
 
 def _validate_output_paths(args, targets: list[str]) -> None:
+    if not any(getattr(args, kind, None) for kind in ("json", "html", "out", "graph")) and args.jsonl in (None, "-"):
+        return
     from origami.brain.kb import OVERLAY_PATH, RULES_PATH
     from origami.core.credentials import config_path
     from origami.output.paths import check_output_paths
@@ -224,7 +226,7 @@ def _validate_output_paths(args, targets: list[str]) -> None:
             path = Path(_output_path(kind, requested, target, len(targets) > 1))
             if kind == "out":
                 names = ("findings.json", "params.txt", "urls.txt", "js_endpoints.txt",
-                         "graph.html", "graph.dot", "report.html", "manifest.json")
+                         "graph.html", "graph.dot", "report.html", "manifest.json", artifacts.BUNDLE_LOCK)
                 outputs.extend((f"out/{name}", path / name) for name in names)
             elif kind == "graph":
                 html = path if path.suffix.lower() in (".html", ".htm") else path.with_suffix(".html")

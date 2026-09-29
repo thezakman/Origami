@@ -14,7 +14,10 @@ def check_output_paths(outputs: list[tuple[str, Path]], inputs: list[Path]) -> N
     identities: dict[Path, tuple[int, int] | None] = {}
 
     def resolved(path: Path) -> Path:
-        path = path.resolve()
+        try:
+            path = path.resolve()
+        except RuntimeError:
+            raise ValueError("cannot resolve output/input path safely") from None
         if path not in identities:
             try:
                 info = path.stat()

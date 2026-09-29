@@ -97,6 +97,12 @@ Regressões demonstraram ausência de rejeição antes de abrir recursos para ca
 
 Validação: 12 testes específicos passaram; suíte anterior com oito desses testes totalizou 94 testes aprovados; Ruff e Mypy passaram (71 arquivos). Limite: é uma verificação prévia, não uma proteção contra mudanças concorrentes no filesystem. A lógica de checkpoints/retomada não foi ampliada.
 
+## Etapa 11 — Exclusão de escritores concorrentes de bundles
+
+Duas regressões falharam antes da correção: uma reserva existente era ignorada e um segundo escritor podia entrar durante a exportação. A pasta agora tem uma reserva atômica `.origami-export.lock`, obtida antes de alterar o manifesto e liberada por `finally`. Reservas alheias nunca são removidas. Teste de interrupção verifica liberação e possibilidade de nova exportação. Também foram tratados caminho irresolúvel e modo sem saída em arquivo na validação anterior.
+
+Validação consolidada: 103 testes locais passaram; Ruff e Mypy passaram (71 arquivos). Sem rede. Limite: término não capturável pode deixar reserva obsoleta; após confirmar que não há escritor ativo, remover apenas a pasta vazia de reserva ou escolher outro destino. Não há recuperação automática dessa reserva nem garantia contra alteração hostil concorrente no filesystem.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.
