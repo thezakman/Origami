@@ -91,6 +91,12 @@ Seis regressões falharam antes da correção: histórico criava banco ausente, 
 
 Validação consolidada: 86 testes locais passaram; Ruff e Mypy passaram (70 arquivos). O teste legado compara os bytes do banco antes/depois. Nenhum teste de rede ou exploração foi executado. As mudanças não corrigem a identidade compartilhada legada dos dados de aprendizado nem representam isolamento completo por projeto.
 
+## Etapa 10 — Colisões de caminhos de saída
+
+Regressões demonstraram ausência de rejeição antes de abrir recursos para caminhos conflitantes. Agora são enumerados os destinos efetivos (incluindo grafo, bundle e nomes de múltiplos alvos) e comparados com entradas, banco/sidecars, checkpoints, credenciais e catálogos. A validação resolve symlinks, compara inodes existentes e detecta conflitos arquivo/diretório. Layouts independentes não criam arquivos durante a checagem.
+
+Validação: 12 testes específicos passaram; suíte anterior com oito desses testes totalizou 94 testes aprovados; Ruff e Mypy passaram (71 arquivos). Limite: é uma verificação prévia, não uma proteção contra mudanças concorrentes no filesystem. A lógica de checkpoints/retomada não foi ampliada.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

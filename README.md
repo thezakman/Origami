@@ -400,3 +400,11 @@ missing/legacy database. `--forget` and `--forget-noise` require an existing dat
 and close it on failure. Maintenance/offline actions cannot be combined in one
 invocation. Database failures return code 2 with a diagnostic that omits raw error
 values. History fields use the same terminal-control escaping as report text.
+
+Output paths are checked before streams, the database or network resources are
+opened. Effective destinations cannot alias one another or protected inputs:
+wordlists, target/proxy files, local specifications, database sidecars, checkpoints,
+credentials and catalogs. This includes graph sibling files and multi-target names.
+Existing symlink/hard-link aliases and file-versus-directory conflicts are rejected.
+These checks do not protect against another process changing the filesystem after
+validation; independent exports can still fail later and report their own errors.

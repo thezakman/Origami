@@ -194,6 +194,46 @@ def _suffix(path: str, slug: str) -> str:
     return str(p.with_name(f"{p.stem}.{slug}{p.suffix}"))
 
 
+def _output_path(kind: str, requested: str, target: str, multi: bool) -> str:
+    if not multi:
+        return requested
+    return str(Path(requested) / _slug(target)) if kind == "out" else _suffix(requested, _slug(target))
+
+
+def _validate_output_paths(args, targets: list[str]) -> None:
+    from origami.brain.kb import OVERLAY_PATH, RULES_PATH
+    from origami.core.credentials import config_path
+    from origami.output.paths import check_output_paths
+
+    inputs = [Path(args.db + suffix) for suffix in ("", "-wal", "-shm", "-journal")]
+    inputs.extend((config_path(), RULES_PATH, OVERLAY_PATH))
+    inputs.extend(resume_mod.path_for(target) for target in targets)
+    for key in ("list", "proxy_file", "bypass_headers", "bypass_prefixes", "cache_headers", "openapi"):
+        value = getattr(args, key, None)
+        if isinstance(value, str) and value and value != "-" and "://" not in value:
+            inputs.append(Path(value))
+    inputs.extend(resolve_wordlist(Path(value)) for value in ["base", *(args.wordlist or [])])
+    outputs = []
+    if args.jsonl and args.jsonl != "-":
+        outputs.append(("jsonl", Path(args.jsonl)))
+    for target in targets:
+        for kind in ("json", "html", "out", "graph"):
+            requested = getattr(args, kind, None)
+            if not requested:
+                continue
+            path = Path(_output_path(kind, requested, target, len(targets) > 1))
+            if kind == "out":
+                names = ("findings.json", "params.txt", "urls.txt", "js_endpoints.txt",
+                         "graph.html", "graph.dot", "report.html", "manifest.json")
+                outputs.extend((f"out/{name}", path / name) for name in names)
+            elif kind == "graph":
+                html = path if path.suffix.lower() in (".html", ".htm") else path.with_suffix(".html")
+                outputs.extend((("graph/html", html), ("graph/dot", html.with_suffix(".dot"))))
+            else:
+                outputs.append((kind, path))
+    check_output_paths(outputs, inputs)
+
+
 def _write_outputs(args, result, target, multi: bool) -> dict:
     """Attempt independent exports; return failures to the process exit status."""
     files: dict[str, str] = {}
@@ -203,8 +243,7 @@ def _write_outputs(args, result, target, multi: bool) -> dict:
         requested = getattr(args, kind, None)
         if not requested:
             continue
-        path = (str(Path(requested) / _slug(target)) if kind == "out"
-                else _suffix(requested, _slug(target))) if multi else requested
+        path = _output_path(kind, requested, target, multi)
         try:
             if kind == "json":
                 atomic_write(path, json_report.dumps(result))
@@ -271,6 +310,8 @@ async def _run(args: argparse.Namespace, resources: ExitStack) -> int:
     if not targets:
         print("[!] no targets (give a URL or --list FILE)")
         return 2
+
+    _validate_output_paths(args, targets)
 
     shortscan = "on" if args.shortscan else "off" if args.no_shortscan else "auto"
     # -w is repeatable (merged, deduped). Under --deep the base list is always
