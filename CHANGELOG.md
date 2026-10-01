@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.14.4] - 2026-10-01
+
+### Fixed
+- Treat wordlist entries containing a query string as complete request targets.
+  Probe each entry once instead of appending every learned/base extension and a
+  directory slash to the query (for example, `service?Wsdl.bak`).
+
 ## [1.14.3] - 2026-09-29
 
 ### Fixed
