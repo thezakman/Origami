@@ -131,6 +131,11 @@ def build_candidates(
     P0 extra seeds (memory / js / backup) + evidence-derived priority paths →
     P1 word×tech-ext → P2 word×base-ext. `extra_seeds` is (path, origin).
     `base_exts` overrides the generic P2 extension set (used by --ext-only).
+
+    A word containing a query is already a complete request target, not a file
+    stem. Keep it atomic: appending ``.php``/``.bak`` or ``/`` after ``?`` only
+    mutates the query (``service?Wsdl.bak``), producing a noisy family of
+    requests to the same route with no content-discovery value.
     """
     base_exts = BASE_EXTS if base_exts is None else base_exts
     seen: set[str] = set()
@@ -148,9 +153,14 @@ def build_candidates(
 
     tech_exts = sorted(enabled_extensions)
     for w in words:                                  # P1: tech-specific extensions
+        if "?" in w:
+            add(w, 1, "wordlist")                   # complete route+query; emit once
+            continue
         for ext in tech_exts:
             add(f"{w}{ext}", 1, "wordlist")
     for w in words:                                  # P2: generic extensions + dir probe
+        if "?" in w:
+            continue                                 # already emitted atomically in P1
         for ext in base_exts:
             add(f"{w}{ext}", 2, "wordlist")
         add(f"{w}/", 2, "wordlist")                  # trailing slash -> directory
