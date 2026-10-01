@@ -12,6 +12,7 @@ import time
 from collections import Counter
 
 from origami.core.files import atomic_write
+from origami.output.correlations import fingerprint_correlations, response_correlations
 
 _CSS = """
 :root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--card:#161b22;--bd:#30363d}
@@ -128,6 +129,27 @@ def render(result, n_hidden: int | None = None) -> str:
             'This is not every HTTP request or raw response.</p>'
             '<table><thead><tr><th>code</th><th>size</th><th>URL</th><th>original note</th></tr></thead>'
             f'<tbody>{event_rows}</tbody></table></details>')
+    fingerprint_rows = "".join(
+        f'<tr><td>{e(row["tech"])}</td><td>{e(row["path_prefix"] or "unknown")}</td>'
+        f'<td>{e(", ".join(row["signal_types"]) or "unknown")}</td>'
+        f'<td>{e(row["support"])}</td><td>{e(str(row["evidence_indices"]))}</td></tr>'
+        for row in fingerprint_correlations(p))
+    fingerprints = (
+        '<details><summary>Fingerprint evidence correlations</summary>'
+        '<p class="sub">Signal types are grouped per recorded prefix. Repetition is not '
+        'independent corroboration; host scores are heuristics, not probabilities.</p>'
+        '<table><thead><tr><th>technology</th><th>prefix</th><th>signal types</th>'
+        '<th>support</th><th>evidence indices (JSON)</th></tr></thead>'
+        f'<tbody>{fingerprint_rows}</tbody></table></details>' if fingerprint_rows else '')
+    response_details = "".join(
+        f'<details><summary>{group["status"]} · {group["count"]} observations · '
+        f'{e(group["basis"])}</summary><ul>'
+        + "".join(f'<li>{e(url)}</li>' for url in group["urls"])
+        + '</ul></details>' for group in response_correlations(result))
+    correlations = (f'<details><summary>Response presentation groups</summary>'
+                    f'<p class="sub">Similarity of recorded responses only; all member URLs '
+                    f'are listed. This does not prove resource identity or a vulnerability.</p>'
+                    f'{response_details}</details>' if response_details else '')
     when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -146,7 +168,7 @@ when retention is available; they do not include every request or raw HTTP bodie
 <table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
 <th data-sort="str">src</th><th data-sort="num">score</th><th data-sort="str">tags</th>
 <th data-sort="str">path</th></tr></thead>
-<tbody>{''.join(rows)}</tbody></table>{observation_details}</div>
+<tbody>{''.join(rows)}</tbody></table>{observation_details}{fingerprints}{correlations}</div>
 <script>{_JS}</script></body></html>"""
 
 

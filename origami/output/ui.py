@@ -19,6 +19,7 @@ import sys
 import time
 from urllib.parse import urlparse
 
+from origami.output.response_groups import ResponsePreview, terminal_findings, terminal_rows
 from origami.output.text import terminal_text
 
 try:
@@ -107,6 +108,23 @@ class NullObserver:
                          "are retained separately from the grouped view.", 0, style="yellow")
             return False
         return stream
+
+    def _preview_response(self, finding, stream: bool) -> bool:
+        if not getattr(finding, "body_digest", ""):
+            return self._preview_denial(finding, stream)
+        if not hasattr(self, "_response_preview"):
+            self._response_preview = ResponsePreview()
+        visible = self._response_preview.accept(finding)
+        if not visible and finding.status not in self._response_preview.notices:
+            self._response_preview.notices.add(finding.status)
+            self.log(f"{finding.status}: repeated response grouped in terminal "
+                     "(captured body/status/type/semantic headers and redirect signature match; "
+                     "all accepted URLs retained in report events).", 0, style="yellow")
+        return stream and visible
+
+    def _hidden_response_summary(self) -> str:
+        preview = getattr(self, "_response_preview", None)
+        return preview.summary() if preview else ""
 
     def _hidden_denial_summary(self) -> str:
         hidden = getattr(self, "_denial_hidden", 0)
@@ -305,7 +323,7 @@ class RichUI(NullObserver):
         # stream=False: still counted (kept in self.findings for the summary),
         # but not printed — used to mute a block-wall flood in the live view.
         self.findings.append(f)
-        stream = self._preview_denial(f, stream)
+        stream = self._preview_response(f, stream)
         if not stream:
             self._refresh()
             return
@@ -463,6 +481,8 @@ class RichUI(NullObserver):
                       f"duration {self._elapsed()}[/]\n")
         if self._hidden_denial_summary():
             console.print(Text(self._hidden_denial_summary(), style="dim"))
+        if self._hidden_response_summary():
+            console.print(Text(self._hidden_response_summary(), style="dim"))
 
 
 class PlainLiveObserver(NullObserver):
@@ -499,6 +519,8 @@ class PlainLiveObserver(NullObserver):
               f"started {started} · duration {self._elapsed()}")
         if self._hidden_denial_summary():
             print(self._hidden_denial_summary())
+        if self._hidden_response_summary():
+            print(self._hidden_response_summary())
         sys.stdout.flush()
 
     def _rate(self) -> float:
@@ -548,7 +570,7 @@ class PlainLiveObserver(NullObserver):
         self._draw()
 
     def finding(self, f, stream: bool = True) -> None:
-        stream = self._preview_denial(f, stream)
+        stream = self._preview_response(f, stream)
         if not stream:                  # block-wall flood — muted in the live view
             return
         tags = f" \x1b[1;31m[{terminal_text(','.join(f.tags))}]\x1b[0m" if getattr(f, "tags", None) else ""
@@ -556,7 +578,8 @@ class PlainLiveObserver(NullObserver):
         marker = "\x1b[32m+\x1b[0m" if accessible else "\x1b[33m·\x1b[0m"   # + accessible / · blocked
         origin = f"{terminal_text(f.origin):<9}" if accessible else f"\x1b[2m{terminal_text(f.origin):<9}\x1b[0m"
         self._emit(f"{marker} {f.status}  \x1b[2m{f.length:>8}B\x1b[0m  "
-                   f"{origin} \x1b[2m{f.confidence:.2f}\x1b[0m {self.disp(f.url)}{tags}")
+                   f"{origin} \x1b[2m{f.confidence:.2f}\x1b[0m "
+                   f"{terminal_text(f.url) if '?' in f.url else self.disp(f.url)}{tags}")
 
     def directory(self, prefix: str, depth: int) -> None:
         self._emit(f"\x1b[1;35m==>\x1b[0m directory {terminal_text(prefix)} \x1b[2m(depth {depth})\x1b[0m")
@@ -640,7 +663,9 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
     if not show_findings:
         return    # findings already streamed live; the ✓ summary line has the count
 
-    tbl = Table(title=f"Findings ({len(result.findings)})  ·  {result.requests_made} requests",
+    observations = terminal_findings(result)
+    rows, summary = terminal_rows(observations)
+    tbl = Table(title=f"Findings ({len(observations)}) · {len(rows)} terminal rows · {result.requests_made} requests",
                 title_justify="left", expand=True, header_style="bold")
     tbl.add_column("code", width=4)
     tbl.add_column("size", justify="right", width=9, style="dim")
@@ -648,7 +673,7 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
     tbl.add_column("score", width=5, justify="right", style="dim")
     tbl.add_column("tags")
     tbl.add_column("path", ratio=1, no_wrap=True)
-    for f in result.findings:
+    for f in rows:
         note = f" [dim]({_markup(f.note)})[/]" if getattr(f, "note", "") else ""
         tbl.add_row(
             Text(str(f.status), style=_status_style(f.status)),
@@ -656,9 +681,11 @@ def print_report(result, full_url: bool = False, show_findings: bool = True,
             f"[{ORIGIN_STYLE.get(f.origin, 'white')}]{_markup(f.origin)}[/]",
             f"{f.confidence:.2f}",
             _tag_markup(getattr(f, "tags", [])),
-            _markup(display_url(f.url, full_url)) + (note or ""),
+            _markup(display_url(f.url, full_url or '?' in f.url)) + (note or ""),
         )
     console.print(tbl)
+    if summary:
+        console.print(Text(summary, style="dim"))
 
 
 def _finding_curl(f) -> str:
@@ -714,10 +741,14 @@ def _plain_report(result, full_url: bool = False, show_findings: bool = True,
             print(f"  throttling: {result.pushbacks} backoff events (target rate-limited)")
     if not show_findings:
         return    # findings already streamed live; the ✓ summary line has the count
-    print(f"\n=== Findings ({len(result.findings)}) — {result.requests_made} requests ===")
-    for f in result.findings:
+    observations = terminal_findings(result)
+    print(f"\n=== Findings ({len(observations)}) — {result.requests_made} requests ===")
+    rows, summary = terminal_rows(observations)
+    for f in rows:
         note = f"  ({terminal_text(f.note)})" if getattr(f, "note", "") else ""
         tags = f"  [{terminal_text(','.join(f.tags))}]" if getattr(f, "tags", None) else ""
-        print(f"  {f.status}  {f.confidence:.2f}  [{terminal_text(f.origin):<8}] {display_url(f.url, full_url)}  "
+        print(f"  {f.status}  {f.confidence:.2f}  [{terminal_text(f.origin):<8}] {display_url(f.url, full_url or '?' in f.url)}  "
               f"{f.length}B{tags}{note}")
     print()
+    if summary:
+        print(summary)

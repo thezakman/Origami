@@ -17,6 +17,13 @@ O plano integral permanece **parcial**, incluindo pendências de schema/procedê
 isolamento por projeto, cobertura, anotações de revisão offline e interface. Evolução de automação
 ofensiva e retomada desses fluxos não foi implementada.
 
+Em 01/10/2026, a etapa 14 adicionou comparação conservadora de respostas no
+terminal e correlações passivas de evidências nos relatórios (`1.14.5`). Hashes
+do corpo capturado e dos cabeçalhos semânticos complementam o simhash; tamanho
+igual não silencia uma resposta com conteúdo distinto. URLs aceitas permanecem
+nos snapshots/JSONL, e tipos de sinal são reconciliados por tecnologia e prefixo
+sem inferir independência ou transformar o relatório em novas ações de rede.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.

@@ -426,13 +426,43 @@ JSON reports additionally contain `reported_observations`: snapshots of accepted
 unique report events at emission, before presentation collapse and later note
 updates. `findings` retains the existing grouped view. Counts and
 `observation_retention` distinguish the two. The event snapshots are also included
-in DB report snapshots, with memory enabled. JSONL finding records are unchanged.
+in DB report snapshots, with memory enabled. Existing JSONL fields remain compatible.
 
 Retention covers the current process's accepted report events, not every HTTP
 response or raw body, and does not recover observations from earlier resumed
 processes or legacy reports. `unavailable` explicitly marks untracked retention.
 Keeping these snapshots increases memory usage and report/DB size. The request
 selection and discovery algorithms are unchanged by these reporting corrections.
+
+For observations with full response metadata (1.14.5+), the terminal shows one
+representative from the second matching response, then a grouped-count summary.
+Comparison uses SHA-256 of the captured decoded body, status, content type and
+selected semantic response headers (`Allow`, `WWW-Authenticate`,
+`Content-Disposition`, `Content-Encoding`, `Set-Cookie`). HTML attributes, case,
+numbers and tokens are preserved; size or calibration simhash alone cannot mute
+these rows. Changes in any compared field remain visible. Explicit contract,
+reproduction and content/behavior alerts remain visible as well.
+
+Redirect comparison additionally checks the destination and source route. Only
+the echoed destination in a redirect body and a destination query copied exactly
+from the request are normalized. Different source directories/destinations stay
+separate. Truncated bodies and legacy records are not grouped by this new rule.
+All accepted member URLs remain in `reported_observations` and JSONL; JSONL gains
+optional response-metadata fields. Terminal recovery uses those snapshots after
+the existing internal discovery-view grouping without changing that algorithm.
+These hashes are comparison metadata, not stored raw HTTP responses.
+
+JSON/HTML also expose read-only `response_correlations` (group membership and
+record references) and `fingerprint_correlations` (technology, recorded prefix,
+distinct signal types and evidence indices). Repeated signals stay traceable
+without counting as additional corroboration. A high host score is not evidence
+for every path prefix, and distinct signal types do not establish statistical
+independence. These report correlations do not trigger probes or change scan
+priorities.
+
+The multi-marker approach follows the
+[OWASP WSTG framework fingerprinting guidance](https://wstg.owasp.org/v4.2/4-Web_Application_Security_Testing/01-Information_Gathering/08-Fingerprint_Web_Application_Framework/),
+which describes headers, cookies, HTML and paths as complementary evidence.
 
 Live Rich/plain terminals preview at most four guessed denied observations per
 401/403 status, across differing response lengths. This is a display limit, not

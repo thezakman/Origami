@@ -22,12 +22,14 @@ import random
 import ssl
 import time
 from dataclasses import dataclass, field
+from hashlib import sha256
 
 import anyio
 import httpx
 
 from origami.core.normalize import simhash
 from origami.core.privacy import origin, sensitive_header
+from origami.core.response_signature import body_digests
 
 # Low-level stream errors that can escape httpx's own exception wrapping.
 # httpcore's anyio backend re-raises anyio.EndOfStream / BrokenResourceError /
@@ -90,6 +92,9 @@ class Probe:
     body: bytes = b""                                        # full body (only when keep_body=True)
     error: str = ""       # transport error, if the request never completed
     truncated: bool = False   # body hit the max_body cap — more data existed past it
+    body_digest: str = ""     # SHA-256 of all captured bytes; separate from lossy simhash
+    redirect_digest: str = ""  # redirect body with its echoed destination masked
+    header_digest: str = ""   # selected semantic response headers; no raw cookie values exported
 
     @property
     def ok(self) -> bool:
@@ -450,6 +455,15 @@ class Engine:
                         break
                 body = b"".join(chunks)[:cap]
                 text_ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                location = r.headers.get("location", "")
+                body_digest, redirect_digest = body_digests(
+                    body, url, location if 300 <= r.status_code < 400 else "")
+                semantic_headers = [
+                    (name, r.headers.get_list(name))
+                    for name in ("allow", "www-authenticate", "content-disposition",
+                                 "content-encoding", "set-cookie")
+                ]
+                header_digest = sha256(repr(semantic_headers).encode("utf-8")).hexdigest()
                 return Probe(
                     url=url,
                     method=method,
@@ -458,7 +472,7 @@ class Engine:
                     words=len(body.split()),
                     lines=body.count(b"\n") + 1,
                     content_type=text_ct,
-                    location=r.headers.get("location", ""),
+                    location=location,
                     body_simhash=simhash(body),
                     elapsed_ms=(time.perf_counter() - t0) * 1000,
                     headers={k.lower(): v for k, v in r.headers.items()},
@@ -466,6 +480,9 @@ class Engine:
                     body_head=body[:2048],
                     body=body if keep_body else b"",
                     truncated=truncated,
+                    body_digest=body_digest,
+                    redirect_digest=redirect_digest,
+                    header_digest=header_digest,
                 )
 
     async def gather(self, urls: list[str], method: str = "GET") -> list[Probe]:

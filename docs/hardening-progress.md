@@ -117,6 +117,45 @@ Duas regressões falharam antes da correção: tamanhos distintos reiniciavam a 
 
 Validação: 125 testes consolidados passaram; mais dois testes específicos de terminal plain/avisos passaram depois. Ruff e Mypy passaram. Limites: mudanças exclusivamente de diagnóstico/apresentação; não aceleram requisições nem confirmam os recursos do domínio fornecido. Log de cada request em `-vv` continua separado. Eventos representam somente emissões aceitas deste processo.
 
+## Etapa 14 — Respostas comparadas e correlações passivas (`1.14.5`)
+
+O log de `1.14.4` mostrou redirects com variação de caixa na query, repetição
+do HTML de entrada e quatro respostas de 337B. Sem seus corpos/Location, esse
+log sozinho não comprova equivalência. O novo comparador usa SHA-256 do corpo
+decodificado capturado, status, tipo de conteúdo e hash de cabeçalhos semânticos
+(`Allow`, `WWW-Authenticate`, `Content-Disposition`, `Content-Encoding`,
+`Set-Cookie`). O simhash de calibração permanece separado: ele remove atributos
+HTML e não é suficiente para silenciar resultados com metadados completos.
+
+O terminal Rich/plain agrupa a partir da segunda assinatura equivalente. Em
+redirects, compara também rota de origem e destino; somente o destino ecoado
+no corpo e uma query copiada exatamente da requisição são normalizados. Corpos
+truncados, contratos declarados, reproduções explícitas e alertas de conteúdo
+continuam visíveis. Metadados são preservados em JSON/JSONL/checkpoints.
+URLs aceitas, inclusive slash twins com metadados completos, permanecem nos
+eventos retidos. A apresentação final recupera essas linhas após o agrupamento
+interno legado, preservando enriquecimentos posteriores sem alterar esse
+algoritmo de descoberta.
+
+JSON/HTML ganham correlações de resposta com membros/referências dos eventos e
+correlações de fingerprint por tecnologia/prefixo. Sinais repetidos são
+deduplicados na contagem de sinais distintos; score sem evidências é marcado
+como procedência indisponível. Tipos de sinal distintos não provam independência
+estatística. A referência consultada foi o OWASP WSTG v4.2, INFO-08, que recomenda
+usar marcadores de várias fontes para avaliar fingerprints.
+
+Validação: 17 regressões novas (também executadas via unittest); suíte abrangente
+com 500 testes aprovados, quatro skips e nove testes já problemáticos no estado
+anterior explicitamente excluídos (cinco fixtures de memória incompatíveis e
+quatro dependências de operações bloqueadas pelo sandbox). Ruff passou; Mypy
+passou em 74 arquivos; compileall e versão da CLI passaram. Não foi acessado o
+domínio do log. Transporte nos testes novos foi simulado em memória.
+
+Limites: comparação conservadora mantém variações de tokens/corpo visíveis;
+metadados não substituem corpos HTTP brutos. A retenção continua limitada aos
+eventos aceitos deste processo. As correlações são leitura de evidências e não
+acionam novas sondagens, prioridades ou cadeias de exploração.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

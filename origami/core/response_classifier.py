@@ -33,6 +33,11 @@ class Finding:
     words: int = 0       # body word count (from the probe) — for --filter-word-count
     lines: int = 0       # body line count (from the probe) — for --filter-line-count
     repro: str = ""      # exact reproducing curl (set by folds whose request is non-trivial — bypass headers/method); --curl falls back to `curl <url>`
+    body_digest: str = ""  # full captured-body SHA-256 for conservative terminal grouping
+    redirect_digest: str = ""
+    location: str = ""    # raw Location; retained independently of its presentation key
+    truncated: bool = False
+    header_digest: str = ""
 
 
 # needle → tag. A finding can carry several. Two needle kinds (see `_matches`):
@@ -295,7 +300,10 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
                            0.4 if empty else 0.5, origin,
                            note=(nb + " · empty body") if empty else nb,
                            tags=tags, simhash=probe.body_simhash,
-                           words=probe.words, lines=probe.lines)
+                           words=probe.words, lines=probe.lines,
+                           body_digest=probe.body_digest, redirect_digest=probe.redirect_digest,
+                           location=probe.location, truncated=probe.truncated,
+                           header_digest=probe.header_digest)
         return None
 
     if looks_like_miss(probe, cb):
@@ -306,7 +314,10 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
         note405 = (note405 + " · " if note405 else "") + "empty body"
     return Finding(probe.url, probe.status, probe.length, probe.content_type,
                    confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash,
-                   words=probe.words, lines=probe.lines)
+                   words=probe.words, lines=probe.lines,
+                   body_digest=probe.body_digest, redirect_digest=probe.redirect_digest,
+                   location=probe.location, truncated=probe.truncated,
+                   header_digest=probe.header_digest)
 
 
 def _confidence(probe: Probe, cb: ContextBaseline) -> float:

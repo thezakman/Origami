@@ -235,7 +235,7 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
     nkey = url.rstrip("/") or "/"
     nkey = nkey.lower() if ci else nkey
     tsig = (finding.status, finding.simhash if finding.simhash else -finding.length)
-    if result.twin_sig.get(nkey) == tsig:
+    if not finding.body_digest and result.twin_sig.get(nkey) == tsig:
         observer.tick(hit=False)
         observer.request(url, finding.status, False)
         return
@@ -253,6 +253,11 @@ def _report(observer, result, opts, finding, url, body=None) -> None:
         result.reported_observations.append(asdict(finding))
         if opts.finding_sink is not None:
             opts.finding_sink(finding)            # stream this confirmed finding (e.g. JSONL)
+        if finding.body_digest:
+            # Complete response metadata is compared at the terminal boundary.
+            # Keep accepted observations/JSONL even when their displayed rows group.
+            observer.finding(finding)
+            return
         # Block-wall flood control (live only): a server that forbids every
         # .env*/.git* path returns the SAME blocked-status body for each — a
         # generic block keyed on the sensitive substring, which the per-path

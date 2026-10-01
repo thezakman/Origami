@@ -77,13 +77,18 @@ def _finding_to_dict(f: Finding) -> dict:
     return {"url": f.url, "status": f.status, "length": f.length,
             "content_type": f.content_type, "confidence": f.confidence,
             "origin": f.origin, "note": f.note, "tags": f.tags, "simhash": f.simhash,
-            "words": f.words, "lines": f.lines}
+            "words": f.words, "lines": f.lines,
+            "body_digest": f.body_digest, "redirect_digest": f.redirect_digest,
+            "location": f.location, "truncated": f.truncated, "header_digest": f.header_digest}
 
 
 def _finding_from_dict(d: dict) -> Finding:
     return Finding(d["url"], d["status"], d["length"], d["content_type"], d["confidence"],
                    d["origin"], d.get("note", ""), d.get("tags", []), d.get("simhash", 0),
-                   words=d.get("words", 0), lines=d.get("lines", 0))
+                   words=d.get("words", 0), lines=d.get("lines", 0),
+                   body_digest=d.get("body_digest", ""), redirect_digest=d.get("redirect_digest", ""),
+                   location=d.get("location", ""), truncated=d.get("truncated", False),
+                   header_digest=d.get("header_digest", ""))
 
 
 # ---- save / load --------------------------------------------------------------

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from origami import __version__
 from origami.core.scanner import ScanResult
+from origami.output.correlations import fingerprint_correlations, response_correlations
 
 
 def finding_record(f, host: str = "") -> dict:
@@ -24,6 +25,9 @@ def finding_record(f, host: str = "") -> dict:
     }
     if getattr(f, "note", ""):
         rec["note"] = f.note
+    if getattr(f, "body_digest", ""):
+        rec.update(body_digest=f.body_digest, redirect_digest=f.redirect_digest,
+                   header_digest=f.header_digest, location=f.location, truncated=f.truncated)
     if host:
         rec["host"] = host
     return rec
@@ -61,6 +65,8 @@ def to_dict(result: ScanResult) -> dict:
         "folds": sorted(result.folds),
         "requests_made": result.requests_made,
         "evidence": [asdict(e) for e in p.evidence],
+        "fingerprint_correlations": fingerprint_correlations(p),
+        "response_correlations": response_correlations(result),
         "findings": [asdict(f) for f in result.findings],
     }
 
