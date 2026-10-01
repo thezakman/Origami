@@ -5,6 +5,28 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.14.5] - 2026-10-01
+
+### Fixed
+- Group repeated terminal observations from the second matching response using
+  captured-body SHA-256, status, content type, selected semantic headers and
+  redirect destinations. Size-only collisions and lossy simhash matches cannot
+  mute full-metadata observations. Keep changed HTML attributes, destinations,
+  explicit evidence, contract endpoints and truncated responses visible.
+- Retain full-metadata slash twins in report events and JSONL. Recover accepted
+  terminal rows from these snapshots after legacy discovery-view grouping,
+  preserving later evidence enrichment. Show query strings in plain live/final
+  terminal output as well as Rich output.
+
+### Added
+- Captured-body, redirect-body and semantic-header hashes, raw Location and
+  truncation metadata in findings, JSON/JSONL and checkpoints. Legacy records
+  remain readable with unknown fingerprint defaults.
+- Passive response-group membership and fingerprint evidence correlations in
+  JSON/HTML, with references to original records and exact path prefixes.
+  Repeated signals do not inflate distinct-source counts; signal-channel
+  independence and vulnerability/resource identity are not inferred.
+
 ## [1.14.4] - 2026-10-01
 
 ### Fixed
