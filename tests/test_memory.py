@@ -8,6 +8,7 @@ from origami.core.normalize import hamming, simhash
 from origami.core.evidence import ContextBaseline, TargetProfile
 from origami.core.httpclient import Probe
 from origami.core.response_classifier import Filters, classify
+from origami.core.scanner.types import ScanResult
 from origami.modules import waf
 from origami.modules.discovery import backups, js_parser, robots, shortname
 
@@ -25,6 +26,11 @@ def make_probe(status=200, body=b"<html>hi</html>", url="http://t/x", ctype="tex
 def make_finding(url, status=200):
     from origami.core.response_classifier import Finding
     return Finding(url, status, 100, "text/html", 0.9, "wordlist")
+
+
+def make_result(profile, findings, requests_made):
+    """Exercise the real report-snapshot contract, not a partial result stub."""
+    return ScanResult(profile=profile, findings=findings, requests_made=requests_made)
 
 
 def _git_index(paths):
@@ -67,23 +73,18 @@ class TestMemoryKNN(unittest.TestCase):
         from origami.core.evidence import TargetProfile
         from origami.core.response_classifier import Finding
 
-        class R:
-            def __init__(self, findings):
-                self.findings = findings
-                self.requests_made = 10
-
         db = tempfile.mktemp(suffix=".sqlite")
         m = Memory(db)
         try:
             a = TargetProfile(host="a.com", base_url="http://a.com/")
             a.tech_scores = {"iis": 90, "aspnet": 80}
             a.enabled_extensions = {".aspx", ".asmx"}
-            m.record_run(a, R([make_finding("http://a.com/admin.aspx"),
-                               make_finding("http://a.com/api.asmx")]))
+            m.record_run(a, make_result(a, [make_finding("http://a.com/admin.aspx"),
+                                          make_finding("http://a.com/api.asmx")], 10))
             b = TargetProfile(host="b.com", base_url="http://b.com/")
             b.tech_scores = {"php": 90}
             b.enabled_extensions = {".php"}
-            m.record_run(b, R([make_finding("http://b.com/index.php")]))
+            m.record_run(b, make_result(b, [make_finding("http://b.com/index.php")], 10))
 
             probe = TargetProfile(host="c.com", base_url="http://c.com/")
             probe.tech_scores = {"iis": 85, "aspnet": 75}
@@ -259,22 +260,17 @@ class TestAssociation(unittest.TestCase):
         from origami.brain.memory import Memory
         from origami.core.evidence import TargetProfile
 
-        class R:
-            def __init__(self, findings):
-                self.findings = findings
-                self.requests_made = 10
-
         db = tempfile.mktemp(suffix=".sqlite")
         m = Memory(db)
         try:
             # 3 hosts that have BOTH /backup/ and /.git/HEAD
             for h in ("h1", "h2", "h3"):
                 p = TargetProfile(host=h, base_url=f"http://{h}/")
-                m.record_run(p, R([make_finding(f"http://{h}/backup/", 403),
-                                   make_finding(f"http://{h}/.git/HEAD")]))
+                m.record_run(p, make_result(p, [make_finding(f"http://{h}/backup/", 403),
+                                              make_finding(f"http://{h}/.git/HEAD")], 10))
             # 1 host with only /backup/
             p = TargetProfile(host="h4", base_url="http://h4/")
-            m.record_run(p, R([make_finding("http://h4/backup/", 403)]))
+            m.record_run(p, make_result(p, [make_finding("http://h4/backup/", 403)], 10))
 
             assoc = m.associate(["/backup/"], min_support=2, min_conf=0.5)
             self.assertIn("/.git/HEAD", assoc)        # 3/4 hosts → conf 0.75
@@ -326,15 +322,13 @@ class TestAssociation(unittest.TestCase):
         import os, tempfile
         from origami.brain.memory import Memory
         from origami.core.evidence import TargetProfile
-        class R:
-            def __init__(self, findings): self.findings = findings; self.requests_made = 5
         db = tempfile.mktemp(suffix=".sqlite")
         m = Memory(db)
         try:
             p = TargetProfile(host="h", base_url="http://h/")
-            m.record_run(p, R([make_finding("http://h/admin/", 200),
-                               make_finding("http://h/logo.png", 200),
-                               make_finding("http://h/app.css", 200)]))
+            m.record_run(p, make_result(p, [make_finding("http://h/admin/", 200),
+                                          make_finding("http://h/logo.png", 200),
+                                          make_finding("http://h/app.css", 200)], 5))
             paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
             self.assertIn("/admin/", paths)
             self.assertIn("/app.css", paths)           # css kept (shared names transfer)
@@ -362,14 +356,12 @@ class TestAssociation(unittest.TestCase):
         import os, tempfile
         from origami.brain.memory import Memory
         from origami.core.evidence import TargetProfile
-        class R:
-            def __init__(self, findings): self.findings = findings; self.requests_made = 5
         db = tempfile.mktemp(suffix=".sqlite")
         m = Memory(db)
         try:
             p = TargetProfile(host="h", base_url="http://h/")
-            m.record_run(p, R([make_finding("http://h/app.js", 200),
-                               make_finding("http://h/app.a1b2c3d4.js", 200)]))
+            m.record_run(p, make_result(p, [make_finding("http://h/app.js", 200),
+                                          make_finding("http://h/app.a1b2c3d4.js", 200)], 5))
             paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
             self.assertIn("/app.js", paths)            # shared name kept
             self.assertNotIn("/app.a1b2c3d4.js", paths)  # content-hashed bundle dropped
@@ -421,14 +413,12 @@ class TestAssociation(unittest.TestCase):
         import os, tempfile
         from origami.brain.memory import Memory
         from origami.core.evidence import TargetProfile
-        class R:
-            def __init__(self, findings): self.findings = findings; self.requests_made = 1
         db = tempfile.mktemp(suffix=".sqlite")
         m = Memory(db)
         try:
             p = TargetProfile(host="h", base_url="http://h/")
             p.case_sensitive = False
-            m.record_run(p, R([make_finding("http://h/MANIFEST.JSON", 200)]))
+            m.record_run(p, make_result(p, [make_finding("http://h/MANIFEST.JSON", 200)], 1))
             paths = {row[0] for row in m.db.execute("SELECT path FROM corpus")}
             self.assertIn("/manifest.json", paths)
             self.assertNotIn("/MANIFEST.JSON", paths)

@@ -1,4 +1,4 @@
-"""Terminal-only grouping; never removes observations from scanner or exports."""
+"""Report-view grouping; never removes observations from scanner or exports."""
 
 from __future__ import annotations
 
@@ -31,18 +31,18 @@ class ResponsePreview:
         self.seen.add(key)
         return True
 
-    def summary(self) -> str:
-        return (f"{self.hidden} repeated response observations grouped in this terminal view; "
+    def summary(self, view: str = "terminal") -> str:
+        return (f"{self.hidden} repeated response observations grouped in this {view} view; "
                 "all accepted URLs retained in JSON/HTML report events." if self.hidden else "")
 
 
-def terminal_rows(findings) -> tuple[list, str]:
+def terminal_rows(findings, *, view: str = "terminal") -> tuple[list, str]:
     preview = ResponsePreview()
-    return [finding for finding in findings if preview.accept(finding)], preview.summary()
+    return [finding for finding in findings if preview.accept(finding)], preview.summary(view)
 
 
 def terminal_findings(result) -> list:
-    """Recover full-metadata accepted rows for terminal display after legacy collapse.
+    """Recover full-metadata accepted rows for display after legacy collapse.
 
     This is a copy for presentation only. Discovery keeps its existing findings
     view and exports keep the immutable event snapshots. Later enrichments on

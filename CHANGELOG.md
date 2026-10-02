@@ -5,6 +5,27 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.14.7] - 2026-10-02
+
+### Fixed
+- Use conservative response presentation in the main HTML findings table,
+  recovering distinct full-metadata observations after legacy internal grouping
+  and retaining grouped members in report details. Preserve later enrichments.
+- Restrict HTML findings search/sort to its own table; filtering findings no
+  longer hides rows from retained-evidence and cookie tables.
+- Detach exported technology scores and cookie-notification snapshots from
+  mutable scanner records. Callers cannot mutate retained state through these
+  exports, and later aggregation cannot rewrite prior notification snapshots.
+- Repair five obsolete memory-test fixtures to exercise the actual ScanResult
+  snapshot contract, restoring their existing assertions without weakening them.
+
+### Added
+- Read-only cookie inventory summaries with captured response/field counts,
+  per-origin/name selected-metadata variants and indices into retained cookie
+  observations. Duplicate same-name fields do not inflate response counts.
+- Additive JSON response-presentation counts; preserve the existing legacy
+  presentation_row_count meaning and raw report collections.
+
 ## [1.14.6] - 2026-10-01
 
 ### Added

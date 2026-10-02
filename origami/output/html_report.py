@@ -12,8 +12,10 @@ import time
 from collections import Counter
 
 from origami.core.files import atomic_write
+from origami.output.cookie_summary import summarize_cookies
 from origami.output.correlations import fingerprint_correlations, response_correlations
 from origami.output.provenance import reference_provenance
+from origami.output.response_groups import terminal_findings, terminal_rows
 
 _CSS = """
 :root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--card:#161b22;--bd:#30363d}
@@ -50,19 +52,20 @@ td.path a{color:#79c0ff;text-decoration:none}
 """
 
 _JS = """
-const q=document.getElementById('q'),rows=[...document.querySelectorAll('tbody tr')];
+const table=document.getElementById('findings-table'),q=document.getElementById('q'),
+ rows=[...table.querySelectorAll('tbody tr')];
 q.addEventListener('input',()=>{const v=q.value.toLowerCase();
  rows.forEach(r=>r.style.display=r.textContent.toLowerCase().includes(v)?'':'none')});
 // click a column header to sort (numeric for code/size/conf, text otherwise)
-const tb=document.querySelector('tbody');
-document.querySelectorAll('th[data-sort]').forEach((th,i)=>{let asc=true;
+const tb=table.querySelector('tbody');
+table.querySelectorAll('th[data-sort]').forEach((th,i)=>{let asc=true;
  th.addEventListener('click',()=>{const num=th.dataset.sort==='num';
   const trs=[...tb.querySelectorAll('tr')];
   trs.sort((a,b)=>{let x=a.children[i].textContent.trim(),y=b.children[i].textContent.trim();
    if(num){return (asc?1:-1)*((parseFloat(x)||0)-(parseFloat(y)||0));}
    return (asc?1:-1)*x.localeCompare(y);});
   asc=!asc;trs.forEach(r=>tb.appendChild(r));
-  document.querySelectorAll('th[data-sort]').forEach(h=>h.dataset.dir='');
+  table.querySelectorAll('th[data-sort]').forEach(h=>h.dataset.dir='');
   th.dataset.dir=asc?'▼':'▲';});});
 """
 
@@ -74,14 +77,21 @@ def _scls(code: int) -> str:
 def render(result, n_hidden: int | None = None) -> str:
     p = result.profile
     e = html.escape
+    observations = terminal_findings(result)
+    presentation_rows, presentation_summary = terminal_rows(observations, view="HTML")
+    cookie_summary = summarize_cookies(result)
     techs = "".join(f'<span class="badge tech">{e(t)} {s:.0f}</span>'
                     for t, s in p.tech_scores.items()) or '<span class="sub">none</span>'
     folds = "".join(f'<span class="badge fold">⌘ {e(f)}</span>' for f in sorted(result.folds))
     state = "failed" if result.error else "finished" if result.completed else "partial"
-    retention = (f"{len(result.reported_observations)} reported observations · {len(result.findings)} presentation rows"
+    retention = (f"{len(result.reported_observations)} reported observations · {len(presentation_rows)} presentation rows"
                  if result.report_events_tracked else "reported-observation retention unavailable")
     cards = [f'<div class="card"><b>execution</b>{state} · coverage not established</div>', f'<div class="card"><b>tech</b>{techs}</div>']
     cards.append(f'<div class="card"><b>retention</b>{retention}</div>')
+    if result.cookie_observations_tracked:
+        cards.append(f'<div class="card"><b>Set-Cookie headers</b>'
+                     f'{cookie_summary["distinct_name_count"]} names · '
+                     f'{cookie_summary["responses_with_set_cookie"]} captured responses</div>')
     if p.waf:
         cards.append(f'<div class="card"><b>WAF</b><span class="badge waf">{e(p.waf)}</span></div>')
     if p.enabled_extensions:
@@ -94,13 +104,13 @@ def render(result, n_hidden: int | None = None) -> str:
         cards.append(f'<div class="card"><b>topology</b>'
                      f'<a href="graph.html">endpoint graph →</a> '
                      f'<span class="hidden">{n_hidden} hidden</span></div>')
-    codes = Counter(f.status for f in result.findings)
+    codes = Counter(f.status for f in observations)
     if codes:
         summary = "  ".join(f"{c}×{n}" for c, n in sorted(codes.items()))
         cards.append(f'<div class="card"><b>status</b>{e(summary)}</div>')
 
     rows = []
-    for f in result.findings:
+    for f in presentation_rows:
         tags = "".join(f'<span class="badge tag {e(t)}">{e(t)}</span>' for t in getattr(f, "tags", []))
         path = e(f.url)
         # link only http(s) URLs — a server-controlled javascript:/data: URL must
@@ -175,31 +185,45 @@ def render(result, n_hidden: int | None = None) -> str:
         f'<tr><td class="path">{e(row["url"])}</td><td>{row["status"]}</td>'
         f'<td>{e(str(row["cookies"]))}</td><td>{row["response_count"]}</td>'
         f'<td>{row["unparsed_header_count"]}</td></tr>' for row in result.cookie_observations)
+    inventory_rows = "".join(
+        f'<tr><td class="path">{e(row["origin"] or "unknown")}</td><td>{e(row["name"])}</td>'
+        f'<td>{row["responses_with_name"]}</td><td>{e(str(row["statuses"]))}</td>'
+        f'<td>{len(row["metadata_variants"])}</td>'
+        f'<td>{e(str(row["observation_indices"]))}</td></tr>' for row in cookie_summary["inventory"])
     cookie_details = (
         '<details><summary>Observed Set-Cookie headers (values omitted)</summary>'
         '<p class="sub">Current-process response headers, including redirects and responses '
         'not accepted as findings. Cookie names and selected attributes only; cookie values, '
         'browser acceptance and authentication state are not inferred. Repeated per-URL '
         'metadata is counted, not discarded.</p>'
+        f'<p class="sub">{cookie_summary["set_cookie_field_count"]} captured fields; '
+        f'{cookie_summary["unparsed_field_count"]} unparsed. Inventory separates origins and '
+        'names; multiple selected-metadata variants are not a security verdict. Domain/Path '
+        'were not captured, so these entries are not cookie-jar identities.</p>'
+        '<table><thead><tr><th>origin</th><th>name</th><th>responses with name</th>'
+        '<th>codes</th><th>metadata variants</th><th>cookie observation indices (JSON)</th></tr></thead>'
+        f'<tbody>{inventory_rows}</tbody></table>'
+        '<details><summary>All per-URL cookie observations</summary>'
         '<table><thead><tr><th>URL</th><th>code</th><th>cookie metadata</th>'
         '<th>responses</th><th>unparsed fields</th></tr></thead>'
-        f'<tbody>{cookie_rows}</tbody></table></details>' if cookie_rows else '')
+        f'<tbody>{cookie_rows}</tbody></table></details></details>' if cookie_rows else '')
     when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Origami — {e(p.host)}</title><style>{_CSS}</style></head><body>
 <header><h1>Origami</h1><span class="sub">{e(p.base_url)}</span>
-<span class="sub">· {when} · {len(result.findings)} findings · {result.requests_made} requests</span></header>
+<span class="sub">· {when} · {len(observations)} observations · {len(presentation_rows)} presentation rows · {result.requests_made} requests</span></header>
 <div class="wrap"><div class="cards">{''.join(cards)}</div>
 {params_block}
-<h2>Findings ({len(result.findings)})</h2>
+<h2>Findings ({len(observations)}) · {len(presentation_rows)} presentation rows</h2>
 <p class="sub">Score is an uncalibrated heuristic, not a measured probability.
 HTTP success does not confirm a vulnerability; denial does not establish path existence.
 Grouping does not establish identical bodies. Recorded report events are preserved in JSON
 when retention is available; they do not include every request or raw HTTP bodies.</p>
+<p class="sub">{e(presentation_summary)}</p>
 <label for="q">Filter findings</label>
 <input id="q" placeholder="filter findings…" autofocus>
-<table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
+<table id="findings-table"><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
 <th data-sort="str">src</th><th data-sort="num">score</th><th data-sort="str">tags</th>
 <th data-sort="str">path</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>{observation_details}{fingerprints}{correlations}{references}{cookie_details}</div>

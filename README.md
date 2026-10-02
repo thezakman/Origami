@@ -452,6 +452,20 @@ optional response-metadata fields. Terminal recovery uses those snapshots after
 the existing internal discovery-view grouping without changing that algorithm.
 These hashes are comparison metadata, not stored raw HTTP responses.
 
+The HTML findings table uses the same conservative presentation as the terminal:
+recover full-metadata accepted observations after legacy internal grouping, then
+group only matching response signatures. Distinct bodies/semantic headers,
+truncated responses and explicit evidence retain separate rows. Grouped members
+remain in the observation/group details and raw JSON records. Later notes/tags
+on surviving findings are preserved. Searching/sorting the findings table does
+not filter the separate evidence and cookie tables.
+
+JSON `response_presentation` describes observation/row/grouped counts for this
+display view. The older `presentation_row_count` field continues to count the
+scanner's legacy `findings` list for compatibility; neither view changes discovery
+decisions. Exported scores and cookie notification records are detached snapshots,
+so editing a report/callback record cannot alter the scanner's retained state.
+
 JSON/HTML also expose read-only `response_correlations` (group membership and
 record references) and `fingerprint_correlations` (technology, recorded prefix,
 distinct signal types and evidence indices). Repeated signals stay traceable
@@ -500,6 +514,16 @@ change the HTTP client's existing cookie behavior or send additional requests.
 Cookie telemetry is not a finding and is not emitted as a JSONL finding record;
 old reports/checkpoints have no retrospective cookie telemetry. Existing raw
 fingerprint evidence is unchanged and may contain cookie details.
+
+JSON additionally provides `cookie_summary`; HTML shows its name/origin inventory
+above the expandable per-URL records. Counts distinguish captured responses from
+Set-Cookie fields: multiple same-name fields in one response count as one response
+with that name, while all field occurrences and selected metadata variants remain
+counted. Each entry/variant references indices in `cookie_observations`. Inventory
+entries separate HTTP origins (including scheme/port) and case-sensitive names;
+they are not browser cookie identities, which require uncaptured scope details.
+Value rotations do not create new metadata variants. Unknown retention is not
+equivalent to zero cookies, and an attribute variation is not a vulnerability verdict.
 
 The capture/acceptance distinction follows
 [RFC 6265](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.2).

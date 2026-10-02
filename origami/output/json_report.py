@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 
 from origami import __version__
 from origami.core.scanner import ScanResult
+from origami.output.cookie_summary import summarize_cookies
 from origami.output.correlations import fingerprint_correlations, response_correlations
 from origami.output.provenance import reference_provenance
+from origami.output.response_groups import terminal_findings, terminal_rows
 
 
 def finding_record(f, host: str = "") -> dict:
@@ -36,6 +38,8 @@ def finding_record(f, host: str = "") -> dict:
 
 def to_dict(result: ScanResult) -> dict:
     p = result.profile
+    observations = terminal_findings(result)
+    rows, _ = terminal_rows(observations)
     return {
         "schema_version": 2,
         "tool_version": __version__,
@@ -49,6 +53,9 @@ def to_dict(result: ScanResult) -> dict:
         "reported_observation_count": (len(result.reported_observations)
                                        if result.report_events_tracked else None),
         "presentation_row_count": len(result.findings),
+        "response_presentation": {"observation_count": len(observations), "row_count": len(rows),
+                                  "grouped_count": len(observations) - len(rows),
+                                  "basis": "conservative_response_metadata_display_only"},
         "reported_observations": deepcopy(result.reported_observations),
         "error": result.error,
         "pushbacks": result.pushbacks,
@@ -56,7 +63,7 @@ def to_dict(result: ScanResult) -> dict:
         "edges": [list(edge) for edge in result.edges],
         "host": p.host,
         "base_url": p.base_url,
-        "tech_scores": p.tech_scores,
+        "tech_scores": dict(p.tech_scores),
         "confirmed_techs": p.confirmed_techs(),
         "wildcard": p.wildcard,
         "waf": p.waf,
@@ -72,6 +79,7 @@ def to_dict(result: ScanResult) -> dict:
         "cookie_observation_retention": ("response_headers_current_process_values_omitted"
                                          if result.cookie_observations_tracked else "unavailable"),
         "cookie_observations": deepcopy(result.cookie_observations),
+        "cookie_summary": summarize_cookies(result),
         "findings": [asdict(f) for f in result.findings],
     }
 

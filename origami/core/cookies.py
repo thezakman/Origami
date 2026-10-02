@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from urllib.parse import urlsplit
 
 _NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
@@ -66,7 +67,7 @@ class CookieRecorder:
         notice = urlsplit(url).netloc, signature, len(headers), unparsed
         if notice not in self._notices:
             if self.notify is not None and len(self._notices) < self.notice_limit:
-                self.notify(self.records[self._indices[key]])
+                self.notify(deepcopy(self.records[self._indices[key]]))
             elif self.notify is not None:
                 self.suppressed_notices += 1
                 if self.suppressed_notices == 1 and self.notify_limit is not None:

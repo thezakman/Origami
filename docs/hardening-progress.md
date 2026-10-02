@@ -195,6 +195,44 @@ e os mesmos nove testes preexistentes incompatíveis/bloqueados explicitamente
 excluídos, documentados na etapa 14. Ruff, Mypy (76 arquivos), compileall e versão
 da CLI passaram. O comando instalado informa `origami 1.14.6`.
 
+## Etapa 16 — Consistência dos relatórios e snapshots (`1.14.7`)
+
+Quatro regressões foram reproduzidas antes das correções: a tabela principal do
+HTML não recuperava respostas distintas após colapso legado; imprimia todas as
+repetições com metadados iguais; scores exportados compartilhavam o dicionário
+do perfil; e o aviso de cookie compartilhava o registro agregado mutável.
+Agora o HTML usa a mesma recuperação/comparação conservadora do terminal, sem
+mudar os dados do scanner. Detalhes dos membros permanecem no relatório, e notas,
+tags e reproduções posteriores são preservadas. Scores e notificações são cópias
+destacadas; futuras agregações não reescrevem o snapshot entregue ao callback.
+
+O JavaScript de filtro/sort ficava acoplado a todos os `tbody tr`, ocultando
+evidências ao buscar um finding. Os seletores foram isolados em `findings-table`.
+Uma regressão executa o JavaScript real em Node com DOM simulado, sem navegador
+ou rede, verificando filtro, ordenação nos dois sentidos e isolamento da evidência.
+
+`cookie_summary` descreve respostas/campos capturados, nomes por origem HTTP e
+variantes dos atributos selecionados, com índices dos registros originais.
+Múltiplos campos do mesmo nome em uma resposta não duplicam a contagem de
+respostas com esse nome. Sem Domain/Path, essas entradas não são identidades
+de cookies do navegador. Unknown/variação de atributos não viram vereditos de
+segurança. O JSON ganha contagens da apresentação conservadora, preservando
+o significado legado de `presentation_row_count` e as coleções brutas.
+
+As cinco falhas de memória excluídas anteriormente foram reproduzidas como
+`AttributeError` por fixtures sem `profile`. Os testes agora usam `ScanResult`
+real, com o mesmo perfil/findings/número de requisições, sem mudar as asserções
+ou algoritmos de descoberta/aprendizado. Toda a suíte de memória passou.
+
+Validação: 14 regressões novas aprovadas; suíte abrangente com 535 testes
+aprovados, quatro skips e quatro exclusões explícitas por dependências do
+sandbox: o teste de slow-trickle com socket local e três testes CLI cuja
+configuração padrão exige operações indisponíveis neste ambiente. Os cinco
+testes de memória antes excluídos agora passam. Ruff (código e regressões novas),
+Mypy (77 arquivos), compileall, unittest das regressões novas e versão instalada
+da CLI foram verificados. O teste de DOM não é QA visual em navegador.
+Não houve tráfego ao domínio fornecido nem novas sondagens/automação ofensiva.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

@@ -31,6 +31,13 @@ mas as observações por URL permanecem no JSON/HTML. Valores dos cookies não s
 incluídos nessa nova telemetria; aceitação pelo navegador e exploração não são
 inferidas. As decisões de descoberta e o comportamento do cookie jar não mudam.
 
+A etapa 16 (`1.14.7`, 02/10/2026) corrige a divergência entre a tabela HTML e a
+apresentação conservadora do terminal, isola o filtro dos findings das tabelas
+de evidências e remove aliases mutáveis em scores exportados/avisos de cookies.
+O inventário resumido de cookies continua offline, com contagens e índices de
+procedência. Cinco fixtures antigas foram atualizadas para o contrato real de
+snapshots, sem modificar as asserções nem os algoritmos de aprendizado.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.
