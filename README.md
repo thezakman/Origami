@@ -460,6 +460,50 @@ for every path prefix, and distinct signal types do not establish statistical
 independence. These report correlations do not trigger probes or change scan
 priorities.
 
+Fingerprint reports additionally distinguish raw `signal_types` from
+`signal_channels`: cookie/header share the response-header channel;
+body/error-page share the response-body channel. `distinct_signal_count` keeps
+its raw source/detail meaning for compatibility. `distinct_marker_count`
+deduplicates cookie names across header/cookie signals and rotating values;
+it does not prove that the cookie name was the detector's matching substring.
+`channel_support` describes channel diversity, never statistical independence.
+
+`reference_provenance` in JSON and the offline reference-chain section in HTML
+explain existing source → referenced file → endpoint edges. Query strings, case,
+ports and origins remain distinct when recorded. Accepted report events are
+attached only by exact HTTP URL (without fragments); referenced-only nodes are
+not findings. Legacy edges may already lack queries, and relative references
+without document context remain unresolved rather than guessed. Analysis uses
+up to 4,000 edges and offers up to 200 shortest chain examples of four hops;
+limits/unresolved indices are explicit and the raw `edges` collection is retained.
+Examples are not all possible routes, execution traces or exploitation chains.
+Collectors generally require `--graph` to retain edges; unavailable provenance
+does not mean the application has no references.
+
+### Observed Set-Cookie headers
+
+Response headers are now recorded before body reading/classification, including
+redirect hops, error responses, soft-miss/filtered responses and body-read failures.
+Live notices show cookie names and selected `Secure`, `HttpOnly`, `SameSite`
+attributes, never cookie values. The first 20 distinct metadata signatures per
+scan are previewed, followed by a limit notice; identical signatures on different
+URLs do not flood the terminal. Every per-URL/status metadata observation remains
+in `cookie_observations` in JSON/HTML; identical observations increment
+`response_count`, including value rotations. Separate Set-Cookie fields are parsed
+individually (commas in Expires dates are not field separators); unparsed fields
+are counted without echoing their contents.
+
+This is current-process telemetry, not a cookie/session archive. It does not
+include cookie values, Domain/Path/expiry details, document.cookie changes,
+browser acceptance, authenticated state or a vulnerability verdict. It does not
+change the HTTP client's existing cookie behavior or send additional requests.
+Cookie telemetry is not a finding and is not emitted as a JSONL finding record;
+old reports/checkpoints have no retrospective cookie telemetry. Existing raw
+fingerprint evidence is unchanged and may contain cookie details.
+
+The capture/acceptance distinction follows
+[RFC 6265](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.2).
+
 The multi-marker approach follows the
 [OWASP WSTG framework fingerprinting guidance](https://wstg.owasp.org/v4.2/4-Web_Application_Security_Testing/01-Information_Gathering/08-Fingerprint_Web_Application_Framework/),
 which describes headers, cookies, HTML and paths as complementary evidence.

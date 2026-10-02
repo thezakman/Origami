@@ -5,6 +5,22 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.14.6] - 2026-10-01
+
+### Added
+- Passive Set-Cookie header telemetry before body streaming and classification,
+  including redirect hops, error/filtered responses and body-read failures.
+  Preview names and selected attributes with bounded live notices; retain per-URL
+  metadata and repetition counts in JSON/HTML without storing cookie values in
+  this new telemetry. Existing cookie behavior and scan decisions are unchanged.
+- Report-only fingerprint acquisition channels and normalized marker counts:
+  header/cookie signals share one channel, as do body/error-page signals. Cookie
+  value rotations cannot inflate the normalized cookie-name count. Raw signal
+  counts/evidence remain compatible; independence is not inferred.
+- Bounded offline reference-chain examples, exact-URL observation links and raw
+  edge indices in JSON/HTML. Explicitly report unresolved references and limits;
+  preserve queries/ports when present without guessing lost legacy context.
+
 ## [1.14.5] - 2026-10-01
 
 ### Fixed

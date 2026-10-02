@@ -27,6 +27,7 @@ from hashlib import sha256
 import anyio
 import httpx
 
+from origami.core.cookies import CookieRecorder
 from origami.core.normalize import simhash
 from origami.core.privacy import origin, sensitive_header
 from origami.core.response_signature import body_digests
@@ -226,6 +227,7 @@ class Engine:
         self.total_requests = 0      # every logical fetch THIS run (calibration, harvests, scan)
         self.prior_requests = 0      # requests spent on earlier runs of this target (set on --resume)
         self.on_request = None       # optional callback, fired once per fetch (UI heartbeat)
+        self.cookie_recorder = CookieRecorder()
         # Scan wall-clock deadline (monotonic seconds) or None for no limit. Set
         # once by the scanner at scan start (--time-limit) and read in every
         # fold's hot loop; lives here so all folds share one budget.
@@ -256,7 +258,8 @@ class Engine:
             proxy=proxy or None,
             http2=self.cfg.http2,             # negotiated via ALPN; CLI guards the h2 dep
             headers={"User-Agent": self.cfg.user_agent, **self.cfg.headers},
-            event_hooks={"request": [self._protect_credentials]},
+            event_hooks={"request": [self._protect_credentials],
+                         "response": [self._observe_cookie_headers]},
             limits=httpx.Limits(max_connections=self.cfg.concurrency * 2),
         )
 
@@ -420,6 +423,12 @@ class Engine:
             await self._release()
 
         return Probe(url, method, 0, 0, 0, 0, "", "", 0, 0.0, error=last_err or "max_retries")
+
+    async def _observe_cookie_headers(self, response: httpx.Response) -> None:
+        # Before body streaming/classification, including intermediate redirects
+        # and error/soft-miss responses. No additional request is sent here.
+        self.cookie_recorder.record(str(response.url), response.status_code,
+                                    response.headers.get_list("set-cookie"))
 
     async def _stream_probe(self, url: str, method: str, keep_body: bool, kw: dict) -> Probe:
         """Stream the response, reading at most cfg.max_body bytes — so a hostile

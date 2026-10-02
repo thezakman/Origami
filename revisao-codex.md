@@ -24,6 +24,13 @@ igual não silencia uma resposta com conteúdo distinto. URLs aceitas permanecem
 nos snapshots/JSONL, e tipos de sinal são reconciliados por tecnologia e prefixo
 sem inferir independência ou transformar o relatório em novas ações de rede.
 
+A etapa 15 (`1.14.6`) distingue tipos de sinal de canais de aquisição, acrescenta
+caminhos de referência offline com índices de evidência e captura metadados de
+`Set-Cookie` antes da classificação/leitura do corpo. Os avisos são limitados,
+mas as observações por URL permanecem no JSON/HTML. Valores dos cookies não são
+incluídos nessa nova telemetria; aceitação pelo navegador e exploração não são
+inferidas. As decisões de descoberta e o comportamento do cookie jar não mudam.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.

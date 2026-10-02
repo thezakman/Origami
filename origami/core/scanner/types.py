@@ -99,3 +99,5 @@ class ScanResult:
     reported_observations: list[dict] = field(default_factory=list, compare=False, repr=False)
     report_events_tracked: bool = field(default=False, compare=False, repr=False)
     presentation_notices: set[tuple[str, int]] = field(default_factory=set, compare=False, repr=False)
+    cookie_observations: list[dict] = field(default_factory=list, compare=False, repr=False)
+    cookie_observations_tracked: bool = field(default=False, compare=False, repr=False)

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from origami import __version__
 from origami.core.scanner import ScanResult
 from origami.output.correlations import fingerprint_correlations, response_correlations
+from origami.output.provenance import reference_provenance
 
 
 def finding_record(f, host: str = "") -> dict:
@@ -67,6 +68,10 @@ def to_dict(result: ScanResult) -> dict:
         "evidence": [asdict(e) for e in p.evidence],
         "fingerprint_correlations": fingerprint_correlations(p),
         "response_correlations": response_correlations(result),
+        "reference_provenance": reference_provenance(result),
+        "cookie_observation_retention": ("response_headers_current_process_values_omitted"
+                                         if result.cookie_observations_tracked else "unavailable"),
+        "cookie_observations": deepcopy(result.cookie_observations),
         "findings": [asdict(f) for f in result.findings],
     }
 

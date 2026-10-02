@@ -156,6 +156,45 @@ metadados não substituem corpos HTTP brutos. A retenção continua limitada aos
 eventos aceitos deste processo. As correlações são leitura de evidências e não
 acionam novas sondagens, prioridades ou cadeias de exploração.
 
+## Etapa 15 — Canais, procedência offline e Set-Cookie (`1.14.6`)
+
+O relatório agora distingue tipos de sinal de canais de aquisição: `header` e
+`cookie` compartilham cabeçalhos da resposta; `body` e `error_page` compartilham
+o corpo. Os campos anteriores continuam disponíveis, e novos campos descrevem
+canais e marcadores normalizados. Rotação do valor de um mesmo nome de cookie
+não aumenta a contagem normalizada. Evidências brutas, pesos e decisões do
+scanner não foram alterados; diversidade de canais não prova independência.
+
+`reference_provenance` relaciona somente as arestas existentes com observações
+aceitas por URL HTTP exata, sem fragmento. Query/case/porta/origem não são
+colapsadas. Referências relativas sem contexto ficam não resolvidas; queries
+já perdidas pelos coletores legados não são reconstruídas. Exemplos de caminhos
+são limitados a quatro hops/200 exemplos e 4.000 arestas processadas; limites e
+índices são explícitos, e o conjunto bruto de arestas continua no relatório.
+Referenciado, observado e explorável permanecem conceitos distintos.
+
+A captura de `Set-Cookie` é um hook de resposta antes da leitura do corpo,
+incluindo saltos de redirect, respostas descartadas/filtradas e falhas de leitura
+do corpo. Avisos mostram nomes e presença de atributos selecionados, sem valores.
+Rotação de valores incrementa a contagem por URL/metadados; mudanças dos atributos
+selecionados produzem novas assinaturas. O terminal limita o preview a 20
+assinaturas distintas, informa o limite e mantém todas as observações por URL
+em JSON/HTML. Campos não interpretados são contados sem ecoar conteúdo. Não há
+mudança no cookie jar, novas requisições ou alteração na classificação.
+
+Referências: OWASP WSTG v4.2 INFO-08 (múltiplos marcadores) e RFC 6265
+(campos separados de Set-Cookie, observação versus aceitação pelo agente).
+Limites: telemetria somente deste processo, sem valores/Domain/Path/expiração,
+sem `document.cookie`, sem retrospectiva dos checkpoints e sem emissão como
+finding JSONL. Evidências antigas de fingerprint permanecem inalteradas.
+
+Validação: 16 regressões novas em transporte simulado/análise offline; 33 testes
+focados aprovados incluindo as 17 regressões da etapa anterior. Não foi acessado
+o domínio fornecido. A suíte abrangente passou em 516 testes, com quatro skips
+e os mesmos nove testes preexistentes incompatíveis/bloqueados explicitamente
+excluídos, documentados na etapa 14. Ruff, Mypy (76 arquivos), compileall e versão
+da CLI passaram. O comando instalado informa `origami 1.14.6`.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

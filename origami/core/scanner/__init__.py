@@ -19,6 +19,7 @@ from origami.core import baseline as bl
 from origami.core import fingerprint as fp
 from origami.core import overlays
 from origami.core import resume as resume_mod
+from origami.core.cookies import attach_cookie_recorder
 from origami.core.evidence import TargetProfile
 from origami.core.httpclient import Engine
 from origami.core.response_classifier import Finding
@@ -230,6 +231,7 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     host = urlparse(base_url).netloc
     profile = TargetProfile(host=host, base_url=base_url)
     result = ScanResult(profile=profile)
+    attach_cookie_recorder(engine, result, observer)
 
     # 1. baseline at root + fingerprint -----------------------------------
     # A target that IS a .js/.mjs file (scanned directly, or a webpack
@@ -802,6 +804,7 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
     result = ScanResult(profile=profile, findings=list(state["findings"]),
                         folds=set(state.get("folds", [])),
                         edges=[tuple(e) for e in state.get("edges", [])])
+    attach_cookie_recorder(engine, result, observer)
     observer.log(f"resume: restored {len(result.findings)} findings · "
                  f"{len(state['queue'])} dirs queued · {len(state['scanned'])} done "
                  f"· {state.get('requests_made', 0)} prior requests",

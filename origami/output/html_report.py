@@ -13,6 +13,7 @@ from collections import Counter
 
 from origami.core.files import atomic_write
 from origami.output.correlations import fingerprint_correlations, response_correlations
+from origami.output.provenance import reference_provenance
 
 _CSS = """
 :root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--card:#161b22;--bd:#30363d}
@@ -132,14 +133,17 @@ def render(result, n_hidden: int | None = None) -> str:
     fingerprint_rows = "".join(
         f'<tr><td>{e(row["tech"])}</td><td>{e(row["path_prefix"] or "unknown")}</td>'
         f'<td>{e(", ".join(row["signal_types"]) or "unknown")}</td>'
-        f'<td>{e(row["support"])}</td><td>{e(str(row["evidence_indices"]))}</td></tr>'
+        f'<td>{e(", ".join(row["signal_channels"]) or "unknown")} '
+        f'({e(row["channel_support"])})</td><td>{e(str(row["evidence_indices"]))}</td></tr>'
         for row in fingerprint_correlations(p))
     fingerprints = (
         '<details><summary>Fingerprint evidence correlations</summary>'
-        '<p class="sub">Signal types are grouped per recorded prefix. Repetition is not '
-        'independent corroboration; host scores are heuristics, not probabilities.</p>'
+        '<p class="sub">Raw signal types and acquisition channels are distinct: cookie/header '
+        'share response headers; body/error-page share response body. Rotating cookie values '
+        'do not add cookie names. Independent corroboration is not established; host scores '
+        'are heuristics, not probabilities.</p>'
         '<table><thead><tr><th>technology</th><th>prefix</th><th>signal types</th>'
-        '<th>support</th><th>evidence indices (JSON)</th></tr></thead>'
+        '<th>channels</th><th>evidence indices (JSON)</th></tr></thead>'
         f'<tbody>{fingerprint_rows}</tbody></table></details>' if fingerprint_rows else '')
     response_details = "".join(
         f'<details><summary>{group["status"]} · {group["count"]} observations · '
@@ -150,6 +154,36 @@ def render(result, n_hidden: int | None = None) -> str:
                     f'<p class="sub">Similarity of recorded responses only; all member URLs '
                     f'are listed. This does not prove resource identity or a vulnerability.</p>'
                     f'{response_details}</details>' if response_details else '')
+    provenance = reference_provenance(result)
+    reference_details = "".join(
+        '<li>' + ' → '.join(e(url) for url in chain["urls"])
+        + f' · edge indices: {e(str(chain["edge_indices"]))}'
+        + f' · accepted observation refs: {e(str(chain["endpoint_observation_refs"]))}</li>'
+        for chain in provenance["chain_examples"])
+    references = (
+        '<details><summary>Recorded reference chains (offline)</summary>'
+        '<p class="sub">Bounded examples from existing edges, not execution or exploitation. '
+        'An accepted response does not prove resource existence. Relative references without '
+        'document context are unresolved; legacy edges may lack queries. Full indexed edges '
+        'and node observations are available in JSON.</p>'
+        f'<p class="sub">Unprocessed edges: {provenance["unprocessed_edge_count"]}; '
+        f'unresolved indices: {e(str(provenance["unresolved_edge_indices"]))}; '
+        f'nodes without examples: {provenance["nodes_without_chain_example"]} '
+        '(includes starting nodes).</p>'
+        f'<ul>{reference_details}</ul></details>' if result.edges else '')
+    cookie_rows = "".join(
+        f'<tr><td class="path">{e(row["url"])}</td><td>{row["status"]}</td>'
+        f'<td>{e(str(row["cookies"]))}</td><td>{row["response_count"]}</td>'
+        f'<td>{row["unparsed_header_count"]}</td></tr>' for row in result.cookie_observations)
+    cookie_details = (
+        '<details><summary>Observed Set-Cookie headers (values omitted)</summary>'
+        '<p class="sub">Current-process response headers, including redirects and responses '
+        'not accepted as findings. Cookie names and selected attributes only; cookie values, '
+        'browser acceptance and authentication state are not inferred. Repeated per-URL '
+        'metadata is counted, not discarded.</p>'
+        '<table><thead><tr><th>URL</th><th>code</th><th>cookie metadata</th>'
+        '<th>responses</th><th>unparsed fields</th></tr></thead>'
+        f'<tbody>{cookie_rows}</tbody></table></details>' if cookie_rows else '')
     when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -168,7 +202,7 @@ when retention is available; they do not include every request or raw HTTP bodie
 <table><thead><tr><th data-sort="num">code</th><th data-sort="num">size</th>
 <th data-sort="str">src</th><th data-sort="num">score</th><th data-sort="str">tags</th>
 <th data-sort="str">path</th></tr></thead>
-<tbody>{''.join(rows)}</tbody></table>{observation_details}{fingerprints}{correlations}</div>
+<tbody>{''.join(rows)}</tbody></table>{observation_details}{fingerprints}{correlations}{references}{cookie_details}</div>
 <script>{_JS}</script></body></html>"""
 
 
