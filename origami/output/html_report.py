@@ -92,6 +92,10 @@ def render(result, n_hidden: int | None = None) -> str:
         cards.append(f'<div class="card"><b>Set-Cookie headers</b>'
                      f'{cookie_summary["distinct_name_count"]} names · '
                      f'{cookie_summary["responses_with_set_cookie"]} captured responses</div>')
+    if result.endpoint_hints:
+        route_templates = sum(bool(h.get("template")) for h in result.endpoint_hints)
+        cards.append(f'<div class="card"><b>client routes</b>{len(result.endpoint_hints)} hints · '
+                     f'{route_templates} runtime templates</div>')
     if p.waf:
         cards.append(f'<div class="card"><b>WAF</b><span class="badge waf">{e(p.waf)}</span></div>')
     if p.enabled_extensions:
@@ -128,6 +132,22 @@ def render(result, n_hidden: int | None = None) -> str:
     params = "".join(f"<span>{e(x)}</span>" for x in sorted(p.parameters))
     params_block = (f'<h2>Parameters ({len(p.parameters)})</h2><div class="params">{params}</div>'
                     if p.parameters else "")
+    route_rows = "".join(
+        f'<tr><td>{e(str(h.get("method", "UNKNOWN")))}</td>'
+        f'<td class="path">{e(str(h.get("route", "")))}</td>'
+        f'<td>{"yes" if h.get("template") else "no"}</td>'
+        f'<td>{e(", ".join(h.get("path_params", [])))}</td>'
+        f'<td>{e(", ".join(h.get("query_params", [])))}</td>'
+        f'<td>{e(str(h.get("client", "")))}</td>'
+        f'<td class="path">{e(str(h.get("source", "")))}</td></tr>'
+        for h in result.endpoint_hints)
+    routes_block = (
+        f'<details open><summary>Passive client routes ({len(result.endpoint_hints)})</summary>'
+        '<p class="sub">Extracted from HTML/JavaScript without replaying state-changing methods. '
+        'Runtime values remain explicit templates; UNKNOWN means the wrapper did not expose a method.</p>'
+        '<table><thead><tr><th>method</th><th>route</th><th>template</th>'
+        '<th>path params</th><th>query params</th><th>client</th><th>source</th></tr></thead>'
+        f'<tbody>{route_rows}</tbody></table></details>' if route_rows else "")
     observation_details = ""
     if result.report_events_tracked:
         event_rows = "".join(
@@ -215,6 +235,7 @@ def render(result, n_hidden: int | None = None) -> str:
 <span class="sub">· {when} · {len(observations)} observations · {len(presentation_rows)} presentation rows · {result.requests_made} requests</span></header>
 <div class="wrap"><div class="cards">{''.join(cards)}</div>
 {params_block}
+{routes_block}
 <h2>Findings ({len(observations)}) · {len(presentation_rows)} presentation rows</h2>
 <p class="sub">Score is an uncalibrated heuristic, not a measured probability.
 HTTP success does not confirm a vulnerability; denial does not establish path existence.

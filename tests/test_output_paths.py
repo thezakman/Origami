@@ -59,6 +59,11 @@ class TestOutputPaths(unittest.TestCase):
         self.reject("--out", str(self.folder), "--jsonl", str(stream))
         self.assertFalse(stream.exists())
 
+    def test_client_routes_artifact_cannot_replace_stream(self):
+        stream = self.folder / "client_routes.json"
+        self.reject("--out", str(self.folder), "--jsonl", str(stream))
+        self.assertFalse(stream.exists())
+
     def test_input_wordlist_alias_is_preserved(self):
         source = self.folder / "words.txt"
         source.write_text("fixture\n")

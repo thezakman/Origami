@@ -9,6 +9,8 @@
                      identically, so none of them become a `finding`, but the
                      endpoint NAMES are still the point: re-test once you have a
                      session.
+  client_routes.json — passive method-aware client routes, including unresolved
+                       runtime templates and the source that disclosed each one.
 
 The point: Origami's recon becomes direct input for the next step (param
 fuzzing, manual review) instead of dying in the terminal scrollback.
@@ -56,6 +58,7 @@ def _write_artifacts(result, d: Path) -> dict:
     params = set(result.profile.parameters)
     urls = {f.url for f in result.findings}
     paths = set(result.harvested_paths)
+    route_hints = list(result.endpoint_hints)
     n_hidden = None
 
     def write_graph():
@@ -67,6 +70,8 @@ def _write_artifacts(result, d: Path) -> dict:
         "params.txt": lambda: _write_lines(d / "params.txt", params),
         "urls.txt": lambda: _write_lines(d / "urls.txt", urls),
         "js_endpoints.txt": lambda: _write_lines(d / "js_endpoints.txt", paths),
+        "client_routes.json": lambda: atomic_write(
+            d / "client_routes.json", json.dumps(route_hints, indent=2, ensure_ascii=False)),
         "graph": write_graph,
         "report.html": lambda: html_report.write(result, str(d / "report.html"), n_hidden=n_hidden),
     }
@@ -92,4 +97,5 @@ def _write_artifacts(result, d: Path) -> dict:
 
     return {"dir": str(d), "findings": len(result.findings),
             "params": len(params), "urls": len(urls), "js_endpoints": len(paths),
+            "client_routes": len(route_hints),
             "hidden": n_hidden or 0, "errors": errors}

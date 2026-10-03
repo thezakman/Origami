@@ -38,11 +38,12 @@ O inventário resumido de cookies continua offline, com contagens e índices de
 procedência. Cinco fixtures antigas foram atualizadas para o contrato real de
 snapshots, sem modificar as asserções nem os algoritmos de aprendizado.
 
-A etapa 17 (`1.14.8`, 03/10/2026) acrescenta `--verify-bundle` para verificar
-offline os hashes/tamanhos de um bundle exportado, com leitura limitada e
-ancorada em descritor, tratamento de locks e falhas explícitas. Essa verificação
-não repara arquivos, não autentica um manifesto sem assinatura e não estabelece
-completude do scan ou validade dos findings. Dados e fluxos de descoberta não mudam.
+A etapa 17 (`1.15.0`, 03/10/2026) remove o experimento lateral de verificação de
+bundle e acrescenta inteligência passiva de rotas do cliente: método, rota,
+parâmetros em template, tipo de cliente e fonte HTML/JS. Concatenações estáticas e
+`baseURL` de Axios são correlacionadas; interpolação de caminho deixa de produzir
+uma URL colapsada falsa. Apenas rotas estáticas alimentam probes, e métodos mutáveis
+descobertos nunca são reproduzidos automaticamente.
 
 ## Diagnóstico
 

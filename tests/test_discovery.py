@@ -1034,8 +1034,9 @@ class TestTemplateLiteralPaths(unittest.TestCase):
     """Codegen'd TS/Angular API clients build endpoint URLs as template
     literals — `${this.basePath}/api/v1/foo/${id}/bar` — which _ABS alone
     can't see (the literal doesn't start with `/` right after the backtick,
-    or has `${id}` mid-path). extract_paths must reconstruct the static
-    segments around the `${...}` interpolations."""
+    or has `${id}` mid-path). Static routes remain probeable; routes with
+    runtime path segments are retained as templates instead of being collapsed
+    into a different URL and actively probed."""
 
     def test_leading_basepath_var(self):
         from origami.modules.discovery import js_parser as J
@@ -1044,8 +1045,10 @@ class TestTemplateLiteralPaths(unittest.TestCase):
 
     def test_mid_path_param(self):
         from origami.modules.discovery import js_parser as J
-        paths = J.extract_paths(b"const u = `${this.API}/setor/${idSetor}/ativos`;", "http://h/")
-        self.assertIn("/setor/ativos", paths)
+        body = b"const u = `${this.API}/setor/${idSetor}/ativos`;"
+        self.assertNotIn("/setor/ativos", J.extract_paths(body, "http://h/"))
+        self.assertTrue(any(h["route"] == "/setor/{idSetor}/ativos"
+                            for h in J.extract_endpoint_hints(body, "http://h/")))
 
     def test_multiple_params_and_basepath(self):
         from origami.modules.discovery import js_parser as J
@@ -1053,14 +1056,22 @@ class TestTemplateLiteralPaths(unittest.TestCase):
                 b"/api/v1/solicitacaoCompra/${idSolicitacaoCompra}"
                 b"/produtoSolicitacaoCompra/${idProdutoSolicitacaoCompra}/anexos`);")
         paths = J.extract_paths(body, "http://h/")
-        self.assertIn("/api/v1/solicitacaoCompra/produtoSolicitacaoCompra/anexos", paths)
+        self.assertNotIn("/api/v1/solicitacaoCompra/produtoSolicitacaoCompra/anexos", paths)
+        hints = J.extract_endpoint_hints(body, "http://h/")
+        self.assertTrue(any(h["method"] == "GET" and h["route"] ==
+                            "/api/v1/solicitacaoCompra/{idSolicitacaoCompra}/"
+                            "produtoSolicitacaoCompra/{idProdutoSolicitacaoCompra}/anexos"
+                            for h in hints))
 
     def test_query_string_with_interpolated_params(self):
         from origami.modules.discovery import js_parser as J
         body = (b"`${this.API}/recurso/${idRecurso}/ultimasImpressoes"
                 b"?quantidadeItens=${quantidadeItens}`")
         paths = J.extract_paths(body, "http://h/")
-        self.assertIn("/recurso/ultimasImpressoes", paths)
+        self.assertNotIn("/recurso/ultimasImpressoes", paths)
+        self.assertTrue(any(h["route"] ==
+                            "/recurso/{idRecurso}/ultimasImpressoes?quantidadeItens={quantidadeItens}"
+                            for h in J.extract_endpoint_hints(body, "http://h/")))
         self.assertIn("quantidadeitens", J.extract_params(body))
 
     def test_plain_backtick_literal_still_works(self):

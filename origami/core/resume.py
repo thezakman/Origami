@@ -95,7 +95,8 @@ def _finding_from_dict(d: dict) -> Finding:
 
 def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
          priority_paths, root_seeds, base_prefix, queue, scanned, start_offset=0,
-         front_cands=None, edges=None, root_simhash=0) -> None:
+         front_cands=None, edges=None, harvested_paths=None, endpoint_hints=None,
+         root_simhash=0) -> None:
     private_directory(path.parent)
     state = {
         "version": 1,
@@ -111,6 +112,8 @@ def save(path: Path, *, profile, findings, requests_made, folds, words, exts,
         "start_offset": start_offset,        # candidate index to resume the front prefix from
         "front_cands": [list(c) for c in (front_cands or [])],  # exact ordered (path,origin) of the interrupted prefix
         "edges": [list(e) for e in (edges or [])],  # provenance edges so --graph survives resume
+        "harvested_paths": sorted(harvested_paths or []),
+        "endpoint_hints": list(endpoint_hints or []),
         "root_simhash": root_simhash,                # homepage fingerprint for the 403-bypass check
     }
     atomic_write(path, json.dumps(state))

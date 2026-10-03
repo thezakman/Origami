@@ -175,7 +175,7 @@ checkpoint so repeated resumes never duplicate the report.
 ## Output
 
 - **Live dashboard** — findings stream as permanent lines under a pinned status bar with phase, req/s, hits, duration, the adaptive concurrency (drops as `⤓conc N` under WAF backoff) and `==> directory` markers.
-- **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable, links to the graph), **`graph.html`** (endpoint topology with an "only hidden" filter) + `graph.dot`, `params.txt` (harvested parameter surface — a drop-in fuzzing list) and `urls.txt`.
+- **`--out DIR`** writes `findings.json`, `report.html` (browsable, filterable, links to the graph), **`graph.html`** (endpoint topology with an "only hidden" filter) + `graph.dot`, `params.txt` (harvested parameter surface — a drop-in fuzzing list), `urls.txt`, `js_endpoints.txt` and `client_routes.json` (method-aware passive routes with source provenance).
 
 The final report groups findings by confidence, tagged by kind (`secret`, `leak`, `xss-lead`, `ssti-lead`, `redirect-lead`, `auth-bypass`, `odata-agg`, `jwt`, `oauth`, `broken-auth`, `bola-lead`, `authz-diff`, `negotiation`, `disclosure`, `config`, `api`, `admin`, `auth`, `source`, `param`, `listing`, `vhost`, `bypass`…) and coloured by where each came from (`js`, `robots`, `backup`, `wordlist`, `memory`, `shortscan`, `wayback`, `apidocs`, `wellknown`, `graphql`, `odata`, `authz`, `overlay`, `methods`, `origin`, `bypass403`…):
 
@@ -415,39 +415,19 @@ lock is never automatically removed. After an uncatchable termination (such as
 SIGKILL), a stale lock can remain: confirm no writer is running before removing
 that empty lock directory, or choose a fresh output directory.
 
-### Verify an exported bundle offline
+### Passive client routes
 
-```bash
-origami --verify-bundle results/
-```
+JavaScript harvesting preserves the request method and source for routes used by
+`fetch`, Axios, common HTTP clients and XHR. It resolves bounded static constants,
+string concatenations and Axios `baseURL` instances. Runtime values remain visible
+as templates, for example `POST /api/users/{id}/reset`, instead of being removed
+to create a different path. These templates are intelligence only: Origami does
+not replay `POST`, `PATCH`, `PUT` or `DELETE` calls discovered in client code.
 
-This read-only mode prints JSON and exits **0** only when a completed export's
-seven declared artifacts match the manifest's SHA-256 and byte counts. Exit **2**
-means a mismatch, missing/unreadable/unsafe file, incomplete export, lock, limit,
-invalid manifest or observable change during verification. Invalid inputs produce
-a controlled stderr diagnostic; structurally valid manifests produce JSON even
-when their artifacts fail verification. Use this mode alone; it does not open
-the scanner/database, read stdin or send target requests.
-
-Only the fixed bundle filenames are accepted. Directory traversal, duplicate JSON
-keys, invalid digests/counts and manifests missing integrity data are rejected.
-An existing `.origami-export.lock` blocks verification and is never removed.
-Symlinks, hard-linked files and non-regular files are refused; reading is anchored
-to an open directory descriptor. Unsupported platforms fail closed: this mode
-requires no-follow, directory-open and descriptor-relative filesystem operations.
-Read limits are 64 KiB for the manifest, 256 MiB per artifact and 512 MiB across
-artifact reads. Oversized files are not partially hashed and called verified.
-Actual artifact reads, including reads that subsequently fail, debit the same
-shared budget. Detecting growth can consume one guard byte beyond a read limit;
-the result is a failure, not a partial verification success.
-
-Verification rechecks sampled path/inode/size/time metadata after hashing and
-detects observable file/manifest/directory replacement. It is not an atomic
-filesystem snapshot, cannot prevent changes afterward, and ignores undeclared
-extra files (which may belong to older runs). Matching an **unsigned** manifest
-proves only consistency with that manifest: editing both data and manifest can
-still pass. It does not authenticate the operator/source or establish scan
-completion, coverage or vulnerability status; `scan_state` is `not_evaluated`.
+`client_routes.json` contains the method, route, runtime path/query parameters,
+client type and source HTML/JS URL. Fully static same-site routes continue into
+normal discovery; routes with runtime path segments remain available for manual
+or authenticated follow-up without speculative IDs.
 
 ### Reading repeated responses
 

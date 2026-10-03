@@ -60,6 +60,8 @@ def to_dict(result: ScanResult) -> dict:
         "error": result.error,
         "pushbacks": result.pushbacks,
         "harvested_paths": sorted(result.harvested_paths),
+        "endpoint_hints": deepcopy(result.endpoint_hints),
+        "endpoint_hint_count": len(result.endpoint_hints),
         "edges": [list(edge) for edge in result.edges],
         "host": p.host,
         "base_url": p.base_url,

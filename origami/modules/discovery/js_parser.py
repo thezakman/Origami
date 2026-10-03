@@ -87,6 +87,27 @@ _JS_REF = re.compile(rb"""["'`]([\w./-]+\.(?:js|mjs|json|map))["'`]""", re.I)
 _QUERY = re.compile(rb"""["'`][^"'`\s]{0,200}\?([A-Za-z0-9_=&.%\[\]\-]+)\\?["'`]""")
 _PARAM_NAME = re.compile(r"^[a-z_][\w.\-]{0,39}$")
 
+# Method-aware client-route extraction.  This remains passive intelligence:
+# callers may export these hints, but they must never replay state-changing
+# methods merely because an application bundle mentions one.
+_ASSIGN = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]{0,63})\s*=\s*([^;\n]{1,500})(?:;|\n|$)"
+)
+_CLIENT_CALL = re.compile(
+    r"\b(?:(fetch)|(axios)\.(get|post|put|patch|delete|head|options)|"
+    r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\."
+    r"(get|post|put|patch|delete|head|options))\s*\(", re.I
+)
+_XHR_OPEN = re.compile(r"\.open\s*\(\s*(['\"])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\1\s*,", re.I)
+_AXIOS_CREATE = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]{0,63})\s*=\s*axios\.create\s*\(\s*\{(.{0,800}?)\}\s*\)",
+    re.I | re.S,
+)
+_BASE_URL = re.compile(r"\bbaseURL\s*:\s*([^,}\n]{1,400})", re.I)
+_FETCH_METHOD = re.compile(r"\bmethod\s*:\s*(['\"])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\1", re.I)
+_DYNAMIC_EXPR = re.compile(r"\$\{\s*([^{}]{1,100})\s*\}")
+_SAFE_DYNAMIC = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
+
 # Endings/segments that are just static assets — not interesting as routes.
 # Note: .map (source maps) is deliberately NOT here — it's high-value recon.
 _ASSET_EXT = (".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff",
@@ -103,6 +124,282 @@ def _strip_template_exprs(s: str) -> str:
     applies to OpenAPI's `/users/{id}`, just for template-literal syntax."""
     s = _TPL_EXPR.sub("", s)
     return re.sub(r"/{2,}", "/", s)
+
+
+def _split_static_expr(expr: str) -> list[str] | None:
+    """Split a small JS string concatenation without evaluating JavaScript."""
+    parts: list[str] = []
+    start = 0
+    quote = ""
+    escaped = False
+    for i, char in enumerate(expr):
+        if escaped:
+            escaped = False
+            continue
+        if quote and char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char == "+":
+            parts.append(expr[start:i].strip())
+            start = i + 1
+    if quote:
+        return None
+    parts.append(expr[start:].strip())
+    return parts if all(parts) else None
+
+
+def _unquote_js(token: str) -> str | None:
+    if len(token) < 2 or token[0] not in "'\"`" or token[-1] != token[0]:
+        return None
+    value = token[1:-1]
+    # URL strings primarily need escaped slash/quote/backslash support. Avoid
+    # codecs/unicode_escape: it interprets arbitrary attacker-controlled bytes.
+    value = value.replace(r"\/", "/")
+    value = value.replace("\\" + token[0], token[0]).replace(r"\\", "\\")
+    return value
+
+
+def _static_expr(expr: str, symbols: dict[str, str], *, dynamic: bool = False) -> str | None:
+    parts = _split_static_expr(expr.strip())
+    if not parts:
+        return None
+    out: list[str] = []
+    for token in parts:
+        literal = _unquote_js(token)
+        if literal is not None:
+            if "${" in literal and not dynamic:
+                return None
+            out.append(literal)
+        elif token in symbols:
+            out.append(symbols[token])
+        else:
+            return None
+    value = "".join(out)
+    return value if 0 < len(value) <= 500 else None
+
+
+def _static_symbols(source: str) -> dict[str, str]:
+    """Resolve bounded const/let/var string chains (never execute JS)."""
+    assignments = _ASSIGN.findall(source)
+    symbols: dict[str, str] = {}
+    for _ in range(4):
+        changed = False
+        for name, expr in assignments:
+            value = _static_expr(expr, symbols)
+            if value is not None and symbols.get(name) != value:
+                symbols[name] = value
+                changed = True
+        if not changed:
+            break
+    return symbols
+
+
+def _read_argument(source: str, start: int, limit: int = 700) -> tuple[str, int]:
+    """Read one call argument from *start*, respecting quoted/template strings."""
+    quote = ""
+    escaped = False
+    depth = 0
+    end = min(len(source), start + limit)
+    for i in range(start, end):
+        char = source[i]
+        if escaped:
+            escaped = False
+            continue
+        if quote and char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}" and depth:
+            depth -= 1
+        elif depth == 0 and char in ",)":
+            return source[start:i].strip(), i
+    return "", start
+
+
+def _call_remainder(source: str, start: int, limit: int = 700) -> str:
+    """Return the remainder of the current call only, excluding later calls."""
+    quote = ""
+    escaped = False
+    depth = 0
+    end = min(len(source), start + limit)
+    for i in range(start, end):
+        char = source[i]
+        if escaped:
+            escaped = False
+            continue
+        if quote and char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char in "[{(":
+            depth += 1
+        elif char in "]}":
+            if depth:
+                depth -= 1
+        elif char == ")":
+            if depth == 0:
+                return source[start:i]
+            depth -= 1
+    return source[start:end]
+
+
+def _dynamic_name(expr: str) -> str:
+    expr = expr.strip()
+    return expr if _SAFE_DYNAMIC.fullmatch(expr) else "dynamic"
+
+
+def _render_dynamic(value: str) -> str:
+    # A leading `${basePath}` is deployment configuration, not a route param.
+    value = re.sub(r"^\$\{[^{}]{1,100}\}(?=/|[A-Za-z0-9])", "", value, count=1)
+    return _DYNAMIC_EXPR.sub(lambda m: "{" + _dynamic_name(m.group(1)) + "}", value)
+
+
+def _combine_base(base: str, route: str) -> str:
+    if route.startswith(("http://", "https://", "//")):
+        return route
+    return base.rstrip("/") + "/" + route.lstrip("/")
+
+
+def _normalise_route(value: str, base_url: str, client_base: str = "") -> str | None:
+    value = _render_dynamic(value.strip())
+    if not value or len(value) > 400 or any(ord(c) < 32 for c in value):
+        return None
+    if value.startswith(("data:", "mailto:", "tel:", "javascript:", "#")):
+        return None
+    if client_base:
+        value = _combine_base(client_base, value)
+    target_host = urlparse(base_url).netloc
+    if value.startswith("//"):
+        value = (urlparse(base_url).scheme or "https") + ":" + value
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        if not parsed.netloc or not same_site(parsed.netloc, target_host):
+            return None
+        value = value.split("#", 1)[0]
+    else:
+        value = value.split("#", 1)[0]
+        if not value.startswith("/"):
+            # Require an endpoint-shaped relative string. This rejects common
+            # UI noise such as object.get("label").
+            if "/" not in value:
+                return None
+            value = "/" + value
+    path = urlparse(value).path
+    if not path or path == "/" or path.lower().endswith(_ASSET_EXT):
+        return None
+    return value
+
+
+def _hint(method: str, route: str, client: str) -> dict:
+    path, _, query = route.partition("?")
+    path_params = list(dict.fromkeys(re.findall(r"\{([^{}]+)\}", path)))
+    query_params: list[str] = []
+    for pair in query.split("&") if query else ():
+        name = pair.split("=", 1)[0].strip()
+        if name and name not in query_params:
+            query_params.append(name)
+    return {
+        "method": method.upper(),
+        "route": route,
+        "template": bool(path_params or "{" in query),
+        "path_params": path_params,
+        "query_params": sorted(query_params),
+        "client": client,
+    }
+
+
+def extract_endpoint_hints(body: bytes, base_url: str, _depth: int = 0) -> list[dict]:
+    """Extract passive, method-aware client routes without replaying them.
+
+    Static string concatenations and axios ``baseURL`` instances are resolved;
+    runtime path/query values remain explicit ``{param}`` templates. Only
+    same-site absolute URLs are retained.
+    """
+    hints: dict[tuple[str, str, str], dict] = {}
+    if _depth < 2 and _looks_sourcemap(body):
+        for blob in parse_sourcemap(body):
+            for item in extract_endpoint_hints(blob, base_url, _depth + 1):
+                hints[(item["method"], item["route"], item["client"])] = item
+
+    source = body.decode("latin-1", "replace")
+    symbols = _static_symbols(source)
+    axios_bases: dict[str, str] = {}
+    for match in _AXIOS_CREATE.finditer(source):
+        base_match = _BASE_URL.search(match.group(2))
+        if base_match:
+            base = _static_expr(base_match.group(1), symbols, dynamic=True)
+            if base:
+                axios_bases[match.group(1)] = base
+
+    def add(method: str, expression: str, client: str, client_base: str = "") -> None:
+        value = _static_expr(expression, symbols, dynamic=True)
+        if value is None:
+            return
+        route = _normalise_route(value, base_url, client_base)
+        if route is None:
+            return
+        item = _hint(method, route, client)
+        hints[(item["method"], item["route"], item["client"])] = item
+
+    for match in _CLIENT_CALL.finditer(source):
+        expression, stop = _read_argument(source, match.end())
+        if not expression:
+            continue
+        if match.group(1):
+            method = "GET"
+            if source[stop:stop + 1] == ",":
+                method_match = _FETCH_METHOD.search(_call_remainder(source, stop + 1))
+                if method_match:
+                    method = method_match.group(2)
+            add(method, expression, "fetch")
+            continue
+        if match.group(2):
+            add(match.group(3), expression, "axios")
+            continue
+        obj, method = match.group(4), match.group(5)
+        if obj in axios_bases:
+            add(method, expression, f"axios-instance:{obj}", axios_bases[obj])
+        elif obj.lower() in {"http", "$http", "this.http", "client", "api", "apiclient"}:
+            add(method, expression, obj)
+
+    for match in _XHR_OPEN.finditer(source):
+        expression, _ = _read_argument(source, match.end())
+        add(match.group(2), expression, "xhr")
+
+    # Some generated SDKs assign a route template before passing it through
+    # wrappers our regex cannot name. Preserve that route as passive UNKNOWN
+    # method intelligence; a method-aware hit for the same route wins.
+    known_routes = {item["route"] for item in hints.values()}
+    for raw in _TEMPLATE.findall(body):
+        value = raw.decode("latin-1", "replace")
+        if "${" not in value:
+            continue
+        route = _normalise_route(value, base_url)
+        if route is None or route in known_routes:
+            continue
+        item = _hint("UNKNOWN", route, "template")
+        hints[(item["method"], item["route"], item["client"])] = item
+        known_routes.add(route)
+
+    return sorted(hints.values(), key=lambda h: (h["route"], h["method"], h["client"]))
 
 
 def _clean(raw: str) -> str | None:
@@ -192,7 +489,8 @@ def parse_sourcemap(body: bytes) -> list[bytes]:
             for c in (d.get("sourcesContent") or []) if isinstance(c, str) and c]
 
 
-def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
+def extract_paths(body: bytes, base_url: str, _depth: int = 0,
+                  _endpoint_hints: list[dict] | None = None) -> set[str]:
     """Return same-host candidate paths (relative to base) found in `body`.
 
     A JS **source map** is transparently reconstructed: its `sourcesContent`
@@ -200,10 +498,15 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
     the routes the minified bundle buried. `_depth` caps that reconstruction so a
     crafted sourcemap-inside-sourcesContent can't recurse into a RecursionError."""
     host = urlparse(base_url).netloc
+    endpoint_hints = (_endpoint_hints if _endpoint_hints is not None
+                      else extract_endpoint_hints(body, base_url))
     found: set[str] = set()
     if _depth < 2 and _looks_sourcemap(body):
         for blob in parse_sourcemap(body):
-            found |= extract_paths(blob, base_url, _depth + 1)
+            # `endpoint_hints` above already reconstructed sourcesContent. The
+            # child still needs literal extraction, but must not parse the same
+            # method-aware routes a second time on large source maps.
+            found |= extract_paths(blob, base_url, _depth + 1, _endpoint_hints=[])
 
     def consider(s: str) -> None:
         cleaned = _clean(s)
@@ -236,6 +539,12 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
     for m in _TEMPLATE.findall(body):
         s = m.decode("latin-1")
         if "${" in s:
+            rendered = _render_dynamic(s)
+            # A runtime value inside the PATH cannot be safely guessed. Keep
+            # the full template in endpoint intelligence instead of probing a
+            # fabricated collapsed path (`/users/${id}/edit` -> `/users/edit`).
+            if "{" in rendered.split("?", 1)[0]:
+                continue
             s = _strip_template_exprs(s)
         # Root-absolute ("/x") OR a bare relative build ("sistema/x.aspx" — no
         # leading `${basePath}`, or one that got stripped above): an Angular/TS
@@ -256,6 +565,12 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0) -> set[str]:
                 # when the real working URL is .../sistema/acessotoken.aspx).
                 s = "/" + s
             consider(s)
+    # Add only fully static, method-aware routes that the simple literal
+    # regexes cannot reconstruct (constant concatenation, axios baseURL).
+    # Dynamic templates remain report-only and are never turned into probes.
+    for hint in endpoint_hints:
+        if not hint["template"]:
+            consider(hint["route"])
     return found
 
 
@@ -323,7 +638,8 @@ JS_MAX_BODY = 20_000_000
 
 async def harvest(engine, base_url: str, root_body: bytes,
                   max_scripts: int = 40,
-                  on_progress=None) -> tuple[set[str], set[str], list[tuple[str, str]]]:
+                  on_progress=None, endpoint_hints: list[dict] | None = None
+                  ) -> tuple[set[str], set[str], list[tuple[str, str]]]:
     """Parse the root body and same-host scripts, following JS→JS references
     (webpack chunks, source maps) up to a fetch budget.
 
@@ -334,7 +650,25 @@ async def harvest(engine, base_url: str, root_body: bytes,
     """
     host = urlparse(base_url).netloc
     root_src = urlparse(base_url).path or "/"
-    paths = extract_paths(root_body, base_url)
+    hint_keys = {
+        (h.get("source", ""), h.get("method", ""), h.get("route", ""), h.get("client", ""))
+        for h in (endpoint_hints or [])
+    }
+
+    def record_hints(blob: bytes, source_url: str) -> list[dict]:
+        extracted = extract_endpoint_hints(blob, base_url)
+        if endpoint_hints is None:
+            return extracted
+        for hint in extracted:
+            item = {"source": source_url, **hint}
+            key = (item["source"], item["method"], item["route"], item["client"])
+            if key not in hint_keys:
+                endpoint_hints.append(item)
+                hint_keys.add(key)
+        return extracted
+
+    root_hints = record_hints(root_body, base_url)
+    paths = extract_paths(root_body, base_url, _endpoint_hints=root_hints)
     params = extract_params(root_body)
     edges: list[tuple[str, str]] = [(root_src, p) for p in paths]
 
@@ -354,7 +688,8 @@ async def harvest(engine, base_url: str, root_body: bytes,
         fetched += 1
         if pr.ok and pr.body:
             src = urlparse(url).path                                # the script we're in
-            new = extract_paths(pr.body, base_url)
+            script_hints = record_hints(pr.body, url)
+            new = extract_paths(pr.body, base_url, _endpoint_hints=script_hints)
             paths |= new
             params |= extract_params(pr.body)
             edges += [(src, np) for np in new]                      # script → path

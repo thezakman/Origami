@@ -88,6 +88,10 @@ class ScanResult:
     # (re-test once you have a session). Kept separately from `findings` so --out
     # can still hand them over even when they never became one.
     harvested_paths: set[str] = field(default_factory=set, compare=False, repr=False)
+    # Passive client-code intelligence: method + exact/static route or explicit
+    # runtime template, with the HTML/JS source that disclosed it. These are
+    # NEVER requests to replay automatically (POST/DELETE may mutate state).
+    endpoint_hints: list[dict] = field(default_factory=list, compare=False, repr=False)
     seen_urls: set[str] = field(default_factory=set, compare=False, repr=False)     # reported URLs (raw) — kills cross-source live dupes
     seen_urls_lc: set[str] = field(default_factory=set, compare=False, repr=False)  # …lower-cased, consulted on a case-insensitive host (both kept so a mid-scan case flip is consistent)
     wall_seen: dict = field(default_factory=dict, compare=False, repr=False)      # (status,length) → count, for live block-wall flood suppression

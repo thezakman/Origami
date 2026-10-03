@@ -435,7 +435,8 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
     if opts.js and root.body:
         _recon("js-scrape")
         js_paths, js_params, js_edges = await _guard(observer, "js-harvest",
-                                           js_parser.harvest(engine, base_url, root.body),
+                                           js_parser.harvest(engine, base_url, root.body,
+                                                             endpoint_hints=result.endpoint_hints),
                                            (set(), set(), []))
         # service worker (precache manifest) + web app manifest — more app paths
         ca_paths, ca_edges = await _guard(observer, "clientapp",
@@ -465,6 +466,11 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         if js_params:
             observer.log(f"params: {len(js_params)} parameter names harvested "
                          f"(pentest input surface)", 0, style="cyan")
+        if result.endpoint_hints:
+            templates = sum(bool(h.get("template")) for h in result.endpoint_hints)
+            observer.log(f"client routes: {len(result.endpoint_hints)} method-aware hints "
+                         f"({templates} runtime templates; passive, not replayed)",
+                         0, style="cyan")
 
     # Endpoints declared in the root response headers (CSP, Link) — free, no
     # extra request. Available even when there's no HTML body to harvest.
@@ -803,7 +809,9 @@ async def resume_scan(engine: Engine, state: dict, opts: ScanOptions, observer=N
     profile = state["profile"]
     result = ScanResult(profile=profile, findings=list(state["findings"]),
                         folds=set(state.get("folds", [])),
-                        edges=[tuple(e) for e in state.get("edges", [])])
+                        edges=[tuple(e) for e in state.get("edges", [])],
+                        harvested_paths=set(state.get("harvested_paths", [])),
+                        endpoint_hints=list(state.get("endpoint_hints", [])))
     attach_cookie_recorder(engine, result, observer)
     observer.log(f"resume: restored {len(result.findings)} findings · "
                  f"{len(state['queue'])} dirs queued · {len(state['scanned'])} done "
@@ -863,7 +871,8 @@ async def _scan_loop(engine, profile, opts, observer, memory, control, result, *
                             root_seeds=root_seeds, base_prefix=base_prefix,
                             queue=queue, scanned=scanned, start_offset=offset,
                             front_cands=[(c.path, c.origin) for c in cands] if cands else [],
-                            edges=result.edges, root_simhash=root_simhash)
+                            edges=result.edges, harvested_paths=result.harvested_paths,
+                            endpoint_hints=result.endpoint_hints, root_simhash=root_simhash)
 
     observer.phase("scan")
     interrupted = False
