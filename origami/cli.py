@@ -623,6 +623,8 @@ def main() -> None:
                     version=f"origami {__version__}")
     ap.add_argument("--review-report", metavar="FILE",
                     help="review a saved JSON report offline; print a JSON summary, without network or DB access")
+    ap.add_argument("--verify-bundle", metavar="DIR",
+                    help="verify an exported bundle against its manifest offline; read-only, no network or DB access")
     ap.add_argument("--export-run", type=int, metavar="ID",
                     help="recover a stored report from --db into a NEW --json file; no network access")
     ap.add_argument("url", nargs="*", help="target base URL(s), e.g. http://example.com")
@@ -877,8 +879,24 @@ def main() -> None:
 
     if sum(bool(mode) for mode in (args.update, args.init_credentials, args.history,
                                   args.forget, args.forget_noise, args.review_report,
-                                  args.export_run is not None)) > 1:
+                                  args.export_run is not None, args.verify_bundle is not None)) > 1:
         ap.error("maintenance and offline modes must be used alone")
+
+    if args.verify_bundle is not None:
+        if args.url or any(value != ap.get_default(key) for key, value in vars(args).items()
+                           if key not in {"verify_bundle", "url", "url_opt"}):
+            ap.error("--verify-bundle must be used alone")
+        from origami.output.bundle_verify import InvalidBundle, verify_bundle
+        try:
+            verified = verify_bundle(Path(args.verify_bundle))
+            print(json.dumps(verified, indent=2, ensure_ascii=True))
+        except InvalidBundle as exc:
+            print(f"[!] invalid bundle: {exc}", file=sys.stderr)
+            sys.exit(2)
+        except (OSError, ValueError) as exc:
+            print(f"[!] bundle verification failed: {type(exc).__name__}", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(0 if verified["verified"] else 2)
 
     if args.export_run is not None:
         if args.url or not args.json or any(value != ap.get_default(key) for key, value in vars(args).items()

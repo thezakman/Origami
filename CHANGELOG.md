@@ -5,6 +5,19 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.14.8] - 2026-10-03
+
+### Added
+- `--verify-bundle DIR`: bounded, read-only verification of a completed export's
+  seven declared artifact hashes and byte counts, with JSON results and explicit
+  failure states. It never opens scanner memory, reads stdin or sends requests.
+- Safe descriptor-relative reads: reject unexpected names, symlinks, hard links,
+  non-regular files and malformed/ambiguous manifests. Enforce manifest/file/total
+  byte limits, respect writer locks without removing them, and recheck sampled
+  metadata to detect observable concurrent changes. Fail closed on unsupported
+  platforms. Integrity means consistency with an unsigned manifest, not source
+  authenticity, scan coverage/completion or vulnerability confirmation.
+
 ## [1.14.7] - 2026-10-02
 
 ### Fixed

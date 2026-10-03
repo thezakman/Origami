@@ -233,6 +233,46 @@ Mypy (77 arquivos), compileall, unittest das regressões novas e versão instala
 da CLI foram verificados. O teste de DOM não é QA visual em navegador.
 Não houve tráfego ao domínio fornecido nem novas sondagens/automação ofensiva.
 
+## Etapa 17 — Verificação offline do bundle (`1.14.8`)
+
+O exportador já gravava SHA-256 e tamanho, mas faltava um comando de conferência
+posterior. `--verify-bundle DIR` compara os sete artefatos declarados ao manifesto
+e retorna JSON; sucesso exige exportação completa e todos os hashes/tamanhos
+compatíveis. Exportação completa não significa scan completo: o estado do scan
+não é avaliado. Locks, arquivos ausentes/inseguros/ilegíveis, limites excedidos,
+manifestos ambíguos e alterações observáveis durante a leitura falham explicitamente.
+
+O modo é exclusivo e entra antes de qualquer leitura de stdin, DB ou scanner.
+Nomes são um conjunto fixo; campos de integridade possuem tipos/digests estritos.
+JSON inválido, chaves duplicadas, valores não finitos e manifestos legados sem
+integridade não são aceitos como verificados. A leitura se ancora num descritor
+de diretório, recusa symlinks/hard links/arquivos não regulares e usa no-follow e
+nonblocking no open para proteger também o intervalo entre stat/open. Plataformas
+sem esses recursos falham de forma controlada, sem fallback menos seguro.
+
+Limites: 64 KiB de manifesto, 256 MiB por arquivo e 512 MiB no total dos artefatos.
+Oversized/crescimento durante leitura não produz hash parcial com sucesso.
+O orçamento total considera também bytes de leituras que posteriormente falham;
+a detecção de crescimento pode consumir um byte de guarda além do limite, nunca
+gerando sucesso parcial. O contador de bytes lidos é explícito no resultado.
+Metadados de descritor/caminho e identidade do diretório são reconferidos; arquivos
+alterados depois do próprio hash e substituição de manifesto com os mesmos bytes
+são detectados. Descritores fecham também nos caminhos de erro. O lock existente
+nunca é removido; extras não declarados não são conferidos nem autenticados.
+
+O manifesto é sem assinatura. Uma regressão demonstra que alterar arquivo e
+hash declarado juntos ainda passa: o resultado é consistência, não autenticidade.
+Também não é snapshot atômico nem proteção contra mudanças após a conferência.
+Nenhum conteúdo de findings, URLs, notas ou comandos é reproduzido pelo verificador.
+
+Validação: 29 regressões novas, incluindo modo CLI sem scanner/DB/stdin, orçamento
+compartilhado de leituras falhas e recusa de plataforma sem os recursos necessários.
+A suíte abrangente passou com 564 testes, quatro skips e as mesmas quatro exclusões
+explícitas de dependências do sandbox descritas na etapa 16. Ruff (código/testes
+novos), Mypy (78 arquivos), compileall, unittest das regressões e versão da CLI
+passaram. Não houve tráfego ao domínio fornecido, novas sondagens, reparo de
+artefatos ou alteração do fluxo de descoberta.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

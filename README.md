@@ -415,6 +415,40 @@ lock is never automatically removed. After an uncatchable termination (such as
 SIGKILL), a stale lock can remain: confirm no writer is running before removing
 that empty lock directory, or choose a fresh output directory.
 
+### Verify an exported bundle offline
+
+```bash
+origami --verify-bundle results/
+```
+
+This read-only mode prints JSON and exits **0** only when a completed export's
+seven declared artifacts match the manifest's SHA-256 and byte counts. Exit **2**
+means a mismatch, missing/unreadable/unsafe file, incomplete export, lock, limit,
+invalid manifest or observable change during verification. Invalid inputs produce
+a controlled stderr diagnostic; structurally valid manifests produce JSON even
+when their artifacts fail verification. Use this mode alone; it does not open
+the scanner/database, read stdin or send target requests.
+
+Only the fixed bundle filenames are accepted. Directory traversal, duplicate JSON
+keys, invalid digests/counts and manifests missing integrity data are rejected.
+An existing `.origami-export.lock` blocks verification and is never removed.
+Symlinks, hard-linked files and non-regular files are refused; reading is anchored
+to an open directory descriptor. Unsupported platforms fail closed: this mode
+requires no-follow, directory-open and descriptor-relative filesystem operations.
+Read limits are 64 KiB for the manifest, 256 MiB per artifact and 512 MiB across
+artifact reads. Oversized files are not partially hashed and called verified.
+Actual artifact reads, including reads that subsequently fail, debit the same
+shared budget. Detecting growth can consume one guard byte beyond a read limit;
+the result is a failure, not a partial verification success.
+
+Verification rechecks sampled path/inode/size/time metadata after hashing and
+detects observable file/manifest/directory replacement. It is not an atomic
+filesystem snapshot, cannot prevent changes afterward, and ignores undeclared
+extra files (which may belong to older runs). Matching an **unsigned** manifest
+proves only consistency with that manifest: editing both data and manifest can
+still pass. It does not authenticate the operator/source or establish scan
+completion, coverage or vulnerability status; `scan_state` is `not_evaluated`.
+
 ### Reading repeated responses
 
 The `confidence` value is an uncalibrated heuristic score. It is not a measured

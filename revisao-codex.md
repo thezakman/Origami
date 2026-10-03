@@ -38,6 +38,12 @@ O inventário resumido de cookies continua offline, com contagens e índices de
 procedência. Cinco fixtures antigas foram atualizadas para o contrato real de
 snapshots, sem modificar as asserções nem os algoritmos de aprendizado.
 
+A etapa 17 (`1.14.8`, 03/10/2026) acrescenta `--verify-bundle` para verificar
+offline os hashes/tamanhos de um bundle exportado, com leitura limitada e
+ancorada em descritor, tratamento de locks e falhas explícitas. Essa verificação
+não repara arquivos, não autentica um manifesto sem assinatura e não estabelece
+completude do scan ou validade dos findings. Dados e fluxos de descoberta não mudam.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.
