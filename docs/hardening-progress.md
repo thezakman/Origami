@@ -251,6 +251,26 @@ cobrem métodos, parâmetros, constantes encadeadas, `baseURL`, escopo same-site
 rejeição de esquemas inseguros, deduplicação e ausência do caminho colapsado falso.
 Não houve tráfego ao domínio fornecido.
 
+## Etapa 18 — Superfície de entrada por rota (`1.15.1`)
+
+A inteligência passiva agora cobre `axios(config)`, `axios.request(config)`,
+`.request()` de instâncias, `$.ajax()` e atalhos GET/POST do jQuery. Objetos inline
+são analisados de forma limitada, sem execução: por rota, o relatório preserva
+nomes de parâmetros de query, campos de corpo e headers, mas descarta seus valores.
+Chamadas duplicadas unem os campos observados em vez de perder a ocorrência anterior.
+
+Os nomes de path/query/body passam também para a superfície de parâmetros e para
+`params.txt`. A caixa original é preservada porque chaves de API podem diferenciar
+`userId` de `userid`. URLs relativas continuam relativas ao prefixo da aplicação;
+somente o padrão explícito de base runtime mantém a interpretação root-relative.
+Rotas estáticas continuam recebendo apenas o probe GET normal de descoberta;
+métodos mutáveis identificados no cliente não são reproduzidos.
+
+Validação: 20 regressões específicas de inteligência de rotas; suíte abrangente
+com 556 testes aprovados, quatro skips e quatro exclusões pelas limitações já
+documentadas do sandbox. Mypy (77 arquivos), compileall, versão da CLI e um
+ensaio local de 2,1 MB sem rotas passaram. Não houve tráfego ao alvo.
+
 ## Pendências do plano
 
 - Identidade e migração de checkpoints, snapshot final recuperável e procedência completa no banco.

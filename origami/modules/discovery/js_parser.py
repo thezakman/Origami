@@ -85,7 +85,7 @@ _JS_REF = re.compile(rb"""["'`]([\w./-]+\.(?:js|mjs|json|map))["'`]""", re.I)
 # string (an eval()'d or JSON-serialized module, both seen in real bundles);
 # _ABS already tolerates this via its far more permissive query-tail class.
 _QUERY = re.compile(rb"""["'`][^"'`\s]{0,200}\?([A-Za-z0-9_=&.%\[\]\-]+)\\?["'`]""")
-_PARAM_NAME = re.compile(r"^[a-z_][\w.\-]{0,39}$")
+_PARAM_NAME = re.compile(r"^[A-Za-z_][\w.\-]{0,39}$")
 
 # Method-aware client-route extraction.  This remains passive intelligence:
 # callers may export these hints, but they must never replay state-changing
@@ -94,9 +94,14 @@ _ASSIGN = re.compile(
     r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]{0,63})\s*=\s*([^;\n]{1,500})(?:;|\n|$)"
 )
 _CLIENT_CALL = re.compile(
-    r"\b(?:(fetch)|(axios)\.(get|post|put|patch|delete|head|options)|"
+    r"(?<![\w$])(?:(fetch)|(axios)\.(get|post|put|patch|delete|head|options)|"
     r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\."
-    r"(get|post|put|patch|delete|head|options))\s*\(", re.I
+    r"(getJSON|getScript|get|post|put|patch|delete|head|options))\s*\(", re.I
+)
+_CONFIG_CALL = re.compile(
+    r"(?<![\w$])(?:(axios)(?:\.request)?|"
+    r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\.request|"
+    r"(\$|jQuery)\.ajax)\s*\(", re.I
 )
 _XHR_OPEN = re.compile(r"\.open\s*\(\s*(['\"])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\1\s*,", re.I)
 _AXIOS_CREATE = re.compile(
@@ -104,7 +109,6 @@ _AXIOS_CREATE = re.compile(
     re.I | re.S,
 )
 _BASE_URL = re.compile(r"\bbaseURL\s*:\s*([^,}\n]{1,400})", re.I)
-_FETCH_METHOD = re.compile(r"\bmethod\s*:\s*(['\"])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\1", re.I)
 _DYNAMIC_EXPR = re.compile(r"\$\{\s*([^{}]{1,100})\s*\}")
 _SAFE_DYNAMIC = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 
@@ -178,6 +182,8 @@ def _static_expr(expr: str, symbols: dict[str, str], *, dynamic: bool = False) -
             out.append(literal)
         elif token in symbols:
             out.append(symbols[token])
+        elif dynamic and _SAFE_DYNAMIC.fullmatch(token):
+            out.append("{" + token + "}")
         else:
             return None
     value = "".join(out)
@@ -229,14 +235,14 @@ def _read_argument(source: str, start: int, limit: int = 700) -> tuple[str, int]
     return "", start
 
 
-def _call_remainder(source: str, start: int, limit: int = 700) -> str:
-    """Return the remainder of the current call only, excluding later calls."""
+def _split_top_level(value: str, delimiter: str = ",") -> list[str]:
+    """Split a bounded JS fragment outside strings and nested containers."""
+    parts: list[str] = []
+    start = 0
     quote = ""
     escaped = False
     depth = 0
-    end = min(len(source), start + limit)
-    for i in range(start, end):
-        char = source[i]
+    for i, char in enumerate(value):
         if escaped:
             escaped = False
             continue
@@ -251,14 +257,91 @@ def _call_remainder(source: str, start: int, limit: int = 700) -> str:
             quote = char
         elif char in "[{(":
             depth += 1
-        elif char in "]}":
-            if depth:
-                depth -= 1
-        elif char == ")":
-            if depth == 0:
-                return source[start:i]
+        elif char in "]})" and depth:
             depth -= 1
-    return source[start:end]
+        elif char == delimiter and depth == 0:
+            parts.append(value[start:i].strip())
+            start = i + 1
+    parts.append(value[start:].strip())
+    return [part for part in parts if part]
+
+
+def _top_level_colon(value: str) -> int:
+    quote = ""
+    escaped = False
+    depth = 0
+    for i, char in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if quote and char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char in "[{(":
+            depth += 1
+        elif char in "]})" and depth:
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return i
+    return -1
+
+
+def _property_name(raw: str) -> str | None:
+    raw = raw.strip()
+    quoted = _unquote_js(raw)
+    if quoted is not None:
+        return quoted if 0 < len(quoted) <= 80 and not any(ord(c) < 32 for c in quoted) else None
+    return raw if re.fullmatch(r"[A-Za-z_$][\w$-]{0,79}", raw) else None
+
+
+def _object_properties(expression: str) -> dict[str, str]:
+    """Read top-level object-literal properties without evaluating values."""
+    expression = expression.strip()
+    if not (expression.startswith("{") and expression.endswith("}")) or len(expression) > 2400:
+        return {}
+    properties: dict[str, str] = {}
+    for entry in _split_top_level(expression[1:-1])[:64]:
+        if entry.startswith("..."):
+            continue
+        colon = _top_level_colon(entry)
+        if colon < 0:
+            name = _property_name(entry)
+            if name:
+                properties[name] = entry
+            continue
+        name = _property_name(entry[:colon])
+        if name:
+            properties[name] = entry[colon + 1:].strip()
+    return properties
+
+
+def _inline_object_keys(expression: str) -> list[str]:
+    """Return only field names from an inline object; values never leave the parser."""
+    expression = expression.strip()
+    if expression.startswith("JSON.stringify"):
+        start = expression.find("(")
+        if start >= 0:
+            expression, _ = _read_argument(expression, start + 1, 2200)
+    return sorted(_object_properties(expression))
+
+
+def _config_metadata(properties: dict[str, str], method: str, *, jquery: bool = False
+                     ) -> tuple[list[str], list[str], list[str]]:
+    query = _inline_object_keys(properties.get("params", ""))
+    data_keys = _inline_object_keys(properties.get("data", properties.get("body", "")))
+    if jquery and method == "GET":
+        query = sorted(set(query) | set(data_keys))
+        body: list[str] = []
+    else:
+        body = data_keys
+    headers = _inline_object_keys(properties.get("headers", ""))
+    return query, body, headers
 
 
 def _dynamic_name(expr: str) -> str:
@@ -279,7 +362,9 @@ def _combine_base(base: str, route: str) -> str:
 
 
 def _normalise_route(value: str, base_url: str, client_base: str = "") -> str | None:
-    value = _render_dynamic(value.strip())
+    value = value.strip()
+    leading_runtime_base = bool(re.match(r"^\$\{[^{}]{1,100}\}(?=/|[A-Za-z0-9])", value))
+    value = _render_dynamic(value)
     if not value or len(value) > 400 or any(ord(c) < 32 for c in value):
         return None
     if value.startswith(("data:", "mailto:", "tel:", "javascript:", "#")):
@@ -298,30 +383,36 @@ def _normalise_route(value: str, base_url: str, client_base: str = "") -> str | 
         value = value.split("#", 1)[0]
         if not value.startswith("/"):
             # Require an endpoint-shaped relative string. This rejects common
-            # UI noise such as object.get("label").
+            # UI noise such as object.get("label"). Preserve a genuinely
+            # relative URL so the scanner resolves it against the app prefix;
+            # only the established `${basePath}route` convention is root-based.
             if "/" not in value:
                 return None
-            value = "/" + value
+            if leading_runtime_base:
+                value = "/" + value
     path = urlparse(value).path
     if not path or path == "/" or path.lower().endswith(_ASSET_EXT):
         return None
     return value
 
 
-def _hint(method: str, route: str, client: str) -> dict:
+def _hint(method: str, route: str, client: str, *, query_params=(), body_keys=(),
+          header_names=()) -> dict:
     path, _, query = route.partition("?")
     path_params = list(dict.fromkeys(re.findall(r"\{([^{}]+)\}", path)))
-    query_params: list[str] = []
+    url_query_params: list[str] = []
     for pair in query.split("&") if query else ():
         name = pair.split("=", 1)[0].strip()
-        if name and name not in query_params:
-            query_params.append(name)
+        if name and name not in url_query_params:
+            url_query_params.append(name)
     return {
         "method": method.upper(),
         "route": route,
         "template": bool(path_params or "{" in query),
         "path_params": path_params,
-        "query_params": sorted(query_params),
+        "query_params": sorted(set(url_query_params) | set(query_params)),
+        "body_keys": sorted(set(body_keys)),
+        "header_names": sorted(set(header_names)),
         "client": client,
     }
 
@@ -334,10 +425,21 @@ def extract_endpoint_hints(body: bytes, base_url: str, _depth: int = 0) -> list[
     same-site absolute URLs are retained.
     """
     hints: dict[tuple[str, str, str], dict] = {}
+
+    def put(item: dict) -> None:
+        key = (item["method"], item["route"], item["client"])
+        previous = hints.get(key)
+        if previous is None:
+            hints[key] = item
+            return
+        for field in ("path_params", "query_params", "body_keys", "header_names"):
+            previous[field] = sorted(set(previous.get(field, [])) | set(item.get(field, [])))
+        previous["template"] = bool(previous.get("template") or item.get("template"))
+
     if _depth < 2 and _looks_sourcemap(body):
         for blob in parse_sourcemap(body):
             for item in extract_endpoint_hints(blob, base_url, _depth + 1):
-                hints[(item["method"], item["route"], item["client"])] = item
+                put(item)
 
     source = body.decode("latin-1", "replace")
     symbols = _static_symbols(source)
@@ -345,19 +447,29 @@ def extract_endpoint_hints(body: bytes, base_url: str, _depth: int = 0) -> list[
     for match in _AXIOS_CREATE.finditer(source):
         base_match = _BASE_URL.search(match.group(2))
         if base_match:
-            base = _static_expr(base_match.group(1), symbols, dynamic=True)
+            base = _static_expr(base_match.group(1), symbols)
             if base:
                 axios_bases[match.group(1)] = base
 
-    def add(method: str, expression: str, client: str, client_base: str = "") -> None:
+    def method_from(properties: dict[str, str], default: str = "GET") -> str:
+        expression = properties.get("method", properties.get("type", ""))
+        if not expression:
+            return default
+        value = _static_expr(expression, symbols)
+        if value and value.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            return value.upper()
+        return "UNKNOWN"
+
+    def add(method: str, expression: str, client: str, client_base: str = "", *,
+            query_params=(), body_keys=(), header_names=()) -> None:
         value = _static_expr(expression, symbols, dynamic=True)
         if value is None:
             return
         route = _normalise_route(value, base_url, client_base)
         if route is None:
             return
-        item = _hint(method, route, client)
-        hints[(item["method"], item["route"], item["client"])] = item
+        put(_hint(method, route, client, query_params=query_params,
+                  body_keys=body_keys, header_names=header_names))
 
     for match in _CLIENT_CALL.finditer(source):
         expression, stop = _read_argument(source, match.end())
@@ -365,20 +477,88 @@ def extract_endpoint_hints(body: bytes, base_url: str, _depth: int = 0) -> list[
             continue
         if match.group(1):
             method = "GET"
+            properties: dict[str, str] = {}
             if source[stop:stop + 1] == ",":
-                method_match = _FETCH_METHOD.search(_call_remainder(source, stop + 1))
-                if method_match:
-                    method = method_match.group(2)
-            add(method, expression, "fetch")
+                options, _ = _read_argument(source, stop + 1, 2400)
+                properties = _object_properties(options)
+                method = method_from(properties)
+            query, fetch_body_keys, headers = _config_metadata(properties, method)
+            add(method, expression, "fetch", query_params=query,
+                body_keys=fetch_body_keys, header_names=headers)
             continue
         if match.group(2):
-            add(match.group(3), expression, "axios")
+            method = match.group(3).upper()
+            config: dict[str, str] = {}
+            axios_body_keys: list[str] = []
+            if source[stop:stop + 1] == ",":
+                second, second_stop = _read_argument(source, stop + 1, 2400)
+                if method in {"POST", "PUT", "PATCH"}:
+                    axios_body_keys = _inline_object_keys(second)
+                    if source[second_stop:second_stop + 1] == ",":
+                        third, _ = _read_argument(source, second_stop + 1, 2400)
+                        config = _object_properties(third)
+                else:
+                    config = _object_properties(second)
+            query, config_body, headers = _config_metadata(config, method)
+            add(method, expression, "axios", query_params=query,
+                body_keys=sorted(set(axios_body_keys) | set(config_body)), header_names=headers)
             continue
-        obj, method = match.group(4), match.group(5)
+        obj, raw_method = match.group(4), match.group(5)
+        method = "GET" if raw_method.lower() in {"getjson", "getscript"} else raw_method.upper()
+        body_keys = []
+        query_params = []
+        if method in {"POST", "PUT", "PATCH"} and source[stop:stop + 1] == ",":
+            second, _ = _read_argument(source, stop + 1, 2400)
+            body_keys = _inline_object_keys(second)
+        elif obj.lower() in {"$", "jquery"} and source[stop:stop + 1] == ",":
+            second, _ = _read_argument(source, stop + 1, 2400)
+            query_params = _inline_object_keys(second)
         if obj in axios_bases:
-            add(method, expression, f"axios-instance:{obj}", axios_bases[obj])
+            add(method, expression, f"axios-instance:{obj}", axios_bases[obj],
+                body_keys=body_keys)
+        elif obj.lower() in {"$", "jquery"}:
+            add(method, expression, "jquery", query_params=query_params, body_keys=body_keys)
         elif obj.lower() in {"http", "$http", "this.http", "client", "api", "apiclient"}:
-            add(method, expression, obj)
+            add(method, expression, obj, body_keys=body_keys)
+
+    # Axios/jQuery config-object forms carry substantially more pentest input
+    # surface than URL-first aliases: method, query/body keys and header names.
+    for match in _CONFIG_CALL.finditer(source):
+        first, stop = _read_argument(source, match.end(), 2400)
+        if not first:
+            continue
+        config_properties: dict[str, str]
+        if first.strip().startswith("{"):
+            config_properties = _object_properties(first)
+            route_expression = config_properties.get("url", "")
+        else:
+            route_expression = first
+            config_properties = {}
+            if source[stop:stop + 1] == ",":
+                config_expression, _ = _read_argument(source, stop + 1, 2400)
+                config_properties = _object_properties(config_expression)
+        if not route_expression:
+            continue
+        jquery = bool(match.group(3))
+        obj = match.group(2) or ""
+        if jquery:
+            client = "jquery"
+            client_base = ""
+        elif match.group(1):
+            client = "axios-config"
+            client_base = ""
+        elif obj in axios_bases:
+            client = f"axios-instance:{obj}"
+            client_base = axios_bases[obj]
+        else:
+            continue
+        configured_base = _static_expr(config_properties.get("baseURL", ""), symbols)
+        if configured_base:
+            client_base = configured_base
+        method = method_from(config_properties)
+        query, body_keys, headers = _config_metadata(config_properties, method, jquery=jquery)
+        add(method, route_expression, client, client_base, query_params=query,
+            body_keys=body_keys, header_names=headers)
 
     for match in _XHR_OPEN.finditer(source):
         expression, _ = _read_argument(source, match.end())
@@ -396,7 +576,7 @@ def extract_endpoint_hints(body: bytes, base_url: str, _depth: int = 0) -> list[
         if route is None or route in known_routes:
             continue
         item = _hint("UNKNOWN", route, "template")
-        hints[(item["method"], item["route"], item["client"])] = item
+        put(item)
         known_routes.add(route)
 
     return sorted(hints.values(), key=lambda h: (h["route"], h["method"], h["client"]))
@@ -576,7 +756,7 @@ def extract_paths(body: bytes, base_url: str, _depth: int = 0,
 
 def _harvest_query(q: bytes, out: set[str]) -> None:
     for pair in q.split(b"&"):
-        name = pair.split(b"=")[0].decode("latin-1").strip().lower()
+        name = pair.split(b"=")[0].decode("latin-1").strip()
         if _PARAM_NAME.match(name):
             out.add(name)
 
@@ -667,9 +847,17 @@ async def harvest(engine, base_url: str, root_body: bytes,
                 hint_keys.add(key)
         return extracted
 
+    def hint_params(items: list[dict]) -> set[str]:
+        return {
+            name for item in items
+            for field in ("path_params", "query_params", "body_keys")
+            for name in item.get(field, [])
+            if _PARAM_NAME.fullmatch(name)
+        }
+
     root_hints = record_hints(root_body, base_url)
     paths = extract_paths(root_body, base_url, _endpoint_hints=root_hints)
-    params = extract_params(root_body)
+    params = extract_params(root_body) | hint_params(root_hints)
     edges: list[tuple[str, str]] = [(root_src, p) for p in paths]
 
     scripts = list(script_urls(root_body, base_url, limit=max_scripts))
@@ -691,7 +879,7 @@ async def harvest(engine, base_url: str, root_body: bytes,
             script_hints = record_hints(pr.body, url)
             new = extract_paths(pr.body, base_url, _endpoint_hints=script_hints)
             paths |= new
-            params |= extract_params(pr.body)
+            params |= extract_params(pr.body) | hint_params(script_hints)
             edges += [(src, np) for np in new]                      # script → path
             for np in new:
                 if np.endswith(FOLLOW_EXT) and not _is_vendor(np):

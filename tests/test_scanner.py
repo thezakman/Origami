@@ -1013,7 +1013,7 @@ class TestJsParser(unittest.TestCase):
         self.assertEqual({p for p in paths if "lms" in p}, {"/lms/"})  # collapsed, root-abs
         self.assertNotIn("/lms/?accesssala&idtrilha", paths)
         params = js_parser.extract_params(body)
-        for name in ("accesssala", "idtrilha", "cid", "onlycategories", "idcurso", "isadmin"):
+        for name in ("accesssala", "idtrilha", "cid", "onlyCategories", "idCurso", "isAdmin"):
             self.assertIn(name, params)
 
     def test_script_urls_skip_vendor_pick_datamain(self):

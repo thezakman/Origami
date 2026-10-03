@@ -138,6 +138,8 @@ def render(result, n_hidden: int | None = None) -> str:
         f'<td>{"yes" if h.get("template") else "no"}</td>'
         f'<td>{e(", ".join(h.get("path_params", [])))}</td>'
         f'<td>{e(", ".join(h.get("query_params", [])))}</td>'
+        f'<td>{e(", ".join(h.get("body_keys", [])))}</td>'
+        f'<td>{e(", ".join(h.get("header_names", [])))}</td>'
         f'<td>{e(str(h.get("client", "")))}</td>'
         f'<td class="path">{e(str(h.get("source", "")))}</td></tr>'
         for h in result.endpoint_hints)
@@ -146,7 +148,8 @@ def render(result, n_hidden: int | None = None) -> str:
         '<p class="sub">Extracted from HTML/JavaScript without replaying state-changing methods. '
         'Runtime values remain explicit templates; UNKNOWN means the wrapper did not expose a method.</p>'
         '<table><thead><tr><th>method</th><th>route</th><th>template</th>'
-        '<th>path params</th><th>query params</th><th>client</th><th>source</th></tr></thead>'
+        '<th>path params</th><th>query params</th><th>body keys</th><th>header names</th>'
+        '<th>client</th><th>source</th></tr></thead>'
         f'<tbody>{route_rows}</tbody></table></details>' if route_rows else "")
     observation_details = ""
     if result.report_events_tracked:

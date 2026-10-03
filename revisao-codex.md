@@ -45,6 +45,12 @@ parâmetros em template, tipo de cliente e fonte HTML/JS. Concatenações estát
 uma URL colapsada falsa. Apenas rotas estáticas alimentam probes, e métodos mutáveis
 descobertos nunca são reproduzidos automaticamente.
 
+A etapa 18 (`1.15.1`, 03/10/2026) amplia a cobertura para configurações Axios e
+jQuery e associa a cada rota os nomes de query, corpo e headers sem reter valores.
+Esses campos alimentam a superfície de parâmetros com caixa preservada. Rotas
+relativas permanecem vinculadas ao prefixo da aplicação, e observações repetidas
+unem seus campos em vez de sobrescrever evidência anterior.
+
 ## Diagnóstico
 
 A prioridade é tornar a execução e seus resultados mais confiáveis: proteger credenciais, delimitar o tráfego, preservar corretamente os checkpoints e entregar relatórios que indiquem falhas e cobertura incompleta. A base já tem componentes separados, testes de regressão, saída HTML com escape e restrição de esquemas nos links, persistência SQLite com WAL e gravação de checkpoint por substituição atômica. Esses pontos devem ser preservados.

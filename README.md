@@ -418,16 +418,20 @@ that empty lock directory, or choose a fresh output directory.
 ### Passive client routes
 
 JavaScript harvesting preserves the request method and source for routes used by
-`fetch`, Axios, common HTTP clients and XHR. It resolves bounded static constants,
-string concatenations and Axios `baseURL` instances. Runtime values remain visible
-as templates, for example `POST /api/users/{id}/reset`, instead of being removed
-to create a different path. These templates are intelligence only: Origami does
-not replay `POST`, `PATCH`, `PUT` or `DELETE` calls discovered in client code.
+`fetch`, Axios aliases/config objects/instances, jQuery Ajax/shorthands, common
+HTTP clients and XHR. It resolves bounded static constants, string concatenations
+and Axios `baseURL` instances. Runtime values remain visible as templates, for
+example `POST /api/users/{id}/reset`, instead of being removed to create a
+different path. These templates are intelligence only: Origami does not replay
+`POST`, `PATCH`, `PUT` or `DELETE` calls discovered in client code.
 
 `client_routes.json` contains the method, route, runtime path/query parameters,
-client type and source HTML/JS URL. Fully static same-site routes continue into
-normal discovery; routes with runtime path segments remain available for manual
-or authenticated follow-up without speculative IDs.
+inline body keys, header names, client type and source HTML/JS URL. Header and
+body values are not retained. Path, query and body names also feed `params.txt`
+with their original case. Fully static same-site routes continue into normal
+discovery; app-relative routes remain relative to the scanned prefix, while routes
+with runtime path segments remain available for manual or authenticated follow-up
+without speculative IDs.
 
 ### Reading repeated responses
 

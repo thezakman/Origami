@@ -5,6 +5,23 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.1] - 2026-10-03
+
+### Added
+- Parse Axios callable/config requests, `axios.request`, instance `.request`,
+  jQuery `$.ajax` and jQuery GET/POST shorthands. Correlate each route with
+  inline query keys, body keys and header names while discarding their values.
+- Fold path/query/body names from client-route intelligence into the existing
+  pentest parameter surface and `params.txt`.
+
+### Fixed
+- Preserve case-sensitive parameter names (`userId` no longer becomes `userid`).
+- Preserve app-relative client routes instead of silently turning them into
+  root-absolute paths. Runtime base-path templates keep their established
+  root-relative behavior.
+- Merge input metadata from duplicate method/route/client observations rather
+  than letting the last call silently replace earlier fields.
+
 ## [1.15.0] - 2026-10-03
 
 ### Added

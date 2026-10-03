@@ -25,6 +25,7 @@ class TestEndpointIntel(unittest.TestCase):
         hints = self.hints(body)
         self.assertIn({"method": "GET", "route": "/api/search?q=x&page=1",
                        "template": False, "path_params": [], "query_params": ["page", "q"],
+                       "body_keys": [], "header_names": [],
                        "client": "fetch"}, hints)
         self.assertTrue(any(h["method"] == "POST" and h["route"] == "/api/users"
                             and h["client"] == "axios" for h in hints))
@@ -70,6 +71,16 @@ class TestEndpointIntel(unittest.TestCase):
         self.assertTrue(any(h["route"] == "https://api.example.test/v1/profile" for h in hints))
         self.assertFalse(any("evil.test" in h["route"] for h in hints))
 
+    def test_relative_routes_remain_relative_to_the_application(self):
+        body = (b'fetch("api/health");'
+                b'const local = axios.create({baseURL: "api/v2"}); local.get("users");')
+        routes = {h["route"] for h in self.hints(body)}
+        self.assertIn("api/health", routes)
+        self.assertIn("api/v2/users", routes)
+        paths = js_parser.extract_paths(body, "https://example.test/app/")
+        self.assertIn("api/health", paths)
+        self.assertIn("api/v2/users", paths)
+
     def test_noise_and_unsafe_schemes_are_rejected(self):
         body = (b'object.get("label"); fetch("javascript:alert(1)");'
                 b'fetch("data:text/plain,x"); fetch(dynamicCall());')
@@ -83,10 +94,80 @@ class TestEndpointIntel(unittest.TestCase):
         self.assertEqual(len(first), 1)
         json.dumps(first)
 
+    def test_duplicate_route_observations_merge_input_keys(self):
+        body = (b'axios.post("/api/items", {name});'
+                b'axios.post("/api/items", {description, tags});')
+        hints = self.hints(body)
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints[0]["body_keys"], ["description", "name", "tags"])
+
     def test_fetch_method_does_not_bleed_from_the_next_call(self):
         hints = self.hints(b'fetch("/api/read"); fetch("/api/write", {method: "POST"});')
         methods = {h["route"]: h["method"] for h in hints}
         self.assertEqual(methods, {"/api/read": "GET", "/api/write": "POST"})
+
+    def test_axios_config_maps_url_params_body_and_header_names(self):
+        body = (b'const api = "/api/v4"; '
+                b'axios.request({method: "PATCH", url: api + "/users/" + userId, '
+                b'params: {expand: true, locale}, '
+                b'data: {displayName: name, role}, '
+                b'headers: {"X-CSRF-Token": csrf, Authorization: bearer}});')
+        hint = self.hints(body)[0]
+        self.assertEqual(hint["method"], "PATCH")
+        self.assertEqual(hint["route"], "/api/v4/users/{userId}")
+        self.assertEqual(hint["path_params"], ["userId"])
+        self.assertEqual(hint["query_params"], ["expand", "locale"])
+        self.assertEqual(hint["body_keys"], ["displayName", "role"])
+        self.assertEqual(hint["header_names"], ["Authorization", "X-CSRF-Token"])
+        self.assertEqual(hint["client"], "axios-config")
+
+    def test_axios_instance_request_uses_baseurl_and_per_request_metadata(self):
+        body = (b'const admin = axios.create({baseURL: "/internal/v2"});'
+                b'admin.request({url: "/roles", method: "POST", data: {name, permissions}});')
+        hint = next(h for h in self.hints(body) if h["client"] == "axios-instance:admin")
+        self.assertEqual(hint["route"], "/internal/v2/roles")
+        self.assertEqual(hint["method"], "POST")
+        self.assertEqual(hint["body_keys"], ["name", "permissions"])
+
+    def test_callable_axios_url_first_config_is_mapped(self):
+        body = b'axios("/api/export", {method: "POST", data: {format, includeSecrets: false}});'
+        hint = self.hints(body)[0]
+        self.assertEqual((hint["method"], hint["route"], hint["client"]),
+                         ("POST", "/api/export", "axios-config"))
+        self.assertEqual(hint["body_keys"], ["format", "includeSecrets"])
+
+    def test_jquery_ajax_type_alias_and_data_surface_are_mapped(self):
+        body = (b'$.ajax({url: "/legacy/account/reset", type: "POST", '
+                b'data: {userId: id, notify: true}, headers: {"X-Legacy-Token": token}});'
+                b'$.ajax({url: "/legacy/search", data: {term, page}});')
+        hints = {h["route"]: h for h in self.hints(body)}
+        reset = hints["/legacy/account/reset"]
+        self.assertEqual(reset["method"], "POST")
+        self.assertEqual(reset["body_keys"], ["notify", "userId"])
+        self.assertEqual(reset["header_names"], ["X-Legacy-Token"])
+        search = hints["/legacy/search"]
+        self.assertEqual(search["method"], "GET")
+        self.assertEqual(search["query_params"], ["page", "term"])
+        self.assertEqual(search["body_keys"], [])
+
+    def test_jquery_shorthands_map_get_and_post_inputs(self):
+        body = (b'$.getJSON("/legacy/profile", {userId: id, verbose: true});'
+                b'jQuery.post("/legacy/profile", {displayName: name, timezone});')
+        hints = {(h["method"], h["route"]): h for h in self.hints(body)}
+        self.assertEqual(hints[("GET", "/legacy/profile")]["query_params"],
+                         ["userId", "verbose"])
+        self.assertEqual(hints[("POST", "/legacy/profile")]["body_keys"],
+                         ["displayName", "timezone"])
+
+    def test_config_parser_does_not_store_header_or_body_values(self):
+        raw_secret = "do-not-export-this-value"
+        body = (f'axios({{url: "/api/private", method: "POST", '
+                f'data: {{password: "{raw_secret}"}}, '
+                f'headers: {{Authorization: "Bearer {raw_secret}"}}}});').encode()
+        encoded = json.dumps(self.hints(body))
+        self.assertNotIn(raw_secret, encoded)
+        self.assertIn("password", encoded)
+        self.assertIn("Authorization", encoded)
 
     def test_harvest_retains_source_provenance_without_extra_requests(self):
         class Engine:
@@ -94,12 +175,19 @@ class TestEndpointIntel(unittest.TestCase):
                 raise AssertionError("max_scripts=0 must not fetch")
 
         collected = []
-        asyncio.run(js_parser.harvest(
+        _, params, _ = asyncio.run(js_parser.harvest(
             Engine(), "https://example.test/app/",
-            b'fetch("/api/me"); axios.delete(`/api/session/${id}`);',
+            b'fetch("/api/me?includeRoles=true"); '
+            b'axios.patch(`/api/session/${sessionId}`, {displayName: name});',
             max_scripts=0, endpoint_hints=collected))
         self.assertEqual({h["source"] for h in collected}, {"https://example.test/app/"})
-        self.assertTrue(any(h["method"] == "DELETE" and h["template"] for h in collected))
+        self.assertTrue(any(h["method"] == "PATCH" and h["template"] for h in collected))
+        self.assertEqual(params & {"includeRoles", "sessionId", "displayName"},
+                         {"includeRoles", "sessionId", "displayName"})
+
+    def test_parameter_names_keep_case(self):
+        body = b'fetch("/api/users?userId=1&userid=2")'
+        self.assertEqual(js_parser.extract_params(body), {"userId", "userid"})
 
     def test_reports_and_bundle_export_passive_routes(self):
         result = ScanResult(TargetProfile(host="example.test",
@@ -107,7 +195,9 @@ class TestEndpointIntel(unittest.TestCase):
         result.endpoint_hints = [{
             "source": "https://example.test/app/main.js", "method": "POST",
             "route": "/api/users/{id}/reset", "template": True,
-            "path_params": ["id"], "query_params": [], "client": "axios",
+            "path_params": ["id"], "query_params": ["notify"],
+            "body_keys": ["reason"], "header_names": ["X-CSRF-Token"],
+            "client": "axios",
         }]
         exported = json_report.to_dict(result)
         self.assertEqual(exported["endpoint_hint_count"], 1)
@@ -115,6 +205,8 @@ class TestEndpointIntel(unittest.TestCase):
         rendered = html_report.render(result)
         self.assertIn("Passive client routes (1)", rendered)
         self.assertIn("/api/users/{id}/reset", rendered)
+        self.assertIn("X-CSRF-Token", rendered)
+        self.assertIn("reason", rendered)
         with tempfile.TemporaryDirectory() as folder:
             summary = artifacts.write_artifacts(result, folder)
             routes = json.loads((Path(folder) / "client_routes.json").read_text())

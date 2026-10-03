@@ -1072,7 +1072,7 @@ class TestTemplateLiteralPaths(unittest.TestCase):
         self.assertTrue(any(h["route"] ==
                             "/recurso/{idRecurso}/ultimasImpressoes?quantidadeItens={quantidadeItens}"
                             for h in J.extract_endpoint_hints(body, "http://h/")))
-        self.assertIn("quantidadeitens", J.extract_params(body))
+        self.assertIn("quantidadeItens", J.extract_params(body))
 
     def test_plain_backtick_literal_still_works(self):
         from origami.modules.discovery import js_parser as J
