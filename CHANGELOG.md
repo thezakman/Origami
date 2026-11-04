@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.5] - 2026-11-03
+
+### Changed
+- Schedule HTTP batches with at most the configured number of workers instead
+  of one task per URL, while preserving result order and adaptive concurrency.
+- Cancel and join remaining batch workers on failure or cancellation.
+
 ## [1.15.4] - 2026-11-03
 
 ### Fixed

@@ -23,6 +23,7 @@ import ssl
 import time
 from dataclasses import dataclass, field
 from hashlib import sha256
+from typing import cast
 
 import anyio
 import httpx
@@ -499,5 +500,25 @@ class Engine:
                 )
 
     async def gather(self, urls: list[str], method: str = "GET") -> list[Probe]:
-        """Fire many requests; the semaphore bounds real concurrency."""
-        return await asyncio.gather(*(self.fetch(u, method) for u in urls))
+        """Ordered results with O(concurrency) tasks, not one task per URL.
+
+        The adaptive gate still limits requests. These workers bound queued
+        coroutine overhead and are always joined before returning or raising.
+        """
+        pending = iter(enumerate(urls))
+        results: list[Probe | None] = [None] * len(urls)
+
+        async def worker() -> None:
+            for index, url in pending:
+                results[index] = await self.fetch(url, method)
+
+        workers = [asyncio.create_task(worker())
+                   for _ in range(min(len(urls), max(1, self.cfg.concurrency)))]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for task in workers:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+        return cast(list[Probe], results)
