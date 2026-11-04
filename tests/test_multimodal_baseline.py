@@ -68,16 +68,14 @@ class TestMultimodalBaseline(unittest.IsolatedAsyncioTestCase):
         probe = make_probe(301, b'', url='http://t/admin', location='/admin/')
         self.assertFalse(looks_like_miss(probe, cb))
 
-    def test_empty_json_is_low_confidence_without_disclosure_claim(self):
+    def test_empty_json_speculation_is_suppressed(self):
         profile = TargetProfile('t', 'http://t/')
         profile.baseline['/|asp'] = ContextBaseline('/', 'asp', 500,
                                                    simhashes=[simhash(b'')], samples=4)
         for body in (b'null', b'[]', b'{}', b'  \r\n'):
             with self.subTest(body=body):
                 finding = classify(profile, make_probe(200, body, url='http://t/heapdump.asp'), 'wordlist')
-                self.assertIsNotNone(finding)
-                self.assertLessEqual(finding.confidence, 0.4)
-                self.assertNotIn('disclosure', finding.tags)
+                self.assertIsNone(finding)
         real = classify(profile, make_probe(200, b'{"event":"conference"}',
                                            url='http://t/events.asp'), 'wordlist')
         self.assertGreater(real.confidence, 0.4)

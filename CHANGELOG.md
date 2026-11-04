@@ -5,6 +5,17 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.9] - 2026-11-03
+
+### Fixed
+- Suppress complete empty/whitespace and empty JSON 2xx responses from
+  speculative discovery instead of reporting them at a lower score. They no
+  longer seed report events, JSONL, recursion or follow-up folds.
+- Preserve cautious observations for declared OpenAPI/well-known endpoints,
+  and retain small meaningful responses such as `0`, `true` and `pong`.
+  This intentionally favors precision for speculative paths: an actual empty
+  endpoint without a declaration is not established by its response alone.
+
 ## [1.15.8] - 2026-11-03
 
 ### Fixed

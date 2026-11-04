@@ -133,15 +133,13 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(f.confidence, 0.5)
         self.assertEqual(f.note, "no-baseline")
 
-    def test_empty_body_2xx_demoted_no_disclosure(self):
-        # a 0-byte `.old` leaked nothing → drop the disclosure tag + low confidence,
-        # so it never reads as `200 0B disclosure 0.95`. A non-empty one is untouched.
+    def test_empty_body_2xx_speculation_is_not_discovery(self):
+        # An empty guessed backup establishes no resource existence; a nonempty
+        # response remains discoverable.
         p = self._profile_with_baseline(status=404, samples=4)
         empty = classify(p, make_probe(status=200, body=b"", url="http://t/backup.old"),
                          "wordlist", "/")
-        self.assertLessEqual(empty.confidence, 0.4)
-        self.assertNotIn("disclosure", empty.tags)
-        self.assertIn("empty body", empty.note)
+        self.assertIsNone(empty)
         full = classify(p, make_probe(status=200, body=b"SELECT * FROM users; secret dump",
                                       url="http://t/backup.old"), "wordlist", "/")
         self.assertIn("disclosure", full.tags)             # real content → still flagged

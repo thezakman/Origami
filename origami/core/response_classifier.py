@@ -75,6 +75,8 @@ _TAG_RULES = [
 # Tags that assert LEAKED CONTENT — meaningless on a 0-byte body (an empty
 # `config.bak`/`.old`/`.py` disclosed nothing). Dropped for empty 2xx responses.
 _EMPTY_BODY_DROP_TAGS = {"disclosure", "config", "source", "upload", "listing"}
+_DECLARED_ENDPOINT_ORIGINS = frozenset({"apidocs", "wellknown"})
+_EMPTY_JSON = re.compile(rb"(?:null|\[\s*\]|\{\s*\})\Z")
 
 
 _TOKEN_SEP = re.compile(r"[-_/.]+")
@@ -281,12 +283,17 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
     if 200 <= probe.status < 300 and is_dir_listing(probe.body_head):
         tags.append("listing")          # autoindex enabled — exposes the dir's files
-    # Empty bodies and empty JSON values provide no content evidence. Preserve
-    # them as cautious observations when controls differ, without leak tags.
+    # Empty bodies and empty JSON values provide no path-existence evidence.
+    # A speculative wordlist/memory/backup guess must not seed findings or
+    # recursive discovery solely on this response. Declared contract endpoints
+    # retain cautious observations when they differ from the miss controls.
     # Only inspect a complete capture: a whitespace prefix is not an empty body.
     empty = (200 <= probe.status < 300 and not probe.truncated
              and probe.length == len(probe.body_head)
-             and probe.body_head.strip() in (b"", b"null", b"[]", b"{}"))
+             and (not probe.body_head.strip()
+                  or _EMPTY_JSON.fullmatch(probe.body_head.strip()) is not None))
+    if empty and origin not in _DECLARED_ENDPOINT_ORIGINS:
+        return None
     empty_note = "empty body" if probe.length == 0 else "empty/placeholder body; path existence unconfirmed"
     if empty:
         tags = [t for t in tags if t not in _EMPTY_BODY_DROP_TAGS]
