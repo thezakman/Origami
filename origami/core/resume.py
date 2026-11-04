@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlparse
 
 from origami.core.evidence import ContextBaseline, Evidence, TargetProfile
 from origami.core.files import atomic_write, private_directory
 from origami.core.response_classifier import Finding
+from origami.modules.discovery.buckets import BucketRef
 
 RESUME_DIR = Path.home() / ".origami" / "resume"
 
@@ -52,6 +54,9 @@ def _profile_to_dict(p: TargetProfile) -> dict:
     return {
         "host": p.host, "base_url": p.base_url, "tech_scores": p.tech_scores,
         "case_sensitive": p.case_sensitive, "wildcard": p.wildcard, "waf": p.waf,
+        "cache_layer": p.cache_layer,
+        "bucket_refs": [asdict(ref) for ref in sorted(
+            p.bucket_refs, key=lambda ref: (ref.provider, ref.name, ref.account))],
         "enabled_extensions": sorted(p.enabled_extensions),
         "parameters": sorted(p.parameters),
         "baseline": {k: _cb_to_dict(v) for k, v in p.baseline.items()},
@@ -66,6 +71,8 @@ def _profile_from_dict(d: dict) -> TargetProfile:
     p.case_sensitive = d.get("case_sensitive")
     p.wildcard = d.get("wildcard", False)
     p.waf = d.get("waf", "")
+    p.cache_layer = d.get("cache_layer", "")
+    p.bucket_refs = {BucketRef(**ref) for ref in d.get("bucket_refs", [])}
     p.enabled_extensions = set(d.get("enabled_extensions", []))
     p.parameters = set(d.get("parameters", []))
     p.baseline = {k: _cb_from_dict(v) for k, v in d.get("baseline", {}).items()}
@@ -74,18 +81,15 @@ def _profile_from_dict(d: dict) -> TargetProfile:
 
 
 def _finding_to_dict(f: Finding) -> dict:
-    return {"url": f.url, "status": f.status, "length": f.length,
-            "content_type": f.content_type, "confidence": f.confidence,
-            "origin": f.origin, "note": f.note, "tags": f.tags, "simhash": f.simhash,
-            "words": f.words, "lines": f.lines,
-            "body_digest": f.body_digest, "redirect_digest": f.redirect_digest,
-            "location": f.location, "truncated": f.truncated, "header_digest": f.header_digest}
+    # The dataclass is the evidence schema; adding a field must not silently
+    # remove it on resume because a second hand-maintained list was missed.
+    return asdict(f)
 
 
 def _finding_from_dict(d: dict) -> Finding:
     return Finding(d["url"], d["status"], d["length"], d["content_type"], d["confidence"],
                    d["origin"], d.get("note", ""), d.get("tags", []), d.get("simhash", 0),
-                   words=d.get("words", 0), lines=d.get("lines", 0),
+                   words=d.get("words", 0), lines=d.get("lines", 0), repro=d.get("repro", ""),
                    body_digest=d.get("body_digest", ""), redirect_digest=d.get("redirect_digest", ""),
                    location=d.get("location", ""), truncated=d.get("truncated", False),
                    header_digest=d.get("header_digest", ""))

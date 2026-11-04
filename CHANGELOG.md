@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.7] - 2026-11-03
+
+### Fixed
+- Preserve cache-layer detection, discovered bucket references and reproduction
+  commands across checkpoint/resume, with defaults for older checkpoints.
+- Serialize findings from their dataclass schema to avoid silently dropping
+  new evidence fields from the checkpoint writer.
+
 ## [1.15.6] - 2026-11-03
 
 ### Fixed
