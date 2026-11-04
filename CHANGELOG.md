@@ -5,6 +5,13 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.10] - 2026-11-03
+
+### Fixed
+- Migrate license metadata to the SPDX expression and explicit license-files
+  fields, remove the deprecated license classifier, and require setuptools
+  77.0.3 or newer for compatible builds. Apache-2.0 licensing is unchanged.
+
 ## [1.15.9] - 2026-11-03
 
 ### Fixed
