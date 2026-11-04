@@ -453,16 +453,20 @@ class Engine:
         deadline = max(self.cfg.timeout * 3, _MIN_STREAM_DEADLINE, cap / _MIN_STREAM_THROUGHPUT)
         with anyio.fail_after(deadline):
             async with self._pick_client().stream(method, url, **kw) as r:
-                chunks: list[bytes] = []
-                total = 0
+                captured = bytearray()
                 truncated = False
                 async for chunk in r.aiter_bytes():
-                    chunks.append(chunk)
-                    total += len(chunk)
-                    if total >= cap:
-                        truncated = True     # more body existed past the cap — caller should know
+                    remaining = cap - len(captured)
+                    # Retain only the allowed prefix, even if the transport or
+                    # decompressor delivers one oversized chunk. Do not join a
+                    # potentially oversized chunk list just to discard its tail.
+                    captured.extend(chunk[:remaining])
+                    if len(chunk) > remaining:
+                        truncated = True
                         break
-                body = b"".join(chunks)[:cap]
+                    # At exactly cap bytes, read until EOF or one nonempty chunk
+                    # to distinguish a complete response from actual truncation.
+                body = bytes(captured)
                 text_ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
                 location = r.headers.get("location", "")
                 body_digest, redirect_digest = body_digests(

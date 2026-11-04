@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.4] - 2026-11-03
+
+### Fixed
+- Mark a response as truncated only when bytes beyond the capture limit are
+  observed; an exactly-at-limit response remains complete.
+- Bound the retained body buffer before copying oversized transport chunks,
+  avoiding accumulation and joining of bytes that would be discarded.
+
 ## [1.15.3] - 2026-11-03
 
 ### Fixed
