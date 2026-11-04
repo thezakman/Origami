@@ -491,7 +491,7 @@ class TestLiveProgress(unittest.TestCase):
         h = ui._highlights()
         self.assertIn("disclosure", h)
         self.assertIn("403-bypass", h)
-        self.assertIn("dangerous-methods", h)
+        self.assertIn("advertised-methods", h)
         self.assertIn("config", h)
         self.assertEqual(self._ui()._highlights(), "")   # empty when no findings
 

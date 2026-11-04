@@ -378,20 +378,14 @@ async def scan(engine: Engine, base_url: str, opts: ScanOptions | None = None,
         _recon_k[0] += 1
         observer.substep(name, _recon_k[0], recon_total)
 
-    # HTTP methods (OPTIONS) — flag dangerous verbs (PUT/DELETE/TRACE/WebDAV).
+    # OPTIONS advertises methods; it does not prove executable/writable access.
     _recon("methods")
-    m_status, m_methods, m_danger = await _guard(observer, "methods",
-                                                 methods.probe(engine, base_url), (0, [], []))
-    if m_methods:
-        observer.log(f"methods: {', '.join(m_methods)}", 1)
-    if m_danger:
-        mf = Finding(base_url, m_status or 200, root.length, root.content_type, 0.7,
-                     "methods", note=f"dangerous methods: {', '.join(m_danger)}",
-                     tags=["config"])
-        result.findings.append(mf)
-        observer.finding(mf)
-        observer.log(f"methods: dangerous verbs enabled → {', '.join(m_danger)}",
-                     0, style="bold red")
+    method_observation = await _guard(observer, "methods",
+                                      methods.probe(engine, base_url), None)
+    if method_observation is not None:
+        result.findings.append(method_observation)
+        observer.finding(method_observation)
+        observer.log(f"methods: {method_observation.note}", 0)
 
     # assemble high-priority root seeds: memory (cross-target) + js + backups
     root_seeds: list[tuple[str, str]] = []

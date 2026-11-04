@@ -1,13 +1,14 @@
-"""HTTP method discovery (work.md: OPTIONS/TRACE/PUT).
+"""OPTIONS metadata: advertised methods are leads, not proof of writable access.
 
-One OPTIONS request reveals the server's `Allow` set. Dangerous methods enabled
-in production are a real, actionable misconfig: PUT/DELETE (write/remove),
-TRACE/TRACK (Cross-Site Tracing), PATCH, and the WebDAV verbs (PROPFIND, MKCOL,
-MOVE, COPY — often a writable share). We only surface a finding when something
-dangerous is allowed; an ordinary GET/POST/HEAD set is just logged.
+Neither Allow nor a CORS policy establishes successful execution, authorization
+or a misconfiguration. No write method is exercised by this module.
 """
 
 from __future__ import annotations
+
+from shlex import quote
+
+from origami.core.response_classifier import Finding
 
 # Methods worth flagging when a server advertises them.
 _DANGEROUS = {
@@ -22,11 +23,21 @@ def parse_allow(allow: str) -> tuple[list[str], list[str]]:
     return methods, sorted(set(methods) & _DANGEROUS)
 
 
-async def probe(engine, base_url: str) -> tuple[int, list[str], list[str]]:
-    """OPTIONS the base URL → (status, allowed_methods, dangerous_methods)."""
+async def probe(engine, base_url: str) -> Finding | None:
+    """Return an observation using the actual OPTIONS response metadata."""
     p = await engine.fetch(base_url, method="OPTIONS")
     if not p.ok:
-        return 0, [], []
-    allow = p.headers.get("allow") or p.headers.get("access-control-allow-methods") or ""
-    methods, dangerous = parse_allow(allow)
-    return p.status, methods, dangerous
+        return None
+    source = "Allow" if p.headers.get("allow") else "Access-Control-Allow-Methods"
+    _, interesting = parse_allow(p.headers.get(source.lower(), ""))
+    if not interesting:
+        return None
+    return Finding(
+        p.url, p.status, p.length, p.content_type, 0.5, "methods",
+        note=(f"advertised via {source}: {', '.join(interesting)}; "
+              "execution and authorization not tested"),
+        tags=["methods"], simhash=p.body_simhash, words=p.words, lines=p.lines,
+        repro=f"curl -X OPTIONS -- {quote(p.url)}",
+        body_digest=p.body_digest, redirect_digest=p.redirect_digest,
+        location=p.location, truncated=p.truncated, header_digest=p.header_digest,
+    )

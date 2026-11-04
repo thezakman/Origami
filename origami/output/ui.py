@@ -456,7 +456,7 @@ class RichUI(NullObserver):
         if origins.get("bypass403"):
             parts.append(f"[bold green]{origins['bypass403']} 403-bypass[/]")
         if origins.get("methods"):
-            parts.append(f"[bold red]{origins['methods']} dangerous-methods[/]")
+            parts.append(f"[yellow]{origins['methods']} advertised-methods[/]")
         if origins.get("graphql"):
             parts.append(f"[magenta]{origins['graphql']} graphql[/]")
         if tags.get("listing"):

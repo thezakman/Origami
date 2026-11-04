@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.6] - 2026-11-03
+
+### Fixed
+- Describe OPTIONS and CORS method lists as advertisements, without claiming
+  write authorization or a confirmed configuration vulnerability.
+- Use the OPTIONS response size, content type and fingerprints instead of
+  combining its status with metadata from the initial GET. Include an OPTIONS
+  reproduction command and distinguish Allow from the CORS policy header.
+
 ## [1.15.5] - 2026-11-03
 
 ### Changed
