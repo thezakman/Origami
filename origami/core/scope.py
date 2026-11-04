@@ -14,6 +14,27 @@ scope if we *scan* it.
 
 from __future__ import annotations
 
+from ipaddress import ip_address
+from urllib.parse import urlsplit
+
+
+def _hostname(authority: str) -> str:
+    """Normalize DNS authorities and IP literals without splitting IPv6 colons."""
+    host = authority.rsplit("@", 1)[-1].lower().strip(".")
+    try:
+        return str(ip_address(host))
+    except ValueError:
+        pass
+    try:
+        host = (urlsplit("//" + host).hostname or "").strip(".")
+    except ValueError:
+        return ""
+    try:
+        return str(ip_address(host))
+    except ValueError:
+        return host
+
+
 # Multi-label public suffixes: the registrable domain is ONE label above these.
 # Two families, both needed for correct scope:
 #   * ccTLD second-levels (com.br, co.uk) — a normal org domain hangs off them;
@@ -39,7 +60,16 @@ def reg_domain(host: str) -> str:
     """Best-effort registrable domain (apex). Honors multi-label public suffixes
     so co-tenant hosts on shared platforms (foo.github.io vs bar.github.io) are
     NOT treated as the same site."""
-    host = host.split("@")[-1].split(":")[0].lower().strip(".")
+    host = _hostname(host)
+    try:
+        return str(ip_address(host))
+    except ValueError:
+        pass
+    # Regional Azure app hostnames place the region above the tenant label.
+    # Treat nested app hostnames conservatively as exact boundaries instead
+    # of grouping all apps below a region as one registrable site.
+    if host.endswith(".azurewebsites.net") and host.count(".") > 2:
+        return host
     parts = [p for p in host.split(".") if p]
     if len(parts) <= 2:
         return host
@@ -51,15 +81,16 @@ def reg_domain(host: str) -> str:
 
 def same_site(a: str, b: str) -> bool:
     """Same registrable domain (treats www/cdn/api subdomains as one site)."""
-    return reg_domain(a) == reg_domain(b)
+    left, right = reg_domain(a), reg_domain(b)
+    return bool(left and right and left == right)
 
 
 def same_host(a: str, b: str) -> bool:
     """Exact host match, ignoring port and a leading www."""
-    a, b = a.split(":")[0].lower(), b.split(":")[0].lower()
+    a, b = _hostname(a), _hostname(b)
     a = a[4:] if a.startswith("www.") else a
     b = b[4:] if b.startswith("www.") else b
-    return a == b
+    return bool(a and b and a == b)
 
 
 # Hosts where the TENANT is a PATH segment, not the host: one shared host serves
@@ -77,7 +108,7 @@ _PATH_TENANT_SUFFIXES = frozenset({
 def path_tenant_host(host: str) -> bool:
     """True for shared hosts whose tenant is identified by the URL path, so host
     scope must be tightened to the target's path chain (see same_tenant_path)."""
-    h = host.split("@")[-1].split(":")[0].lower().strip(".")
+    h = _hostname(host)
     return any(h == s or h.endswith("." + s) for s in _PATH_TENANT_SUFFIXES)
 
 

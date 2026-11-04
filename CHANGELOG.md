@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.8] - 2026-11-03
+
+### Fixed
+- Compare IP literals by their full normalized address, preserving IPv6 colons
+  and preventing unrelated IPv4 addresses from sharing a fake domain suffix.
+- Keep regional Azure app hostnames in separate site-scope boundaries.
+- Share authority normalization between host, site and path-tenant checks;
+  empty authorities no longer match one another.
+
 ## [1.15.7] - 2026-11-03
 
 ### Fixed
