@@ -5,6 +5,15 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.2] - 2026-11-03
+
+### Fixed
+- Retain minority status/body pairs during miss calibration and apply learned
+  sibling signatures even when their status differs from the baseline mode.
+  This filters API catch-alls alternating empty 500s and placeholder 200s.
+- Treat complete empty JSON values (`null`, `[]`, `{}`) and whitespace-only
+  2xx bodies as low-confidence observations without content-disclosure tags.
+
 ## [1.15.1] - 2026-10-03
 
 ### Added

@@ -41,7 +41,7 @@ class ContextBaseline:
     redirect_to: str = ""             # normalized redirect target of a miss, if any
     is_soft404: bool = False          # miss returns 2xx/3xx instead of 404
     samples: int = 0
-    # (status, simhash) signatures learned mid-scan for multi-modal soft-404
+    # (status, simhash) signatures from calibration or siblings for multi-modal soft-404
     # hosts — e.g. one that 302s most paths but serves a generic 200 for others.
     soft_signatures: list[tuple[int, int]] = field(default_factory=list)
 

@@ -77,7 +77,13 @@ async def calibrate_context(
     # `<= SIMHASH_MISS_DISTANCE`, so dropping a near-but-distinct shape lets a real
     # soft-404 near that dropped shape slip through as a finding. Only ~4 probes,
     # so the set is tiny anyway.
-    cb.simhashes = list(dict.fromkeys(p.body_simhash for p in probes))
+    cb.simhashes = list(dict.fromkeys(p.body_simhash for p in probes if p.status == cb.status))
+    # A minority status is still an observed miss. Keep status/body pairs:
+    # mixing bodies across statuses can also hide a genuinely different response.
+    cb.soft_signatures = list(dict.fromkeys(
+        (p.status, p.body_simhash) for p in probes
+        if p.status != cb.status and not 300 <= p.status < 400
+    ))
     cb.length_lo = min(p.length for p in probes)
     cb.length_hi = max(p.length for p in probes)
     cb.content_type = max(
@@ -184,27 +190,24 @@ def looks_like_miss(probe: Probe, cb: ContextBaseline) -> bool:
     """True if `probe` matches the miss profile for its context."""
     if not probe.ok:
         return True
+    # Directory redirects must survive even a learned empty-body signature.
+    if (300 <= probe.status < 400
+            and _redirect_kind(probe.url, probe.location) == "DIR"):
+        return False
+    # Check learned modes BEFORE the modal-status gate.
+    for st, sh in cb.soft_signatures:
+        if probe.status == st and hamming(probe.body_simhash, sh) <= SIMHASH_MISS_DISTANCE:
+            return True
     if probe.status != cb.status:
         return False
     if 300 <= probe.status < 400:
         kind = _redirect_kind(probe.url, probe.location)
-        # A directory-confirming redirect (/x → /x/) is a real discovery, never a
-        # miss. On a host whose misses are ALSO 3xx (a constant-target catch-all or
-        # a slash-canonicalizing framework), both redirect bodies are empty
-        # boilerplate, so the body-simhash fallback below would match and wrongly
-        # mask the directory — the DIR kind must win first.
-        if kind == "DIR":
-            return False
         if kind == cb.redirect_to:
             return True
-    # same status family: compare body structure against known miss bodies
+    # Same status: compare body structure against known miss bodies.
     if cb.simhashes and any(
         hamming(probe.body_simhash, h) <= SIMHASH_MISS_DISTANCE for h in cb.simhashes
     ):
         return True
-    # dynamically-learned soft signatures (multi-modal soft-404 hosts)
-    for st, sh in cb.soft_signatures:
-        if probe.status == st and hamming(probe.body_simhash, sh) <= SIMHASH_MISS_DISTANCE:
-            return True
     # no structural match, but if length is inside the miss band it's ambiguous
     return False

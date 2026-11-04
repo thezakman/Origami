@@ -281,11 +281,13 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
     tags = tag_finding(probe.url, probe.status) if 200 <= probe.status < 300 else []
     if 200 <= probe.status < 300 and is_dir_listing(probe.body_head):
         tags.append("listing")          # autoindex enabled — exposes the dir's files
-    # An EMPTY 2xx body leaked nothing — a 0-byte `backup.old` is not a disclosure,
-    # and an empty 200 is usually a catch-all/placeholder, not a real resource. Drop
-    # the content-implying tags and demote it so it doesn't read as a high-confidence
-    # find (`200 0B disclosure 0.95`). The path still exists, so it's reported — quietly.
-    empty = 200 <= probe.status < 300 and probe.length == 0
+    # Empty bodies and empty JSON values provide no content evidence. Preserve
+    # them as cautious observations when controls differ, without leak tags.
+    # Only inspect a complete capture: a whitespace prefix is not an empty body.
+    empty = (200 <= probe.status < 300 and not probe.truncated
+             and probe.length == len(probe.body_head)
+             and probe.body_head.strip() in (b"", b"null", b"[]", b"{}"))
+    empty_note = "empty body" if probe.length == 0 else "empty/placeholder body; path existence unconfirmed"
     if empty:
         tags = [t for t in tags if t not in _EMPTY_BODY_DROP_TAGS]
     # No baseline — or a baseline whose calibration probes ALL failed (samples==0,
@@ -298,7 +300,7 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
             nb = (note405 + " · no-baseline") if note405 else "no-baseline"
             return Finding(probe.url, probe.status, probe.length, probe.content_type,
                            0.4 if empty else 0.5, origin,
-                           note=(nb + " · empty body") if empty else nb,
+                           note=(nb + " · " + empty_note) if empty else nb,
                            tags=tags, simhash=probe.body_simhash,
                            words=probe.words, lines=probe.lines,
                            body_digest=probe.body_digest, redirect_digest=probe.redirect_digest,
@@ -311,7 +313,7 @@ def classify(profile: TargetProfile, probe: Probe, origin: str,
 
     confidence = min(_confidence(probe, cb), 0.4) if empty else _confidence(probe, cb)
     if empty:
-        note405 = (note405 + " · " if note405 else "") + "empty body"
+        note405 = (note405 + " · " if note405 else "") + empty_note
     return Finding(probe.url, probe.status, probe.length, probe.content_type,
                    confidence, origin, note=note405, tags=tags, simhash=probe.body_simhash,
                    words=probe.words, lines=probe.lines,
