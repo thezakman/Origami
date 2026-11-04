@@ -11,11 +11,11 @@ from dataclasses import asdict
 from urllib.parse import urljoin, urlparse
 
 from origami.core import baseline as bl
+from origami.core.evidence import ContextBaseline
 from origami.core.normalize import hamming
 from origami.core.response_classifier import (
     Finding,
     classify,
-    resolve_baseline,
 )
 from origami.core.scanner.util import (
     _ext_of,
@@ -51,18 +51,32 @@ async def _is_soft(engine, profile, prefix, probe) -> bool:
     403 is only a real finding if /.git/<random> does NOT also 403. Catches both
     multi-modal soft-404 and generic-403 walls; the signature is then cached.
     """
-    path = urlparse(probe.url).path
-    own_dir = path.rsplit("/", 1)[0] + "/"
-    name = path.rsplit("/", 1)[-1]
+    parsed = urlparse(probe.url)
+    path = parsed.path
+    directory = path.endswith("/")
+    leaf_path = path.rstrip("/")
+    own_dir = leaf_path.rsplit("/", 1)[0] + "/"
+    name = leaf_path.rsplit("/", 1)[-1]
     lead = "." if name.startswith(".") else ""
     ext = _ext_of(name[1:] if lead else name)
     rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
-    sib_path = own_dir.lstrip("/") + lead + rnd + ext
-    sib = await engine.fetch(urljoin(_host_root(profile.base_url), sib_path))
+    sib_path = own_dir.lstrip("/") + lead + rnd + ext + ("/" if directory else "")
+    if parsed.query:
+        sib_path += "?" + parsed.query
+    sib = await engine.fetch(urljoin(_host_root(probe.url), sib_path))
     if (sib.ok and sib.status == probe.status
             and hamming(sib.body_simhash, probe.body_simhash) <= bl.SIMHASH_MISS_DISTANCE):
-        cb = resolve_baseline(profile, probe.url, own_dir)
-        if cb is not None:
+        # Never write through the root fallback: a nested wall says nothing
+        # about unrelated paths. Query/dotfile/directory controls have narrower
+        # shapes than the baseline key can represent, so do not cache those.
+        if not (parsed.query or lead or directory):
+            cls = bl.ext_class(ext)
+            key = profile.context_key(own_dir, cls)
+            cb = profile.baseline.get(key)
+            if cb is None:
+                cb = ContextBaseline(own_dir, cls, sib.status, samples=1,
+                                     simhashes=[sib.body_simhash])
+                profile.baseline[key] = cb
             sig = (probe.status, probe.body_simhash)
             if sig not in cb.soft_signatures:
                 cb.soft_signatures.append(sig)

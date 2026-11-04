@@ -5,6 +5,14 @@ All notable changes to Origami are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Version is single-sourced from
 `origami/__init__.py`.
 
+## [1.15.3] - 2026-11-03
+
+### Fixed
+- Keep sibling miss learning local to the tested directory instead of mutating
+  a fallback root baseline. Narrow dotfile, query and directory controls are
+  not generalized into broader baseline contexts.
+- Preserve trailing slash, query and origin in random sibling controls.
+
 ## [1.15.2] - 2026-11-03
 
 ### Fixed
